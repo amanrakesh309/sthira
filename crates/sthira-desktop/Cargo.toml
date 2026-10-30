@@ -1,0 +1,30 @@
+[package]
+name = "sthira-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Sthira Desktop Tauri v2 application"
+
+[lib]
+name = "sthira_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sthira-desktop"
+path = "src/main.rs"
+
+[dependencies]
+sthira-core = { workspace = true }
+sthira-testkit = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true }
+tauri = { version = "2.2", features = [] }
+schemars = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2.2", features = [] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

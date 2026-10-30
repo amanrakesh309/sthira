@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #F5F3EC;
+    color: #1E201C;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.dark body {
+    background-color: #121310;
+    color: #EDEAE2;
+  }
+}
+
+/* Dot grid for CanvasView */
+.canvas-dot-grid {
+  background-color: #F5F3EC;
+  background-image: radial-gradient(#D6D1C4 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+html.dark .canvas-dot-grid {
+  background-color: #141512;
+  background-image: radial-gradient(#2A2C26 1px, transparent 1px);
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #E8E5DC;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D8D4C8;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #2D3028;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3E4238;
+}

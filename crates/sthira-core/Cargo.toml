@@ -1,0 +1,68 @@
+[package]
+name = "sthira-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { workspace = true }
+sqlite-vec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+r2d2 = { workspace = true }
+regex = { workspace = true }
+schemars = { workspace = true }
+unicode-normalization = { workspace = true }
+walkdir = { workspace = true }
+reqwest = { workspace = true }
+
+
+[dev-dependencies]
+sthira-testkit = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+
+[[test]]
+name = "phase1_storage_reconcile"
+path = "../../tests/frozen/phase1_storage_reconcile.rs"
+
+[[test]]
+name = "phase2_epistemic_safety"
+path = "../../tests/frozen/phase2_epistemic_safety.rs"
+
+[[test]]
+name = "phase3_router_isolation"
+path = "../../tests/frozen/phase3_router_isolation.rs"
+
+[[test]]
+name = "phase4_memory_resume_home"
+path = "../../tests/frozen/phase4_memory_resume_home.rs"
+
+[[test]]
+name = "phase5_history_materiality"
+path = "../../tests/frozen/phase5_history_materiality.rs"
+
+[[test]]
+name = "phase6_discovery_proposals"
+path = "../../tests/frozen/phase6_discovery_proposals.rs"
+
+[[test]]
+name = "phase7_e2e_lifecycle"
+path = "../../tests/frozen/phase7_e2e_lifecycle.rs"
+
+[[test]]
+name = "phase9_modes_registry"
+path = "../../tests/frozen/phase9_modes_registry.rs"
+
+[[test]]
+name = "objects_test"
+path = "tests/objects_test.rs"
+
+[[test]]
+name = "live_llm_integration"
+path = "tests/live_llm_integration.rs"
+

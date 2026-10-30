@@ -1,0 +1,19 @@
+[package]
+name = "sthira-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sthira-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+sthira-testkit = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }
+
+
+
+

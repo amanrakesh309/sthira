@@ -1,0 +1,73 @@
+pub mod commands;
+pub mod events;
+pub mod seed;
+pub mod state;
+
+pub use commands::*;
+pub use events::spawn_event_bridge;
+pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
+pub use state::AppState;
+
+pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![
+        commands::cmd_route_input,
+        commands::cmd_apply_plan,
+        commands::cmd_get_home_state,
+        commands::cmd_get_workspace_tree,
+        commands::cmd_create_project,
+        commands::cmd_create_page,
+        commands::cmd_get_resume_brief,
+        commands::cmd_get_resume_pane_hint,
+        commands::cmd_get_project_history,
+        commands::cmd_get_artifact_context,
+        commands::cmd_save_artifact,
+        commands::cmd_decide_proposal,
+        commands::cmd_revert_change_set,
+        commands::cmd_promote_to_project,
+        commands::cmd_canvas_ops,
+        commands::cmd_create_guided_project,
+        commands::cmd_clear_vault_data,
+        commands::cmd_seed_demo_workspace,
+        commands::cmd_search_all,
+        commands::cmd_synthesize_and_create_research,
+        commands::cmd_answer_question,
+        commands::cmd_get_provider_catalog,
+        commands::cmd_save_provider,
+        commands::cmd_discover_ollama_models,
+        commands::cmd_discover_provider_models,
+        commands::cmd_fetch_provider_models,
+        commands::cmd_upsert_model,
+        commands::cmd_delete_model,
+        commands::cmd_delete_provider,
+        commands::cmd_set_default_model,
+        commands::cmd_toggle_model,
+        commands::cmd_route_input_steered,
+        commands::cmd_execute_plan_action,
+        commands::cmd_list_object_types,
+        commands::cmd_create_object_type,
+        commands::cmd_list_objects_by_type,
+        commands::cmd_save_object_instance,
+        commands::cmd_get_object_type_counts,
+        commands::cmd_create_typed_object,
+        commands::cmd_inspect_project_deletion,
+        commands::cmd_delete_project,
+        commands::cmd_delete_artifact,
+        commands::cmd_get_knowledge_graph,
+        commands::cmd_duplicate_artifact,
+        commands::cmd_add_artifact_to_project,
+        commands::cmd_duplicate_project,
+        commands::cmd_rename_project,
+        commands::cmd_rename_artifact,
+        commands::cmd_get_search_providers,
+        commands::cmd_save_search_provider,
+        commands::cmd_test_search_provider,
+        commands::cmd_import_web_source_to_vault,
+        commands::cmd_execute_web_research,
+        commands::cmd_stream_adaptive_run,
+        commands::cmd_get_sidebar_items,
+        commands::cmd_toggle_pin,
+        commands::cmd_get_workspace_index,
+        commands::cmd_record_access,
+    ])
+}
+

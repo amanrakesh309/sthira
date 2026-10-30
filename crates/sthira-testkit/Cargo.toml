@@ -1,0 +1,13 @@
+[package]
+name = "sthira-testkit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sthira-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+proptest = { workspace = true }
