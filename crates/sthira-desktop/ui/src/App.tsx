@@ -10,6 +10,7 @@ import { AccountModal } from './components/AccountModal';
 import { InteractiveFlowModal, type FlowMode } from './components/InteractiveFlowModal';
 import { ObjectCollectionContainer } from './components/objects/ObjectCollectionContainer';
 import { ObjectTypeBuilderModal } from './components/objects/ObjectTypeBuilderModal';
+import { ObjectTypeManagerModal } from './components/objects/ObjectTypeManagerModal';
 import { GraphView } from './views/GraphView';
 import { WorkspaceIndexView } from './views/WorkspaceIndexView';
 import { getHomeState, promoteToProject, listObjectTypes, isTauri } from './api/ipc';
@@ -32,6 +33,7 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isObjectTypeBuilderOpen, setIsObjectTypeBuilderOpen] = useState(false);
+  const [isObjectTypeManagerOpen, setIsObjectTypeManagerOpen] = useState(false);
   const [activeFlow, setActiveFlow] = useState<{ mode: FlowMode; initialPrompt?: string } | null>(null);
 
   const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
@@ -129,6 +131,10 @@ export const App: React.FC = () => {
     setIsObjectTypeBuilderOpen(true);
   };
 
+  const handleOpenObjectTypeManager = () => {
+    setIsObjectTypeManagerOpen(true);
+  };
+
   const handleTypeCreated = async (newType: ObjectType) => {
     await loadState();
     setActiveObjectTypeId(newType.id);
@@ -176,6 +182,7 @@ export const App: React.FC = () => {
         onOpenCanvas={handleOpenCanvas}
         onOpenObjectCollection={handleOpenObjectCollection}
         onOpenCreateObjectType={handleOpenCreateObjectType}
+        onOpenObjectTypeManager={handleOpenObjectTypeManager}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAccount={() => setIsAccountOpen(true)}
@@ -213,6 +220,7 @@ export const App: React.FC = () => {
             onOpenProject={handleOpenProject}
             onOpenArtifact={handleOpenArtifact}
             onOpenObjectCollection={handleOpenObjectCollection}
+            onOpenObjectTypeManager={handleOpenObjectTypeManager}
             onBack={() => {
               setCurrentView('home');
             }}
@@ -353,6 +361,12 @@ export const App: React.FC = () => {
         isOpen={isObjectTypeBuilderOpen}
         onClose={() => setIsObjectTypeBuilderOpen(false)}
         onTypeCreated={handleTypeCreated}
+      />
+
+      <ObjectTypeManagerModal
+        isOpen={isObjectTypeManagerOpen}
+        onClose={() => setIsObjectTypeManagerOpen(false)}
+        onTypesChanged={loadState}
       />
     </div>
   );

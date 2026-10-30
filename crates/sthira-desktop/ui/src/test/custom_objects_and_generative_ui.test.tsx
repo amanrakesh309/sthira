@@ -101,6 +101,26 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
       if (cmd === 'cmd_list_object_types') {
         return [customExperimentType];
       }
+      if (cmd === 'cmd_get_type_templates') {
+        return [
+          {
+            id: 'experiment-default',
+            object_type_id: 'experiment',
+            name: 'Experiment Log',
+            icon: '🧪',
+            is_default: true,
+            properties_preset: { status: 'proposed' },
+            body_template_md: '## Hypothesis\n\n## Method',
+            created_at: 1000,
+          },
+        ];
+      }
+      if (cmd === 'cmd_instantiate_object_from_template') {
+        return 'art-exp-999';
+      }
+      if (cmd === 'cmd_get_object_instance') {
+        return null;
+      }
       if (cmd === 'cmd_create_typed_object') {
         return {
           artifact_id: 'art-exp-999',
@@ -182,12 +202,14 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
     const createBtn = screen.getByTestId('btn-create-insert-object');
     await user.click(createBtn);
 
-    // 8. Verify cmd_create_typed_object was invoked with correct payload
+    // 8. Verify cmd_instantiate_object_from_template was invoked with correct payload
+    //    (the template-hydrated creation path replaces the legacy bare-create command)
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith(
-        'cmd_create_typed_object',
+        'cmd_instantiate_object_from_template',
         expect.objectContaining({
-          objectTypeId: 'experiment',
+          typeId: 'experiment',
+          templateId: 'experiment-default',
           title: 'Quantum Latency Benchmark',
           projectId: 'proj-lab',
         })

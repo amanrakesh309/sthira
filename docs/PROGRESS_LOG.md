@@ -501,6 +501,90 @@
   - Full UI Vitest suite (`npm test`): 52/52 tests PASSED across all 11 test suites.
   - Production bundle build (`npm run build` in `crates/sthira-desktop/ui`): 0 TypeScript errors, 0 Vite errors.
 
+## Phase 16: Object Type & Template Management System (Notion/Anytype-Style Schemas, Templates & Pre-Filled Objects)
+- **Status:** PASSED (Verified via Rust Integration Tests, Vitest React Suite & Production Builds)
+- **Step 1: Database & Core Models (`crates/sthira-core`):**
+  1. **SQLite Schema (`db/schema.sql` + `db/migrations.rs`, schema version 6):**
+     - `object_types` extended with `description TEXT NOT NULL DEFAULT ''` and `default_template_md TEXT NOT NULL DEFAULT ''`.
+     - New `object_templates` table: `id TEXT PRIMARY KEY`, `object_type_id TEXT NOT NULL REFERENCES object_types(id) ON DELETE CASCADE`, `name TEXT NOT NULL`, `icon TEXT NOT NULL DEFAULT '📄'`, `is_default INTEGER NOT NULL DEFAULT 0`, `properties_preset_json JSON NOT NULL DEFAULT '{}'`, `body_template_md TEXT NOT NULL DEFAULT ''`, `created_at INTEGER NOT NULL`, plus `idx_object_templates_type`.
+     - Migration block `user_version < 6` performs the two `ALTER TABLE` statements and creates the templates table/index; fresh databases jump straight to `PRAGMA user_version = 6`.
+  2. **Data Contracts (`models/objects.rs`):**
+     - `ObjectType` gained `description` and `default_template_md` (both `#[serde(default)]`, so older IPC payloads remain valid).
+     - New `ObjectTemplate` struct (`properties_preset: serde_json::Value`, `body_template_md`, `is_default`, `icon` defaulting to `📄`).
+     - Re-exported `ObjectTemplate` from `sthira_core::lib.rs`.
+  3. **Repository (`db/objects_repo.rs`):**
+     - `list_object_types()` / `get_object_type()` / `upsert_object_type()` now read/write the new columns via a shared `OBJECT_TYPE_COLUMNS` projection + `row_to_object_type()` mapper.
+     - **`update_object_type_schema(type_id, display_name, icon, color, properties, default_template_md)`:** targeted `UPDATE` that preserves type identity, `is_system`, and `created_at`; instance property values are intentionally untouched (they live as a keyed JSON document in `object_instances`).
+     - **`list_templates_for_type()`**, **`get_object_template()`**, **`save_object_template()`** (enforces the single-default-per-type invariant by clearing prior defaults), **`delete_object_template()`**.
+     - **Seed data:** built-in types now ship default template bodies —
+       - `idea`: `## The Spark\n\n## Potential Impact\n\n## Next Experiments`
+       - `todo`: `## Acceptance Criteria\n- [ ] \n\n## Context`
+       - `decision`: `## Context & Problem\n\n## Considered Alternatives\n\n> **Decision:** \n\n## Consequences`
+       - `source`: `## Key Claims\n\n## Verified Quotes\n\n## Takeaways`
+     - `seed_default_object_templates()` seeds one canonical named template per built-in type (deterministic ids `<type>-default`, idempotent upsert). It is invoked on **every** startup so pre-existing workspaces are back-filled without duplicating rows.
+- **Step 2: IPC Commands (`crates/sthira-desktop/src/commands.rs`, registered in `lib.rs`):**
+  - `cmd_update_object_type(type_def: ObjectType) -> Result<(), String>` — targeted in-place schema edit (`ObjectTypeDefinition` in the product spec maps 1:1 onto `ObjectType`).
+  - `cmd_delete_object_type(type_id: String) -> Result<(), String>` — built-in system types remain protected by the core invariant.
+  - `cmd_get_type_templates(type_id: String) -> Result<Vec<ObjectTemplate>, String>`.
+  - `cmd_save_object_template(template: ObjectTemplate) -> Result<String, String>` — generates a UUID when the id is blank (create/update through one command).
+  - `cmd_instantiate_object_from_template(type_id, template_id: Option<String>, title, project_id: Option<String>) -> Result<String, String>` — creates the backing artifact hydrated with the resolved Markdown body and merged default properties. Resolution order: explicit named template → `"blank"` sentinel (bare `# Title`) → the type's `default_template_md` → bare skeleton. Property resolution = schema `default_value`s overlaid by the template `properties_preset`.
+  - `cmd_get_object_instance(artifact_id) -> Result<Option<ObjectInstance>, String>` — supporting query that lets `FocusView` detect typed documents.
+
+- **Step 3: Desktop UI Components (`crates/sthira-desktop/ui`):**
+  1. **Object Type & Template Manager (`components/objects/ObjectTypeManagerModal.tsx`):**
+     - Left pane lists every type (`💡 Idea`, `☑️ Task`, `⚖️ Decision`, `🔗 Source`, plus user-created types) with a `[+ New]` button; the right pane is a three-tab editor.
+     - **General:** display name (auto-slugified id), 24-emoji picker, 9-swatch color palette, description textarea.
+     - **Properties:** add/remove/edit properties across `Text`, `Number`, `Checkbox`, `Select`, `Multi-Select`, `Date`, `URL`; `Select`/`Multi-Select` expose an option-tag editor with palette color previews, inline rename, reordering, and Enter/comma-to-add.
+     - **Default Template:** embedded Markdown editor + live preview, plus a named-template strip that saves the current body as a reusable preset (`cmd_save_object_template`).
+     - Delete button for user-created types; system types are read-only. Save flashes an inline confirmation; failures surface inline.
+     - Accessible from the gear icon next to `CUSTOM OBJECTS` in `LeftSidebar.tsx` (`btn-manage-object-types`) and from `WorkspaceIndexView.tsx` (`btn-manage-object-types-index` → "Manage Types"); mounted globally in `App.tsx`.
+  2. **Interactive Property Header (`components/objects/DocumentPropertyHeader.tsx`):**
+     - Rendered in `FocusView.tsx` directly below the page title whenever the open artifact resolves to an `object_instance` (via `cmd_get_object_instance`).
+     - Notion-style tray with a type badge (icon + display name + description), a collapsible chip row, and a quiet saving/saved indicator.
+     - Every chip is inline-editable (`PropertyFieldRenderer`: select dropdowns, date pickers, number fields, checkboxes, text/URL) and persists immediately in the background through `cmd_save_object_instance`, then broadcasts `sthira:refresh_objects`.
+  3. **Template Selector on Creation (`components/objects/TemplateSelectorPopover.tsx`):**
+     - Selecting a typed object from the `/` slash menu now fetches its templates first: with **one** template the default is auto-hydrated and the Quick Object Creator opens immediately; with **multiple** templates a clean selection popover offers `[Default Template]`, `[Blank]`, and every named custom preset.
+     - `FocusView.handleCreateAndInsertObject()` now calls `cmd_instantiate_object_from_template`, so the created artifact carries the template Markdown body and default properties before the embedded `sthira-object` directive is inserted.
+  - **IPC bridge (`api/ipc.ts`)** extended with `updateObjectType`, `deleteObjectType`, `getTypeTemplates`, `saveObjectTemplate`, `getObjectInstance`, `instantiateObjectFromTemplate`; `types/sthira.ts` extended with `ObjectType.description` / `ObjectType.default_template_md` and the new `ObjectTemplate` contract.
+- **Step 4: Verification & Automated Tests:**
+  1. **Backend Rust Integration Tests (`crates/sthira-desktop/tests/object_type_templates_test.rs`):** 4/4 PASSED.
+     - `test_instantiate_object_from_template_hydrates_content_and_properties` — custom type with a default template → `cmd_instantiate_object_from_template` produces an artifact whose `content_md` contains the template skeleton and whose `properties_json` carries schema defaults.
+     - `test_named_template_overrides_default_body_and_property_preset` — a named template overrides the type default body and merges its `properties_preset`; `"blank"` yields a bare title-only skeleton.
+     - `test_editing_schema_preserves_existing_instance_values` — adding a `deadline` property + renaming the type via `cmd_update_object_type` leaves the existing instance's `status`/`attendees` values intact.
+     - `test_builtin_default_templates_and_type_deletion_protection` — asserts the exact seeded template bodies for `idea`/`todo`/`decision`, one seeded template per built-in type, system-type deletion rejection, and custom-type deletion success.
+  2. **Frontend Vitest Suite (`crates/sthira-desktop/ui/src/test/object_type_manager.test.tsx`):** 3/3 PASSED.
+     - `Test 1` — opens `ObjectTypeManagerModal`, adds a `Select` property with custom option tags (`agenda`, `decisions`), saves, and asserts the `cmd_create_object_type` payload schema.
+     - `Test 2` — opens a typed object in `FocusView`, asserts `DocumentPropertyHeader` mounts with `property-chip-status` / `property-chip-tags`, and that editing the Select chip persists via `cmd_save_object_instance`.
+     - `Test 3` — with two templates defined, the `/idea` slash command surfaces the template selector popover (`template-option-default`, `template-option-blank`, `template-option-idea-rapid`) which then opens the Quick Object Creator.
+     - `custom_objects_and_generative_ui.test.tsx` updated: the typed-object creation path now asserts `cmd_instantiate_object_from_template` (with `templateId`) instead of the legacy `cmd_create_typed_object`.
+  3. **Verification Gates:**
+     - Full Rust workspace test suite (`cargo test --workspace`): ALL tests PASSED with 0 errors (incl. new `object_type_templates_test.rs`: 4/4).
+     - Full UI Vitest suite (`npm test`): 56/56 tests PASSED across all 12 test suites.
+     - Production bundle build (`npm run build` in `crates/sthira-desktop/ui`): 0 TypeScript errors, 0 Vite errors.
 
 
+
+
+
+
+## Phase 16.1: "Workspace Index" → "All Files" & Notes Scope Filter/Sort (Tab Consolidation)
+- **Status:** PASSED (Verified via Vitest Suite & Production Build)
+- **Change 1: Renamed "Workspace Index" to "All Files" (user-visible copy only):**
+  - `WorkspaceIndexView.tsx`: breadcrumb `Workspace / All Files`, page title `📁 All Files`, and subtitle reworded to "Unified directory of every project, note, page, and structured object."
+  - `LeftSidebar.tsx`: the expanded nav button now reads `📁 All Files` (tooltip: *"All Files — every project, note, and typed object"*), and the collapsed rail trigger uses the `📁` glyph with tooltip `All Files`.
+  - Internal identifiers were deliberately kept stable to avoid cross-cutting churn: the `workspace_index` view key, `WorkspaceIndexView`, `cmd_get_workspace_index`, the `nav-workspace-index` testid, and the `onNavigateWorkspaceIndex` prop. Only display strings changed.
+- **Change 2: Removed the "Standalone Notes" tab; added a scope filter + sort mechanism to "Notes & Pages":**
+  - `WorkspaceIndexTab` is now `'all' | 'projects' | 'notes' | 'objects'`. `WorkspaceCounts.standalone` is still returned by the backend and now powers the new filter chip's count.
+  - New exported contracts in `types/sthira.ts`: `NoteScopeFilter` (`all` | `projects` | `standalone`) and `NoteSortKey` (`updated` | `created` | `title_asc` | `title_desc`).
+  - **Scope toggle (`note-scope-filter`):** `[ All (n) ] [ In Projects (n) ] [ Standalone (n) ]`, where *In Projects* is derived as `counts.notes - counts.standalone`.
+  - **Sort mechanism (`note-sort-select`):** `Last Modified` (default) / `Date Created` / `Title (A–Z)` / `Title (Z–A)`. Pinned notes always float first, matching every other surface in the app.
+  - Filtering and sorting are **pure client-side refinements** over the `tab=notes` payload (which already contains both attached and standalone notes), so toggling costs zero extra IPC round-trips. A defensive `entity_type === 'note'` guard keeps the tab correct by construction regardless of the incoming payload.
+  - **No capability lost:** the inline `[Standalone ▾]` → `[Attach to Project ▾]` dropdown that previously existed only in the Standalone Notes tab was ported onto the unaffiliated rows of the Notes & Pages table, so organising loose notes is still one click away. The empty state now explains the active scope ("No standalone notes found. Switch the \"Show\" filter to see the rest.").
+  - The former `{activeTab === 'standalone' && …}` render block was deleted outright rather than left as dead code.
+- **Backend:** intentionally unchanged. `handle_get_workspace_index` still supports `tab=standalone` (covered by `workspace_organization_test.rs`) as a reusable query mode, but the UI no longer surfaces it as a tab.
+- **Verification Gates:**
+  - `crates/sthira-desktop/ui/src/test/workspace_organization.test.tsx` updated: the tab test now asserts the four surviving tabs, asserts `tab-standalone` is **absent**, drives the `[Standalone]` scope chip, exercises the ported `[Attach to Project ▾]` flow, and verifies list reordering across `Last Modified` / `Title (A–Z)` / `Date Created`. The `getWorkspaceIndex` mock was made tab-aware so it faithfully mirrors `cmd_get_workspace_index`.
+  - Full UI Vitest suite (`npm test`): 56/56 tests PASSED across all 12 test suites.
+  - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
+  - `cargo check --workspace`: clean (no Rust changes required).
 

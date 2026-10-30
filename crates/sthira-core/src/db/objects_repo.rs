@@ -1,39 +1,41 @@
 use crate::{
-    models::objects::{ObjectInstance, ObjectItem, ObjectType, PropertyDefinition, PropertyType},
+    models::objects::{
+        ObjectInstance, ObjectItem, ObjectTemplate, ObjectType, PropertyDefinition, PropertyType,
+    },
     CoreError,
 };
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
+const OBJECT_TYPE_COLUMNS: &str =
+    "id, display_name, icon, color, schema_json, is_system, created_at, description, default_template_md";
+
+fn row_to_object_type(r: &rusqlite::Row<'_>) -> Result<ObjectType, rusqlite::Error> {
+    let schema_json: String = r.get(4)?;
+    let schema: Vec<PropertyDefinition> = serde_json::from_str(&schema_json).unwrap_or_default();
+
+    Ok(ObjectType {
+        id: r.get(0)?,
+        display_name: r.get(1)?,
+        icon: r.get(2)?,
+        color: r.get(3)?,
+        schema,
+        is_system: r.get::<_, i32>(5)? != 0,
+        created_at: r.get(6)?,
+        description: r.get(7)?,
+        default_template_md: r.get(8)?,
+    })
+}
+
 pub fn list_object_types(conn: &Connection) -> Result<Vec<ObjectType>, CoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, display_name, icon, color, schema_json, is_system, created_at
+    let sql = format!(
+        "SELECT {OBJECT_TYPE_COLUMNS}
          FROM object_types
-         ORDER BY is_system DESC, display_name ASC;",
-    )?;
+         ORDER BY is_system DESC, display_name ASC;"
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], |r| {
-        let id: String = r.get(0)?;
-        let display_name: String = r.get(1)?;
-        let icon: String = r.get(2)?;
-        let color: String = r.get(3)?;
-        let schema_json: String = r.get(4)?;
-        let is_system: bool = r.get::<_, i32>(5)? != 0;
-        let created_at: i64 = r.get(6)?;
-
-        let schema: Vec<PropertyDefinition> =
-            serde_json::from_str(&schema_json).unwrap_or_default();
-
-        Ok(ObjectType {
-            id,
-            display_name,
-            icon,
-            color,
-            schema,
-            is_system,
-            created_at,
-        })
-    })?;
+    let rows = stmt.query_map([], row_to_object_type)?;
 
     let mut list = Vec::new();
     for row in rows {
@@ -43,34 +45,12 @@ pub fn list_object_types(conn: &Connection) -> Result<Vec<ObjectType>, CoreError
 }
 
 pub fn get_object_type(conn: &Connection, id: &str) -> Result<Option<ObjectType>, CoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, display_name, icon, color, schema_json, is_system, created_at
-         FROM object_types
-         WHERE id = ?1;",
-    )?;
+    let sql = format!("SELECT {OBJECT_TYPE_COLUMNS} FROM object_types WHERE id = ?1;");
+    let mut stmt = conn.prepare(&sql)?;
 
     let mut rows = stmt.query(params![id])?;
     if let Some(r) = rows.next()? {
-        let id: String = r.get(0)?;
-        let display_name: String = r.get(1)?;
-        let icon: String = r.get(2)?;
-        let color: String = r.get(3)?;
-        let schema_json: String = r.get(4)?;
-        let is_system: bool = r.get::<_, i32>(5)? != 0;
-        let created_at: i64 = r.get(6)?;
-
-        let schema: Vec<PropertyDefinition> =
-            serde_json::from_str(&schema_json).unwrap_or_default();
-
-        Ok(Some(ObjectType {
-            id,
-            display_name,
-            icon,
-            color,
-            schema,
-            is_system,
-            created_at,
-        }))
+        Ok(Some(row_to_object_type(r)?))
     } else {
         Ok(None)
     }
@@ -80,13 +60,16 @@ pub fn upsert_object_type(conn: &Connection, obj_type: &ObjectType) -> Result<()
     let schema_json = serde_json::to_string(&obj_type.schema)?;
 
     conn.execute(
-        "INSERT INTO object_types (id, display_name, icon, color, schema_json, is_system, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO object_types
+            (id, display_name, icon, color, schema_json, is_system, created_at, description, default_template_md)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
             display_name = excluded.display_name,
             icon = excluded.icon,
             color = excluded.color,
-            schema_json = excluded.schema_json;",
+            schema_json = excluded.schema_json,
+            description = excluded.description,
+            default_template_md = excluded.default_template_md;",
         params![
             obj_type.id,
             obj_type.display_name,
@@ -95,8 +78,57 @@ pub fn upsert_object_type(conn: &Connection, obj_type: &ObjectType) -> Result<()
             schema_json,
             if obj_type.is_system { 1 } else { 0 },
             obj_type.created_at,
+            obj_type.description,
+            obj_type.default_template_md,
         ],
     )?;
+
+    Ok(())
+}
+
+/// Phase 16: Targeted schema edit that preserves type identity, `is_system`, and
+/// `created_at` while allowing display metadata, the property schema, and the default
+/// Markdown template body to evolve.
+///
+/// Instance property values are deliberately untouched: `object_instances.properties_json`
+/// is a JSON document keyed by property key, so existing values survive schema edits as
+/// long as property keys are preserved (the primary invariant verified by
+/// `test_editing_schema_preserves_existing_instance_values`).
+pub fn update_object_type_schema(
+    conn: &Connection,
+    type_id: &str,
+    display_name: &str,
+    icon: &str,
+    color: &str,
+    properties: &[PropertyDefinition],
+    default_template_md: &str,
+) -> Result<(), CoreError> {
+    let schema_json = serde_json::to_string(properties)?;
+
+    let changed = conn.execute(
+        "UPDATE object_types
+         SET display_name = ?2,
+             icon = ?3,
+             color = ?4,
+             schema_json = ?5,
+             default_template_md = ?6
+         WHERE id = ?1;",
+        params![
+            type_id,
+            display_name,
+            icon,
+            color,
+            schema_json,
+            default_template_md,
+        ],
+    )?;
+
+    if changed == 0 {
+        return Err(CoreError::NotFound(format!(
+            "Object type '{}' not found",
+            type_id
+        )));
+    }
 
     Ok(())
 }
@@ -120,6 +152,120 @@ pub fn delete_object_type(conn: &Connection, id: &str) -> Result<(), CoreError> 
     let changed = conn.execute("DELETE FROM object_types WHERE id = ?1;", params![id])?;
     if changed == 0 {
         return Err(CoreError::NotFound(format!("Object type '{}' not found", id)));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16: Object Templates (named, reusable presets per object type)
+// ---------------------------------------------------------------------------
+
+const OBJECT_TEMPLATE_COLUMNS: &str =
+    "id, object_type_id, name, icon, is_default, properties_preset_json, body_template_md, created_at";
+
+fn row_to_object_template(r: &rusqlite::Row<'_>) -> Result<ObjectTemplate, rusqlite::Error> {
+    let preset_str: String = r.get(5)?;
+    let properties_preset: serde_json::Value =
+        serde_json::from_str(&preset_str).unwrap_or_else(|_| serde_json::json!({}));
+
+    Ok(ObjectTemplate {
+        id: r.get(0)?,
+        object_type_id: r.get(1)?,
+        name: r.get(2)?,
+        icon: r.get(3)?,
+        is_default: r.get::<_, i32>(4)? != 0,
+        properties_preset,
+        body_template_md: r.get(6)?,
+        created_at: r.get(7)?,
+    })
+}
+
+pub fn list_templates_for_type(
+    conn: &Connection,
+    type_id: &str,
+) -> Result<Vec<ObjectTemplate>, CoreError> {
+    let sql = format!(
+        "SELECT {OBJECT_TEMPLATE_COLUMNS}
+         FROM object_templates
+         WHERE object_type_id = ?1
+         ORDER BY is_default DESC, created_at ASC;"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map(params![type_id], row_to_object_template)?;
+
+    let mut list = Vec::new();
+    for row in rows {
+        list.push(row?);
+    }
+    Ok(list)
+}
+
+pub fn get_object_template(
+    conn: &Connection,
+    template_id: &str,
+) -> Result<Option<ObjectTemplate>, CoreError> {
+    let sql = format!("SELECT {OBJECT_TEMPLATE_COLUMNS} FROM object_templates WHERE id = ?1;");
+    let mut stmt = conn.prepare(&sql)?;
+
+    let mut rows = stmt.query(params![template_id])?;
+    if let Some(r) = rows.next()? {
+        Ok(Some(row_to_object_template(r)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn save_object_template(
+    conn: &Connection,
+    template: &ObjectTemplate,
+) -> Result<(), CoreError> {
+    let preset_json = serde_json::to_string(&template.properties_preset)?;
+
+    // Invariant: only one template per object type may be flagged as the default.
+    if template.is_default {
+        conn.execute(
+            "UPDATE object_templates SET is_default = 0 WHERE object_type_id = ?1;",
+            params![template.object_type_id],
+        )?;
+    }
+
+    conn.execute(
+        "INSERT INTO object_templates
+            (id, object_type_id, name, icon, is_default, properties_preset_json, body_template_md, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET
+            object_type_id = excluded.object_type_id,
+            name = excluded.name,
+            icon = excluded.icon,
+            is_default = excluded.is_default,
+            properties_preset_json = excluded.properties_preset_json,
+            body_template_md = excluded.body_template_md;",
+        params![
+            template.id,
+            template.object_type_id,
+            template.name,
+            template.icon,
+            if template.is_default { 1 } else { 0 },
+            preset_json,
+            template.body_template_md,
+            template.created_at,
+        ],
+    )?;
+
+    Ok(())
+}
+
+pub fn delete_object_template(conn: &Connection, template_id: &str) -> Result<(), CoreError> {
+    let changed = conn.execute(
+        "DELETE FROM object_templates WHERE id = ?1;",
+        params![template_id],
+    )?;
+    if changed == 0 {
+        return Err(CoreError::NotFound(format!(
+            "Object template '{}' not found",
+            template_id
+        )));
     }
     Ok(())
 }
@@ -275,6 +421,10 @@ pub fn seed_default_object_types_if_empty(
 ) -> Result<(), CoreError> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM object_types;", [], |r| r.get(0))?;
     if count > 0 {
+        // Phase 16: Templates are keyed by deterministic ids and upserted, so this is
+        // safe (and desirable) to run on every startup — it back-fills templates for
+        // workspaces created before the template system existed.
+        seed_default_object_templates(conn, now_ms)?;
         return Ok(());
     }
 
@@ -309,6 +459,9 @@ pub fn seed_default_object_types_if_empty(
         ],
         is_system: true,
         created_at: now_ms,
+        description: "A nascent thought worth exploring and validating.".to_string(),
+        default_template_md:
+            "## The Spark\n\n## Potential Impact\n\n## Next Experiments".to_string(),
     };
     upsert_object_type(conn, &idea)?;
 
@@ -346,6 +499,8 @@ pub fn seed_default_object_types_if_empty(
         ],
         is_system: true,
         created_at: now_ms,
+        description: "A concrete action item with acceptance criteria.".to_string(),
+        default_template_md: "## Acceptance Criteria\n- [ ] \n\n## Context".to_string(),
     };
     upsert_object_type(conn, &todo)?;
 
@@ -375,6 +530,10 @@ pub fn seed_default_object_types_if_empty(
         ],
         is_system: true,
         created_at: now_ms,
+        description: "A recorded decision with rationale and consequences.".to_string(),
+        default_template_md:
+            "## Context & Problem\n\n## Considered Alternatives\n\n> **Decision:** \n\n## Consequences"
+                .to_string(),
     };
     upsert_object_type(conn, &decision)?;
 
@@ -408,8 +567,67 @@ pub fn seed_default_object_types_if_empty(
         ],
         is_system: true,
         created_at: now_ms,
+        description: "An external reference, paper, or web page under study.".to_string(),
+        default_template_md: "## Key Claims\n\n## Verified Quotes\n\n## Takeaways".to_string(),
     };
     upsert_object_type(conn, &source)?;
+
+    // Phase 16: Seed the default named templates for the built-in types so the
+    // template selector popover is populated out of the box.
+    seed_default_object_templates(conn, now_ms)?;
+
+    Ok(())
+}
+
+/// Phase 16: Seeds one canonical named template per built-in system type.
+///
+/// Idempotent: templates are upserted by a deterministic id (`<type>-default`), so
+/// re-running this never duplicates rows.
+pub fn seed_default_object_templates(conn: &Connection, now_ms: i64) -> Result<(), CoreError> {
+    let presets: [(&str, &str, &str, &str, serde_json::Value); 4] = [
+        (
+            "idea",
+            "Idea Exploration",
+            "💡",
+            "## The Spark\n\n## Potential Impact\n\n## Next Experiments",
+            serde_json::json!({ "status": "spark" }),
+        ),
+        (
+            "todo",
+            "Task Checklist",
+            "☑️",
+            "## Acceptance Criteria\n- [ ] \n\n## Context",
+            serde_json::json!({ "completed": false, "priority": "medium" }),
+        ),
+        (
+            "decision",
+            "Decision Record",
+            "⚖️",
+            "## Context & Problem\n\n## Considered Alternatives\n\n> **Decision:** \n\n## Consequences",
+            serde_json::json!({ "rationale": "" }),
+        ),
+        (
+            "source",
+            "Source Review",
+            "🔗",
+            "## Key Claims\n\n## Verified Quotes\n\n## Takeaways",
+            serde_json::json!({ "read_status": "unread" }),
+        ),
+    ];
+
+    for (type_id, name, icon, body, preset) in presets {
+        let template = ObjectTemplate {
+            id: format!("{type_id}-default"),
+            object_type_id: type_id.to_string(),
+            name: name.to_string(),
+            icon: icon.to_string(),
+            is_default: true,
+            properties_preset: preset,
+            body_template_md: body.to_string(),
+            created_at: now_ms,
+        };
+        save_object_template(conn, &template)?;
+    }
 
     Ok(())
 }

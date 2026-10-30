@@ -91,22 +91,22 @@ describe('Workspace Organization Refactor', () => {
     expect(screen.getByTestId('pinned-chip-n1')).toBeInTheDocument();
     expect(screen.getByTestId('pinned-chip-obj1')).toBeInTheDocument();
 
-    // Clicking top navigation button opens Workspace Index
+    // Clicking top navigation button opens All Files
     const indexNavBtn = screen.getByTestId('nav-workspace-index');
     fireEvent.click(indexNavBtn);
     expect(onNavigateWorkspaceIndex).toHaveBeenCalledWith('all');
 
-    // Clicking "View all →" for Projects navigates to Workspace Index focused on projects
+    // Clicking "View all →" for Projects navigates to All Files focused on projects
     const viewAllProjectsBtn = screen.getByTestId('btn-view-all-projects');
     fireEvent.click(viewAllProjectsBtn);
     expect(onNavigateWorkspaceIndex).toHaveBeenCalledWith('projects');
 
-    // Clicking "View all →" for Notes navigates to Workspace Index focused on notes
+    // Clicking "View all →" for Notes navigates to All Files focused on notes
     const viewAllNotesBtn = screen.getByTestId('btn-view-all-notes');
     fireEvent.click(viewAllNotesBtn);
     expect(onNavigateWorkspaceIndex).toHaveBeenCalledWith('notes');
 
-    // Clicking "View all →" for Objects navigates to Workspace Index focused on objects
+    // Clicking "View all →" for Objects navigates to All Files focused on objects
     const viewAllObjectsBtn = screen.getByTestId('btn-view-all-objects');
     fireEvent.click(viewAllObjectsBtn);
     expect(onNavigateWorkspaceIndex).toHaveBeenCalledWith('objects');
@@ -210,16 +210,16 @@ describe('Workspace Organization Refactor', () => {
     expect(screen.queryByText(/Unfiled Thoughts/i)).toBeNull();
     expect(screen.queryByText('Unfiled thought that should not be on Home')).toBeNull();
 
-    // Clicking "View all →" on Home "Your projects" navigates to Workspace Index
+    // Clicking "View all →" on Home "Your projects" navigates to All Files
     const homeViewAllProjectsBtn = screen.getByTestId('home-view-all-projects');
     fireEvent.click(homeViewAllProjectsBtn);
     expect(onNavigateWorkspaceIndex).toHaveBeenCalledWith('projects');
   });
 
   // -------------------------------------------------------------------------
-  // 4. Workspace Index View Tabs, Filtering, and Standalone Attachment
+  // 4. All Files View Tabs, Note Scope Filter + Sort, and Standalone Attachment
   // -------------------------------------------------------------------------
-  it('WorkspaceIndexView renders tabs, filters items, and allows attaching standalone note to project', async () => {
+  it('All Files view renders the four tabs, filters notes by scope + sort, and allows attaching a standalone note', async () => {
     const user = userEvent.setup();
     vi.mocked(ipc.getWorkspaceTree).mockResolvedValue({
       projects: [
@@ -231,9 +231,9 @@ describe('Workspace Organization Refactor', () => {
       { id: 'decision', display_name: 'Decision', icon: '⚖️', color: '#10B981', is_system: true, schema: [], created_at: 100 },
     ]);
     vi.mocked(ipc.addArtifactToProject).mockResolvedValue({ success: true } as any);
-    vi.mocked(ipc.getWorkspaceIndex).mockResolvedValue({
-      counts: { all: 3, projects: 1, notes: 2, objects: 1, standalone: 1 },
-      items: [
+    // Faithful mock: like `cmd_get_workspace_index`, the payload is scoped to the tab.
+    const indexCounts = { all: 4, projects: 1, notes: 2, objects: 1, standalone: 1 };
+    const indexItems = [
         {
           id: 'p1',
           title: 'Deep Space Mission',
@@ -262,13 +262,31 @@ describe('Workspace Organization Refactor', () => {
           icon: '📝',
           color: null,
           is_pinned: false,
-          last_accessed_at: 90,
-          updated_at: 90,
+          last_accessed_at: 200,
+          updated_at: 200,
           created_at: 90,
           project_id: null,
           project_name: null,
           item_count: null,
           standalone: true,
+        },
+        {
+          id: 'n2',
+          title: 'Attached Project Note',
+          description: 'Note living inside a project folder',
+          entity_type: 'note',
+          object_type_id: null,
+          object_type_name: null,
+          icon: '📝',
+          color: null,
+          is_pinned: false,
+          last_accessed_at: 95,
+          updated_at: 95,
+          created_at: 95,
+          project_id: 'p1',
+          project_name: 'Deep Space Mission',
+          item_count: null,
+          standalone: false,
         },
         {
           id: 'obj1',
@@ -288,8 +306,20 @@ describe('Workspace Organization Refactor', () => {
           item_count: null,
           standalone: false,
         },
-      ],
-    } as any);
+    ];
+
+    vi.mocked(ipc.getWorkspaceIndex).mockImplementation(async (tab?: any) => {
+      const byTab: Record<string, (i: any) => boolean> = {
+        projects: (i) => i.entity_type === 'project',
+        notes: (i) => i.entity_type === 'note',
+        objects: (i) => i.entity_type === 'object',
+      };
+      const predicate = tab ? byTab[tab] : undefined;
+      return {
+        counts: indexCounts,
+        items: predicate ? indexItems.filter(predicate) : indexItems,
+      } as any;
+    });
 
     const onOpenProject = vi.fn();
     const onOpenArtifact = vi.fn();
@@ -302,34 +332,64 @@ describe('Workspace Organization Refactor', () => {
       />
     );
 
-    // Verify all counts rendered in tabs
+    // Verify the four tabs render — the "Standalone Notes" tab has been removed
     expect(await screen.findByTestId('tab-all')).toBeInTheDocument();
     expect(screen.getByTestId('tab-projects')).toBeInTheDocument();
     expect(screen.getByTestId('tab-notes')).toBeInTheDocument();
     expect(screen.getByTestId('tab-objects')).toBeInTheDocument();
-    expect(screen.getByTestId('tab-standalone')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-standalone')).not.toBeInTheDocument();
 
     // Verify items in "All Items" tab
     expect(screen.getByText('Deep Space Mission')).toBeInTheDocument();
     expect(screen.getByText('Unaffiliated Idea Note')).toBeInTheDocument();
     expect(screen.getByText('Thrust Vectoring Decision')).toBeInTheDocument();
 
-    // Switch to "Standalone Notes" tab
-    await user.click(screen.getByTestId('tab-standalone'));
+    // Notes & Pages now carries the scope toggle + sort mechanism instead of a separate tab
+    await user.click(screen.getByTestId('tab-notes'));
+    expect(screen.getByTestId('note-scope-filter')).toBeInTheDocument();
+    expect(screen.getByTestId('note-scope-all')).toBeInTheDocument();
+    expect(screen.getByTestId('note-scope-projects')).toBeInTheDocument();
+    expect(screen.getByTestId('note-scope-standalone')).toBeInTheDocument();
+    expect(screen.getByTestId('note-sort-select')).toBeInTheDocument();
 
-    // Verify standalone note appears with "Attach to Project" dropdown trigger
+    // Default scope (All): both the attached and the standalone note are listed
     expect(screen.getByTestId('index-item-n1')).toBeInTheDocument();
-    const attachBtn = screen.getByTestId('attach-project-btn-n1');
-    expect(attachBtn).toBeInTheDocument();
+    expect(screen.getByTestId('index-item-n2')).toBeInTheDocument();
 
-    // Click attach button to open project picker
+    // Scope = In Projects: only the project-attached note remains
+    await user.click(screen.getByTestId('note-scope-projects'));
+    expect(screen.getByTestId('index-item-n2')).toBeInTheDocument();
+    expect(screen.queryByTestId('index-item-n1')).not.toBeInTheDocument();
+
+    // Scope = Standalone: only the unaffiliated note remains
+    await user.click(screen.getByTestId('note-scope-standalone'));
+    expect(screen.getByTestId('index-item-n1')).toBeInTheDocument();
+    expect(screen.queryByTestId('index-item-n2')).not.toBeInTheDocument();
+
+    // The [Attach to Project ▾] action survives the tab removal and lives on the row itself
+    const attachBtn = screen.getByTestId('attach-project-btn-n1');
     await user.click(attachBtn);
     const selectProjectOpt = await screen.findByTestId('attach-target-p1');
     expect(selectProjectOpt).toBeInTheDocument();
 
-    // Select project to attach
     await user.click(selectProjectOpt);
     expect(ipc.addArtifactToProject).toHaveBeenCalledWith('n1', 'p1');
+
+    // Sort mechanism: "Last Modified" (default) puts n1 (newer) first…
+    await user.click(screen.getByTestId('note-scope-all'));
+    const idsInOrder = () =>
+      screen
+        .getAllByTestId(/^index-item-/)
+        .map((el) => el.getAttribute('data-testid'));
+    expect(idsInOrder()).toEqual(['index-item-n1', 'index-item-n2']);
+
+    // …while "Title (A–Z)" reorders them by title ("Attached…" before "Unaffiliated…")
+    fireEvent.change(screen.getByTestId('note-sort-select'), { target: { value: 'title_asc' } });
+    expect(idsInOrder()).toEqual(['index-item-n2', 'index-item-n1']);
+
+    // …and "Date Created" sorts by created_at (n2 created 95 > n1 created 90)
+    fireEvent.change(screen.getByTestId('note-sort-select'), { target: { value: 'created' } });
+    expect(idsInOrder()).toEqual(['index-item-n2', 'index-item-n1']);
   });
 
   // -------------------------------------------------------------------------
@@ -375,7 +435,7 @@ describe('Workspace Organization Refactor', () => {
 
     render(<App />);
 
-    // Click top nav "Workspace Index"
+    // Click top nav "All Files"
     const indexBtn = await screen.findByTestId('nav-workspace-index');
     fireEvent.click(indexBtn);
 

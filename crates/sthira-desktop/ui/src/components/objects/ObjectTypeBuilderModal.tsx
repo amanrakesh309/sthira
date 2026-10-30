@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, AlertCircle } from 'lucide-react';
+import { X, Plus, Trash2, AlertCircle, ChevronUp, ChevronDown } from 'lucide-react';
 import { createObjectType } from '../../api/ipc';
 import type { ObjectType, PropertyDefinition, PropertyType } from '../../types/sthira';
 
@@ -21,6 +21,179 @@ const COLOR_OPTIONS = [
   '#F97316', // Orange
   '#64748B', // Slate
 ];
+
+interface SelectPropertyOptionsEditorProps {
+  propertyIndex: number;
+  options: string[];
+  onChange: (options: string[]) => void;
+}
+
+const SelectPropertyOptionsEditor: React.FC<SelectPropertyOptionsEditorProps> = ({
+  propertyIndex,
+  options,
+  onChange,
+}) => {
+  const [newOptionText, setNewOptionText] = useState('');
+
+  const handleAddOption = () => {
+    const trimmed = newOptionText.trim();
+    if (!trimmed) return;
+
+    // Split on commas if multiple were entered/pasted
+    const parts = trimmed
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (parts.length === 0) return;
+
+    onChange([...options, ...parts]);
+    setNewOptionText('');
+  };
+
+  const handleAddInputChange = (val: string) => {
+    // If user types a comma or pastes a comma-separated list, auto-split and append
+    if (val.includes(',')) {
+      const parts = val
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      if (parts.length > 0) {
+        onChange([...options, ...parts]);
+        setNewOptionText('');
+        return;
+      }
+    }
+    setNewOptionText(val);
+  };
+
+  const handleEditOption = (optIdx: number, val: string) => {
+    const updated = [...options];
+    updated[optIdx] = val;
+    onChange(updated);
+  };
+
+  const handleRemoveOption = (optIdx: number) => {
+    onChange(options.filter((_, i) => i !== optIdx));
+  };
+
+  const handleMoveOption = (optIdx: number, direction: -1 | 1) => {
+    const targetIdx = optIdx + direction;
+    if (targetIdx < 0 || targetIdx >= options.length) return;
+    const updated = [...options];
+    const temp = updated[optIdx];
+    updated[optIdx] = updated[targetIdx];
+    updated[targetIdx] = temp;
+    onChange(updated);
+  };
+
+  return (
+    <div className="mt-2.5 pt-2 border-t border-[#E8E5DC] space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#6E6D66]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#8C8A82]" />
+          <span>Dropdown Options ({options.length})</span>
+        </div>
+        <span className="text-[10px] text-[#8C8A82]">
+          Press Enter or comma to add
+        </span>
+      </div>
+
+      {/* Bulleted list of options */}
+      <div className="space-y-1.5">
+        {options.length === 0 ? (
+          <div className="text-[11px] text-[#8C8A82] italic py-1 pl-2">
+            No options added yet. Type below and press Enter to add.
+          </div>
+        ) : (
+          options.map((opt, optIdx) => (
+            <div
+              key={optIdx}
+              className="flex items-center gap-1.5 group bg-white px-2 py-1 rounded-lg border border-[#E8E5DC] hover:border-[#D1CDC2] transition-colors"
+            >
+              <span className="text-[#8C8A82] select-none text-xs font-bold shrink-0">•</span>
+              <input
+                type="text"
+                value={opt}
+                data-testid={`input-option-${propertyIndex}-${optIdx}`}
+                onChange={(e) => handleEditOption(optIdx, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                  }
+                }}
+                placeholder={`Option ${optIdx + 1}`}
+                className="flex-1 bg-transparent text-xs font-medium text-[#1E201C] outline-none"
+              />
+              <div className="flex items-center gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  disabled={optIdx === 0}
+                  onClick={() => handleMoveOption(optIdx, -1)}
+                  data-testid={`btn-move-up-option-${propertyIndex}-${optIdx}`}
+                  className="p-0.5 text-[#8C8A82] hover:text-[#1E201C] disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed rounded"
+                  title="Move Up"
+                >
+                  <ChevronUp className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  disabled={optIdx === options.length - 1}
+                  onClick={() => handleMoveOption(optIdx, 1)}
+                  data-testid={`btn-move-down-option-${propertyIndex}-${optIdx}`}
+                  className="p-0.5 text-[#8C8A82] hover:text-[#1E201C] disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed rounded"
+                  title="Move Down"
+                >
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveOption(optIdx)}
+                  data-testid={`btn-remove-option-${propertyIndex}-${optIdx}`}
+                  className="p-0.5 text-[#8C8A82] hover:text-red-600 rounded transition-colors cursor-pointer"
+                  title="Remove option"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+
+        {/* Add new option input row */}
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <div className="flex-1 flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-dashed border-[#D1CDC2] focus-within:border-[#282C25] focus-within:border-solid transition-all">
+            <Plus className="w-3 h-3 text-[#8C8A82] shrink-0" />
+            <input
+              type="text"
+              value={newOptionText}
+              data-testid={`input-new-option-${propertyIndex}`}
+              onChange={(e) => handleAddInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddOption();
+                }
+              }}
+              placeholder="Add option (press Enter or comma to split)..."
+              className="flex-1 bg-transparent text-xs text-[#1E201C] placeholder:text-[#8C8A82] outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleAddOption}
+            data-testid={`btn-add-option-${propertyIndex}`}
+            className="px-2.5 py-1 rounded-lg bg-[#FAF9F5] hover:bg-[#EFECE4] border border-[#E8E5DC] text-[#282C25] text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+          >
+            <Plus className="w-3 h-3" />
+            <span>Add</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const ObjectTypeBuilderModal: React.FC<ObjectTypeBuilderModalProps> = ({
   isOpen,
@@ -114,16 +287,34 @@ export const ObjectTypeBuilderModal: React.FC<ObjectTypeBuilderModalProps> = ({
         return;
       }
       keys.add(k);
+
+      if (prop.property_type === 'select') {
+        const cleanOpts = (prop.options || []).map((o) => o.trim()).filter(Boolean);
+        if (cleanOpts.length === 0) {
+          setError(`Select property "${prop.label || prop.key}" must have at least one option.`);
+          return;
+        }
+      }
     }
 
     setIsSubmitting(true);
     try {
+      const cleanProperties = properties.map((prop) => {
+        if (prop.property_type === 'select') {
+          return {
+            ...prop,
+            options: (prop.options || []).map((o) => o.trim()).filter(Boolean),
+          };
+        }
+        return prop;
+      });
+
       const newType: ObjectType = {
         id: trimmedId,
         display_name: trimmedName,
         icon: selectedIcon,
         color: selectedColor,
-        schema: properties,
+        schema: cleanProperties,
         is_system: false,
         created_at: Date.now(),
       };
@@ -270,7 +461,7 @@ export const ObjectTypeBuilderModal: React.FC<ObjectTypeBuilderModalProps> = ({
               </button>
             </div>
 
-            <div className="space-y-2 max-h-56 overflow-y-auto p-1">
+            <div className="space-y-2 max-h-80 overflow-y-auto p-1">
               {properties.length === 0 ? (
                 <div className="text-center py-4 text-xs text-[#8C8A82] italic border border-dashed border-[#E8E5DC] rounded-xl">
                   No properties added yet. Click &quot;Add Property&quot; above.
@@ -301,11 +492,18 @@ export const ObjectTypeBuilderModal: React.FC<ObjectTypeBuilderModalProps> = ({
                       <select
                         value={prop.property_type}
                         data-testid="select-property-type"
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const newType = e.target.value as PropertyType;
                           handleUpdateProperty(idx, {
-                            property_type: e.target.value as PropertyType,
-                          })
-                        }
+                            property_type: newType,
+                            options:
+                              newType === 'select'
+                                ? prop.options && prop.options.length > 0
+                                  ? prop.options
+                                  : ['Option 1', 'Option 2']
+                                : prop.options,
+                          });
+                        }}
                         className="w-28 px-2 py-1 rounded-lg border border-[#E8E5DC] bg-white text-xs font-medium outline-none cursor-pointer focus:border-[#282C25]"
                       >
                         <option value="text">Text</option>
@@ -326,25 +524,13 @@ export const ObjectTypeBuilderModal: React.FC<ObjectTypeBuilderModalProps> = ({
                     </div>
 
                     {prop.property_type === 'select' && (
-                      <div className="flex items-center gap-2 pl-1">
-                        <span className="text-[10px] text-[#8C8A82] font-medium shrink-0">
-                          Options (comma separated):
-                        </span>
-                        <input
-                          type="text"
-                          value={(prop.options || []).join(', ')}
-                          onChange={(e) =>
-                            handleUpdateProperty(idx, {
-                              options: e.target.value
-                                .split(',')
-                                .map((s) => s.trim())
-                                .filter(Boolean),
-                            })
-                          }
-                          placeholder="e.g. low, medium, high"
-                          className="flex-1 px-2 py-0.5 rounded border border-[#E8E5DC] bg-white text-xs outline-none focus:border-[#282C25]"
-                        />
-                      </div>
+                      <SelectPropertyOptionsEditor
+                        propertyIndex={idx}
+                        options={prop.options || []}
+                        onChange={(newOptions) =>
+                          handleUpdateProperty(idx, { options: newOptions })
+                        }
+                      />
                     )}
                   </div>
                 ))

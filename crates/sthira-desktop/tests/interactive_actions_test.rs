@@ -164,6 +164,8 @@ async fn test_create_object_type_persistence() {
         ],
         is_system: false,
         created_at: 1_700_000_000_000,
+        description: String::new(),
+        default_template_md: String::new(),
     };
 
     let created_id = handle_create_object_type(&engine, custom_type.clone())

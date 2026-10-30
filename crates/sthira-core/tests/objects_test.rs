@@ -111,6 +111,8 @@ async fn test_custom_object_type_creation_and_instance_lifecycle() {
         ],
         is_system: false,
         created_at: now_ms,
+        description: String::new(),
+        default_template_md: String::new(),
     };
 
     {

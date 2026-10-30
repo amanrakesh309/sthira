@@ -313,6 +313,26 @@ export interface ObjectType {
   schema: PropertyDefinition[];
   is_system: boolean;
   created_at: number;
+  /** Phase 16: Human-readable description of what this type represents. */
+  description?: string;
+  /** Phase 16: Default Markdown body skeleton for new instances. */
+  default_template_md?: string;
+}
+
+/**
+ * Phase 16: A named, reusable preset for an object type.
+ *
+ * `ObjectTypeDefinition` in the product spec maps 1:1 onto `ObjectType`.
+ */
+export interface ObjectTemplate {
+  id: string;
+  object_type_id: string;
+  name: string;
+  icon: string;
+  is_default: boolean;
+  properties_preset: Record<string, any>;
+  body_template_md: string;
+  created_at: number;
 }
 
 export interface ObjectInstance {
@@ -534,7 +554,21 @@ export interface WorkspaceIndexData {
   items: WorkspaceIndexItem[];
 }
 
-export type WorkspaceIndexTab = 'all' | 'projects' | 'notes' | 'objects' | 'standalone';
+/**
+ * Tabs available in the All Files (formerly Workspace Index) view.
+ *
+ * `standalone` is intentionally NOT a tab: standalone notes are already part of the
+ * `notes` dataset and are surfaced there through the `NoteScopeFilter` toggle instead.
+ * (`WorkspaceCounts.standalone` is still returned by `cmd_get_workspace_index` and
+ * powers that filter chip's count.)
+ */
+export type WorkspaceIndexTab = 'all' | 'projects' | 'notes' | 'objects';
+
+/** Scope toggle applied inside the Notes & Pages tab. */
+export type NoteScopeFilter = 'all' | 'projects' | 'standalone';
+
+/** Sort order applied inside the Notes & Pages tab. Pinned notes always float first. */
+export type NoteSortKey = 'updated' | 'created' | 'title_asc' | 'title_desc';
 
 
 

@@ -19,6 +19,7 @@ import type {
   WorkspaceTree,
   WorkspaceTreeProject,
   ObjectType,
+  ObjectTemplate,
   ObjectInstance,
   ObjectItem,
   ProjectDeletionImpact,
@@ -1021,6 +1022,102 @@ export async function createTypedObject(
     project_id: projectId || null,
     updated_at: Date.now(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16: Object Type & Template Management IPC Bridge
+// ---------------------------------------------------------------------------
+
+export async function updateObjectType(typeDef: ObjectType): Promise<void> {
+  if (isTauri) {
+    try {
+      await invoke<void>('cmd_update_object_type', {
+        typeDef,
+        type_def: typeDef,
+      });
+    } catch (err) {
+      console.error('cmd_update_object_type failed:', err);
+      throw err;
+    }
+  }
+}
+
+export async function deleteObjectType(typeId: string): Promise<void> {
+  if (isTauri) {
+    try {
+      await invoke<void>('cmd_delete_object_type', { typeId, type_id: typeId });
+    } catch (err) {
+      console.error('cmd_delete_object_type failed:', err);
+      throw err;
+    }
+  }
+}
+
+export async function getTypeTemplates(typeId: string): Promise<ObjectTemplate[]> {
+  if (isTauri) {
+    try {
+      return await invoke<ObjectTemplate[]>('cmd_get_type_templates', {
+        typeId,
+        type_id: typeId,
+      });
+    } catch (err) {
+      console.error('cmd_get_type_templates failed:', err);
+      throw err;
+    }
+  }
+  return [];
+}
+
+export async function saveObjectTemplate(template: ObjectTemplate): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke<string>('cmd_save_object_template', { template });
+    } catch (err) {
+      console.error('cmd_save_object_template failed:', err);
+      throw err;
+    }
+  }
+  return template.id || `mock-template-${Date.now()}`;
+}
+
+export async function getObjectInstance(artifactId: string): Promise<ObjectInstance | null> {
+  if (isTauri) {
+    try {
+      return await invoke<ObjectInstance | null>('cmd_get_object_instance', {
+        artifactId,
+        artifact_id: artifactId,
+      });
+    } catch (err) {
+      console.error('cmd_get_object_instance failed:', err);
+      throw err;
+    }
+  }
+  return null;
+}
+
+export async function instantiateObjectFromTemplate(
+  typeId: string,
+  templateId: string | null,
+  title: string,
+  projectId?: string | null,
+): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke<string>('cmd_instantiate_object_from_template', {
+        typeId,
+        type_id: typeId,
+        templateId: templateId || null,
+        template_id: templateId || null,
+        title,
+        projectId: projectId || null,
+        project_id: projectId || null,
+      });
+    } catch (err) {
+      console.error('cmd_instantiate_object_from_template failed:', err);
+      throw err;
+    }
+  }
+  return `mock-obj-${Date.now()}`;
 }
 
 export async function inspectProjectDeletion(projectId: string): Promise<ProjectDeletionImpact> {

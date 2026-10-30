@@ -20,6 +20,7 @@ import {
   Copy,
   Edit3,
   FolderPlus,
+  Settings2,
 } from 'lucide-react';
 import {
   getWorkspaceTree,
@@ -38,7 +39,12 @@ import {
 import { ProjectDeletionModal } from './ProjectDeletionModal';
 import { AddToProjectModal } from './AddToProjectModal';
 import { ThemeToggle } from './ThemeToggle';
-import type { WorkspaceTree, ObjectType, SidebarItemsResponse } from '../types/sthira';
+import type {
+  WorkspaceTree,
+  ObjectType,
+  SidebarItemsResponse,
+  WorkspaceIndexTab,
+} from '../types/sthira';
 
 interface LeftSidebarProps {
   activeProjectId?: string | null;
@@ -48,12 +54,14 @@ interface LeftSidebarProps {
   currentView: 'home' | 'focus' | 'canvas' | 'objects' | 'graph' | 'workspace_index';
   onNavigateHome: () => void;
   onNavigateGraph: () => void;
-  onNavigateWorkspaceIndex?: (tab?: 'all' | 'projects' | 'notes' | 'objects' | 'standalone') => void;
+  onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
   onOpenProject: (projectId: string) => void;
   onOpenArtifact: (artifactId: string, projectId?: string | null) => void;
   onOpenCanvas: (canvasId?: string, projectId?: string) => void;
   onOpenObjectCollection?: (typeId: string) => void;
   onOpenCreateObjectType?: () => void;
+  /** Phase 16: Opens the Object Type & Template Manager modal. */
+  onOpenObjectTypeManager?: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onOpenAccount: () => void;
@@ -78,6 +86,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onOpenCanvas,
   onOpenObjectCollection,
   onOpenCreateObjectType,
+  onOpenObjectTypeManager,
   onOpenSearch,
   onOpenSettings,
   onOpenAccount,
@@ -433,19 +442,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <Share2 className="w-4 h-4" />
           </button>
 
-          {/* Workspace Index Trigger */}
+          {/* All Files Trigger */}
           <button
             type="button"
             data-testid="nav-workspace-index-collapsed"
             onClick={() => onNavigateWorkspaceIndex?.('all')}
-            title="Workspace Index"
+            title="All Files"
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
               currentView === 'workspace_index'
                 ? 'bg-[#282C25] dark:bg-[#2C3026] text-white font-semibold'
                 : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F]'
             }`}
           >
-            <span className="text-sm">📊</span>
+            <span className="text-sm">📁</span>
           </button>
         </div>
 
@@ -562,14 +571,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           type="button"
           data-testid="nav-workspace-index"
           onClick={() => onNavigateWorkspaceIndex?.('all')}
+          title="All Files — every project, note, and typed object"
           className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border ${
             currentView === 'workspace_index'
               ? 'bg-[#282C25] dark:bg-[#2C3026] text-white border-[#282C25] dark:border-[#3E4334] font-semibold shadow-xs'
               : 'bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white border-[#E8E5DC]/80 dark:border-[#2C2E27]'
           }`}
         >
-          <span className="text-xs">📊</span>
-          <span>Workspace Index</span>
+          <span className="text-xs">📁</span>
+          <span>All Files</span>
         </button>
       </div>
 
@@ -1217,6 +1227,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                data-testid="btn-manage-object-types"
+                onClick={onOpenObjectTypeManager}
+                title="Manage Object Types & Templates"
+                className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>

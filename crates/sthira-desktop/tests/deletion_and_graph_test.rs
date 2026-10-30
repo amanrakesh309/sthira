@@ -180,6 +180,8 @@ async fn test_knowledge_graph_export_nodes_and_edges() {
         schema: vec![],
         is_system: true,
         created_at: 1_700_000_000_000,
+        description: String::new(),
+        default_template_md: String::new(),
     };
     let _ = handle_create_object_type(&engine, custom_type);
     let obj = handle_create_typed_object(&engine, "idea".into(), "Autonomous AI Testing".into(), json!({}), Some(p.id.clone())).unwrap();

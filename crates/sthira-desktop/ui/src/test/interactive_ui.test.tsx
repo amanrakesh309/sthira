@@ -364,4 +364,103 @@ describe('Autonomous Interactive UI Test Harness', () => {
       expect(onCreatedMock).toHaveBeenCalled();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Test E: Select property bullet list option management in ObjectTypeBuilderModal:
+  // in-place editing, removing, reordering, and adding via Enter or comma-splitting
+  // -------------------------------------------------------------------------
+  it('Test E: Select property options editor allows in-place editing, removing, reordering, and comma-split adding', async () => {
+    const user = userEvent.setup();
+
+    mockInvoke.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === 'cmd_create_object_type') {
+        return (args.typeDef || args.type_def).id;
+      }
+      return null;
+    });
+
+    const onCreatedMock = vi.fn();
+    const onCloseMock = vi.fn();
+
+    render(
+      <ObjectTypeBuilderModal
+        isOpen={true}
+        onClose={onCloseMock}
+        onTypeCreated={onCreatedMock}
+      />
+    );
+
+    // Initial default property is 'Status' (select type) with ['draft', 'active', 'archived']
+    const opt0 = screen.getByTestId('input-option-0-0') as HTMLInputElement;
+    const opt1 = screen.getByTestId('input-option-0-1') as HTMLInputElement;
+    const opt2 = screen.getByTestId('input-option-0-2') as HTMLInputElement;
+
+    expect(opt0.value).toBe('draft');
+    expect(opt1.value).toBe('active');
+    expect(opt2.value).toBe('archived');
+
+    // 1. Edit existing option 0 in place
+    await user.clear(opt0);
+    await user.type(opt0, 'under_review');
+    expect((screen.getByTestId('input-option-0-0') as HTMLInputElement).value).toBe('under_review');
+
+    // 2. Remove option 2 ('archived')
+    const removeBtn2 = screen.getByTestId('btn-remove-option-0-2');
+    await user.click(removeBtn2);
+    expect(screen.queryByTestId('input-option-0-2')).toBeNull();
+
+    // 3. Reorder: move 'under_review' down (option 0 moves to index 1)
+    const moveDownBtn = screen.getByTestId('btn-move-down-option-0-0');
+    await user.click(moveDownBtn);
+    expect((screen.getByTestId('input-option-0-0') as HTMLInputElement).value).toBe('active');
+    expect((screen.getByTestId('input-option-0-1') as HTMLInputElement).value).toBe('under_review');
+
+    // 4. Add new option using input and Enter key
+    const newOptInput = screen.getByTestId('input-new-option-0');
+    await user.type(newOptInput, 'concluded{enter}');
+    const optConcluded = screen.getByTestId('input-option-0-2') as HTMLInputElement;
+    expect(optConcluded.value).toBe('concluded');
+
+    // 5. Add multiple options using comma-separated input
+    await user.type(newOptInput, 'paused, aborted');
+    // Notice comma-split auto commits 'paused' when comma is entered, and 'aborted' is typed in new input
+    // Click Add button to commit 'aborted'
+    const addBtn = screen.getByTestId('btn-add-option-0');
+    await user.click(addBtn);
+
+    const optPaused = screen.getByTestId('input-option-0-3') as HTMLInputElement;
+    const optAborted = screen.getByTestId('input-option-0-4') as HTMLInputElement;
+    expect(optPaused.value).toBe('paused');
+    expect(optAborted.value).toBe('aborted');
+
+    // 6. Submit the object type
+    const nameInput = screen.getByTestId('input-object-type-name');
+    await user.type(nameInput, 'Task Item');
+
+    const submitBtn = screen.getByTestId('btn-submit-object-type');
+    await user.click(submitBtn);
+
+    // Verify cmd_create_object_type was called with the exact updated options
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'cmd_create_object_type',
+        expect.objectContaining({
+          typeDef: expect.objectContaining({
+            id: 'task_item',
+            display_name: 'Task Item',
+            schema: expect.arrayContaining([
+              expect.objectContaining({
+                key: 'status',
+                label: 'Status',
+                property_type: 'select',
+                options: ['active', 'under_review', 'concluded', 'paused', 'aborted'],
+              }),
+            ]),
+          }),
+        })
+      );
+    });
+
+    expect(onCreatedMock).toHaveBeenCalled();
+  });
 });

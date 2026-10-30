@@ -28,6 +28,8 @@ import { EpistemicBadge } from './EpistemicBadge';
 import { SlashCommandMenu, type SlashCommandItem } from './SlashCommandMenu';
 import { ThemeToggle } from './ThemeToggle';
 import { QuickObjectCreatorCard } from './objects/QuickObjectCreatorCard';
+import { TemplateSelectorPopover } from './objects/TemplateSelectorPopover';
+import { DocumentPropertyHeader } from './objects/DocumentPropertyHeader';
 import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
 import {
@@ -40,6 +42,9 @@ import {
   streamAdaptiveRun,
   getProviderCatalog,
   listObjectTypes,
+  getTypeTemplates,
+  instantiateObjectFromTemplate,
+  getObjectInstance,
   createTypedObject,
 } from '../api/ipc';
 import type {
@@ -48,6 +53,7 @@ import type {
   ResumeBrief,
   ProjectHistory as IProjectHistory,
   ObjectType,
+  ObjectInstance,
 } from '../types/sthira';
 
 interface FocusViewProps {
@@ -114,6 +120,16 @@ export const FocusView: React.FC<FocusViewProps> = ({
     caretIndex: number;
   } | null>(null);
 
+  // Phase 16: Template selector popover + object-instance property header state
+  const [templateSelector, setTemplateSelector] = useState<{
+    isOpen: boolean;
+    objectType: ObjectType;
+    position: { top: number; left: number };
+    caretIndex: number;
+  } | null>(null);
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  const [objectInstance, setObjectInstance] = useState<ObjectInstance | null>(null);
+
   // Slash Command Popover State
   const [slashMenu, setSlashMenu] = useState<{
     isOpen: boolean;
@@ -175,6 +191,33 @@ export const FocusView: React.FC<FocusViewProps> = ({
       console.error('Failed to load object types', err);
     }
   };
+
+  // Phase 16: Resolve whether the open artifact is an `object_instance` so the
+  // interactive property header can mount directly below the page title.
+  useEffect(() => {
+    const aid = context?.artifact?.id || artifactId || '';
+    if (!aid) {
+      setObjectInstance(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const inst = await getObjectInstance(aid);
+        if (!cancelled) setObjectInstance(inst || null);
+      } catch (err) {
+        console.warn('No object instance for artifact', aid, err);
+        if (!cancelled) setObjectInstance(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, context?.artifact?.id]);
+
+  const objectTypeForInstance = objectInstance
+    ? objectTypes.find((t) => t.id === objectInstance.object_type_id) || null
+    : null;
 
   const loadActiveModel = async () => {
     try {
@@ -469,17 +512,41 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Phase 16: Begin typed-object creation. When more than one template exists for the
+  // type we surface a template selector popover first; otherwise the default template is
+  // auto-selected and the Quick Object Creator opens immediately.
+  const beginTypedObjectCreation = async (
+    objectType: ObjectType,
+    position: { top: number; left: number },
+    caretIndex: number,
+  ) => {
+    let templates: Awaited<ReturnType<typeof getTypeTemplates>> = [];
+    try {
+      templates = (await getTypeTemplates(objectType.id)) || [];
+    } catch (err) {
+      console.warn('Falling back to default template', err);
+      templates = [];
+    }
+
+    if (templates.length > 1) {
+      setTemplateSelector({ isOpen: true, objectType, position, caretIndex });
+      return;
+    }
+
+    setPendingTemplateId(templates.length === 1 ? templates[0].id : null);
+    setInlineObjectCreator({ isOpen: true, objectType, position, caretIndex });
+  };
+
   // Slash Command Selection Handler
   const handleSelectSlashCommand = async (item: SlashCommandItem) => {
     setSlashMenu((prev) => ({ ...prev, isOpen: false }));
 
     if (item.isObjectAction && item.objectType) {
-      setInlineObjectCreator({
-        isOpen: true,
-        objectType: item.objectType,
-        position: slashMenu.position,
-        caretIndex: slashMenu.caretIndex,
-      });
+      await beginTypedObjectCreation(
+        item.objectType,
+        slashMenu.position,
+        slashMenu.caretIndex,
+      );
       return;
     }
 
@@ -554,13 +621,20 @@ export const FocusView: React.FC<FocusViewProps> = ({
     setInlineObjectCreator(null);
 
     try {
-      // 1. Create backing artifact and save object instance
-      const created = await createTypedObject(objectType.id, objTitle, properties, projectId);
+      // 1. Create the backing artifact hydrated with the resolved template Markdown body
+      //    and merged default property values (cmd_instantiate_object_from_template).
+      const createdArtifactId = await instantiateObjectFromTemplate(
+        objectType.id,
+        pendingTemplateId,
+        objTitle,
+        projectId,
+      );
+      setPendingTemplateId(null);
 
       // 2. Insert embedded object directive into document markdown
       const directive = `\n\`\`\`sthira-object\n${JSON.stringify(
         {
-          artifact_id: created.artifact_id,
+          artifact_id: createdArtifactId,
           object_type_id: objectType.id,
           title: objTitle,
           properties,
@@ -892,6 +966,16 @@ export const FocusView: React.FC<FocusViewProps> = ({
               />
             </div>
 
+            {/* Phase 16: Notion-style interactive property tray for typed objects */}
+            {objectInstance && objectTypeForInstance && (
+              <DocumentPropertyHeader
+                artifactId={context?.artifact?.id || artifactId || objectInstance.artifact_id}
+                objectType={objectTypeForInstance}
+                instance={objectInstance}
+                onInstanceUpdated={(updated) => setObjectInstance(updated)}
+              />
+            )}
+
             {/* Notion-Style Formatting Toolbar & Rich Preview Toggle */}
             <div className="flex items-center justify-between pb-3 mb-5 border-b border-[#ECE9E0] dark:border-[#262822] text-xs text-[#6E6D66] dark:text-[#9E9C93]">
               {/* Left: Quick Formatting Actions */}
@@ -1035,6 +1119,25 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))}
                       position={slashMenu.position}
                       activeModelName={activeModelName}
+                    />
+                  )}
+
+                  {/* Phase 16: Template selector popover when multiple presets exist */}
+                  {templateSelector && templateSelector.isOpen && (
+                    <TemplateSelectorPopover
+                      objectType={templateSelector.objectType}
+                      position={templateSelector.position}
+                      onSelect={(templateId) => {
+                        setPendingTemplateId(templateId);
+                        setInlineObjectCreator({
+                          isOpen: true,
+                          objectType: templateSelector.objectType,
+                          position: templateSelector.position,
+                          caretIndex: templateSelector.caretIndex,
+                        });
+                        setTemplateSelector(null);
+                      }}
+                      onClose={() => setTemplateSelector(null)}
                     />
                   )}
 

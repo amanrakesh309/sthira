@@ -6,7 +6,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     if user_version == 0 {
         let schema_sql = include_str!("schema.sql");
         conn.execute_batch(schema_sql)?;
-        conn.execute_batch("PRAGMA user_version = 5;")?;
+        conn.execute_batch("PRAGMA user_version = 6;")?;
     } else {
         if user_version < 2 {
             conn.execute_batch(
@@ -91,6 +91,26 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
                  ALTER TABLE artifacts ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
                  ALTER TABLE artifacts ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0;
                  PRAGMA user_version = 5;",
+            )?;
+        }
+        if user_version < 6 {
+            conn.execute_batch(
+                "ALTER TABLE object_types ADD COLUMN description TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE object_types ADD COLUMN default_template_md TEXT NOT NULL DEFAULT '';
+
+                 CREATE TABLE IF NOT EXISTS object_templates (
+                     id TEXT PRIMARY KEY,
+                     object_type_id TEXT NOT NULL REFERENCES object_types(id) ON DELETE CASCADE,
+                     name TEXT NOT NULL,
+                     icon TEXT NOT NULL DEFAULT '📄',
+                     is_default INTEGER NOT NULL DEFAULT 0,
+                     properties_preset_json JSON NOT NULL DEFAULT '{}',
+                     body_template_md TEXT NOT NULL DEFAULT '',
+                     created_at INTEGER NOT NULL
+                 );
+
+                 CREATE INDEX IF NOT EXISTS idx_object_templates_type ON object_templates(object_type_id);
+                 PRAGMA user_version = 6;",
             )?;
         }
     }

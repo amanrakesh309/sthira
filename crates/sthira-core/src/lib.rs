@@ -20,7 +20,9 @@ pub use search::{
     build_search_provider, scraper, ScrapedWebDocument, SearchProvider, SearchProviderEntry,
     SearchResultItem,
 };
-pub use models::objects::{ObjectInstance, ObjectItem, ObjectType, PropertyDefinition, PropertyType};
+pub use models::objects::{
+    ObjectInstance, ObjectItem, ObjectTemplate, ObjectType, PropertyDefinition, PropertyType,
+};
 pub use models::router::{
     OperationalMode, PlanProposedAction, ProviderEntry, ProviderModelEntry, StructuredPlanPreview,
 };

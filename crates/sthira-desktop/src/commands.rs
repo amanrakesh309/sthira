@@ -4,7 +4,7 @@ use rusqlite::params;
 use sthira_core::{
     Actor, Artifact, ArtifactType, Authorship, CanvasItemKind, EventType, Materiality,
     Engine, ResumeBrief, ResumePaneHint,
-    ObjectInstance, ObjectItem, ObjectType,
+    ObjectInstance, ObjectItem, ObjectTemplate, ObjectType,
     history::ProjectHistory,
     router::{Approval, RouterPlan},
     OperationalMode, ProgressiveStreamChunk,
@@ -1851,6 +1851,217 @@ pub fn cmd_create_typed_object(
     state: State<'_, AppState>,
 ) -> Result<ObjectItem, String> {
     handle_create_typed_object(&state.engine, object_type_id, title, properties, project_id)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16: Object Type & Template Management Commands
+// ---------------------------------------------------------------------------
+
+/// Updates an existing object type's display metadata, property schema, and default
+/// Markdown template body in place. Existing instance property values are preserved
+/// because they are stored as a keyed JSON document in `object_instances`.
+///
+/// (`ObjectTypeDefinition` in the product spec maps 1:1 onto [`ObjectType`].)
+pub fn handle_update_object_type(engine: &Engine, type_def: ObjectType) -> Result<(), String> {
+    let writer = engine.db().writer();
+    sthira_core::db::objects_repo::update_object_type_schema(
+        &writer,
+        &type_def.id,
+        &type_def.display_name,
+        &type_def.icon,
+        &type_def.color,
+        &type_def.schema,
+        &type_def.default_template_md,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_update_object_type(
+    type_def: ObjectType,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_update_object_type(&state.engine, type_def)
+}
+
+/// Deletes a user-created object type. Built-in system types are protected by the
+/// core repository invariant and will return an error.
+pub fn handle_delete_object_type(engine: &Engine, type_id: String) -> Result<(), String> {
+    let writer = engine.db().writer();
+    sthira_core::db::objects_repo::delete_object_type(&writer, &type_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_delete_object_type(
+    type_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_delete_object_type(&state.engine, type_id)
+}
+
+pub fn handle_get_type_templates(
+    engine: &Engine,
+    type_id: String,
+) -> Result<Vec<ObjectTemplate>, String> {
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+    sthira_core::db::objects_repo::list_templates_for_type(&reader, &type_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_get_type_templates(
+    type_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ObjectTemplate>, String> {
+    handle_get_type_templates(&state.engine, type_id)
+}
+
+/// Persists a named template for an object type and returns its id (generated when
+/// the caller passes an empty id, enabling "create" semantics with the same command).
+pub fn handle_save_object_template(
+    engine: &Engine,
+    template: ObjectTemplate,
+) -> Result<String, String> {
+    let mut template = template;
+    if template.id.trim().is_empty() {
+        template.id = uuid::Uuid::new_v4().to_string();
+    }
+    if template.created_at == 0 {
+        template.created_at = engine.clock().now_ms();
+    }
+
+    let id = template.id.clone();
+    let writer = engine.db().writer();
+    sthira_core::db::objects_repo::save_object_template(&writer, &template)
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn cmd_save_object_template(
+    template: ObjectTemplate,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_save_object_template(&state.engine, template)
+}
+
+pub fn handle_get_object_instance(
+    engine: &Engine,
+    artifact_id: String,
+) -> Result<Option<ObjectInstance>, String> {
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+    sthira_core::db::objects_repo::get_object_instance(&reader, &artifact_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_get_object_instance(
+    artifact_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<ObjectInstance>, String> {
+    handle_get_object_instance(&state.engine, artifact_id)
+}
+
+/// Creates the backing artifact for a typed object, hydrating it with the resolved
+/// template's Markdown body and merged default property set. Returns the new artifact id.
+///
+/// Resolution order for the body/properties:
+/// 1. explicit `template_id` (when it names a stored template),
+/// 2. the `"blank"` sentinel, which yields a bare `# Title` skeleton,
+/// 3. the object type's `default_template_md`,
+/// 4. a bare `# Title` skeleton.
+pub fn handle_instantiate_object_from_template(
+    engine: &Engine,
+    type_id: String,
+    template_id: Option<String>,
+    title: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+
+    let obj_type = sthira_core::db::objects_repo::get_object_type(&reader, &type_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Object type '{}' not found", type_id))?;
+
+    let requested = template_id.as_deref().map(str::trim).unwrap_or("");
+    let explicit_template = if requested.is_empty() || requested == "blank" {
+        None
+    } else {
+        sthira_core::db::objects_repo::get_object_template(&reader, requested)
+            .map_err(|e| e.to_string())?
+    };
+    drop(reader);
+
+    let (body_md, preset) = if requested == "blank" {
+        // Explicit "Blank" choice: a bare title-only page, ignoring the type default.
+        (String::new(), serde_json::json!({}))
+    } else {
+        match explicit_template {
+            Some(t) => (t.body_template_md, t.properties_preset),
+            None => (obj_type.default_template_md.clone(), serde_json::json!({})),
+        }
+    };
+
+    // Start from schema default values, then overlay the template property preset.
+    let mut properties = serde_json::Map::new();
+    for prop in &obj_type.schema {
+        if let Some(def) = &prop.default_value {
+            properties.insert(prop.key.clone(), def.clone());
+        }
+    }
+    if let Some(preset_map) = preset.as_object() {
+        for (k, v) in preset_map {
+            properties.insert(k.clone(), v.clone());
+        }
+    }
+    let properties = serde_json::Value::Object(properties);
+
+    let trimmed_body = body_md.trim();
+    let initial_content = if trimmed_body.is_empty() {
+        format!("# {}\n\n", title)
+    } else {
+        format!("# {}\n\n{}\n", title, trimmed_body)
+    };
+
+    let art = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some(&title),
+            &initial_content,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+
+    if let Some(ref pid) = project_id {
+        let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
+    }
+
+    let now_ms = engine.clock().now_ms();
+    let instance = ObjectInstance {
+        artifact_id: art.id.clone(),
+        object_type_id: type_id,
+        properties,
+        updated_at: now_ms,
+    };
+    {
+        let writer = engine.db().writer();
+        sthira_core::db::objects_repo::upsert_object_instance(&writer, &instance)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(art.id)
+}
+
+#[tauri::command]
+pub fn cmd_instantiate_object_from_template(
+    type_id: String,
+    template_id: Option<String>,
+    title: String,
+    project_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_instantiate_object_from_template(&state.engine, type_id, template_id, title, project_id)
 }
 
 // ---------------------------------------------------------------------------

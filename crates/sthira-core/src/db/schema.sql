@@ -345,7 +345,10 @@ CREATE TABLE IF NOT EXISTS object_types (
     color TEXT NOT NULL,
     schema_json TEXT NOT NULL CHECK(json_valid(schema_json)),
     is_system INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- Phase 16: Type & Template Management System
+    description TEXT NOT NULL DEFAULT '',
+    default_template_md TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS object_instances (
@@ -356,6 +359,20 @@ CREATE TABLE IF NOT EXISTS object_instances (
 );
 
 CREATE INDEX IF NOT EXISTS idx_object_instances_type ON object_instances(object_type_id);
+
+-- Phase 16: Named Object Templates (Notion/Anytype-style structured presets)
+CREATE TABLE IF NOT EXISTS object_templates (
+    id TEXT PRIMARY KEY,
+    object_type_id TEXT NOT NULL REFERENCES object_types(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT '📄',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    properties_preset_json JSON NOT NULL DEFAULT '{}',
+    body_template_md TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_object_templates_type ON object_templates(object_type_id);
 
 -- Phase 10: Search Provider Settings & Web Cache
 CREATE TABLE IF NOT EXISTS search_providers (
