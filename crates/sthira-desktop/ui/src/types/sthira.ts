@@ -436,12 +436,16 @@ export interface ScrapedWebDocument {
  */
 export interface WebResearchResult {
   query: string;
+  title?: string;
   search_queries_used: string[];
   documents: ScrapedWebDocument[];
   findings: WebResearchFinding[];
   synthesized_markdown: string;
   /** Which evidence path actually ran (local vault vs. live web). */
   mode_used: WebSearchMode;
+  search_status?: string;
+  external_sources_count?: number;
+  matching_vault_artifacts?: string[];
   /** Ordered progress stages, replayable by the UI. */
   stages: ResearchStage[];
   /** Numbered citation index backing `[Source N]` markers. */
@@ -690,7 +694,9 @@ export interface DocumentRunState {
   kind: 'research' | 'plan';
   /** Only meaningful for `research` runs. */
   mode?: WebSearchMode;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'warning';
+  search_status?: string;
+  external_sources_count?: number;
   /** Latest progress banner text, e.g. `Searching web for "..." via SearXNG...`. */
   message: string;
   /** Live accumulated markdown for token-streamed (`plan`) runs. */
@@ -705,5 +711,22 @@ export interface DocumentRunState {
  * `plan` runs. Kept as an alias so older call sites keep type-checking.
  */
 export type ResearchRunState = DocumentRunState;
+
+export function generateSmartGoalTitle(raw: string): string {
+  const stopWords = new Set([
+    'a', 'an', 'the', 'and', 'or', 'but', 'if', 'in', 'on', 'at', 'to', 'for', 'with',
+    'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after',
+    'above', 'below', 'from', 'up', 'down', 'out', 'off', 'over', 'under', 'find',
+    'me', 'ways', 'i', 'can', 'how', 'what', 'why', 'who', 'where', 'when', 'is',
+    'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does',
+    'did', 'will', 'would', 'shall', 'should', 'may', 'might', 'must', 'could',
+    'please', 'help', 'need', 'want', 'tell', 'show'
+  ]);
+  const words = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  const keyWords = words.filter((w) => !stopWords.has(w.toLowerCase())).slice(0, 5);
+  const chosen = keyWords.length > 0 ? keyWords : words.slice(0, 5);
+  if (chosen.length === 0) return 'Strategic Plan';
+  return chosen.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
 
 

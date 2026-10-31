@@ -24,14 +24,14 @@ import {
   saveArtifact,
   streamAdaptiveRun,
 } from './api/ipc';
-import type {
-  HomeStateView,
-  ObjectType,
-  WorkspaceIndexTab,
-  ExplorePlanTab,
-  DocumentRunState,
-  WebSearchMode,
-  WebResearchResult,
+import {
+  type HomeStateView,
+  type ObjectType,
+  type WorkspaceIndexTab,
+  type ExplorePlanTab,
+  type DocumentRunState,
+  type WebSearchMode,
+  type WebResearchResult,
 } from './types/sthira';
 
 export const App: React.FC = () => {
@@ -241,12 +241,23 @@ export const App: React.FC = () => {
       });
 
       // 3. Mark complete and ask the editor to reload the now-populated page.
+      const isFailedSearch =
+        mode !== 'local_vault_only' &&
+        (result.external_sources_count === 0 ||
+          result.search_status === 'web_search_failed' ||
+          result.mode_used === 'local_vault_only');
+
       setDocumentRun((prev) =>
         prev && prev.artifactId === artifactId
           ? {
               ...prev,
-              status: 'done',
-              message: 'Research complete.',
+              status: isFailedSearch ? 'warning' : 'done',
+              mode: result.mode_used,
+              search_status: result.search_status,
+              external_sources_count: result.external_sources_count,
+              message: isFailedSearch
+                ? '⚠️ Web search returned no results; synthesized using local context.'
+                : 'Research complete.',
               refreshToken: prev.refreshToken + 1,
             }
           : prev

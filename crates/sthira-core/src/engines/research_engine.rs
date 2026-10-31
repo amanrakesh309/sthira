@@ -1,7 +1,7 @@
 use crate::{
     epistemic::VerifiedQuote,
     search::{scraper, ScrapedWebDocument, SearchProvider, SearchResultItem},
-    vault, CoreError, Engine,
+    vault, CoreError, Engine, ModelProvider,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,16 +20,28 @@ pub struct WebResearchFinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebResearchResult {
     pub query: String,
+    #[serde(default)]
+    pub title: String,
     pub search_queries_used: Vec<String>,
     pub documents: Vec<ScrapedWebDocument>,
     pub findings: Vec<WebResearchFinding>,
     pub synthesized_markdown: String,
     /// Which evidence path actually ran (local vault vs. live web).
     pub mode_used: WebSearchMode,
+    #[serde(default = "default_search_status")]
+    pub search_status: String,
+    #[serde(default)]
+    pub external_sources_count: usize,
+    #[serde(default)]
+    pub matching_vault_artifacts: Vec<String>,
     /// Ordered progress stages, so the UI can replay the run's narrative.
     pub stages: Vec<ResearchStage>,
     /// Numbered citation index backing the `[Source N]` markers in the markdown.
     pub sources: Vec<ResearchSource>,
+}
+
+fn default_search_status() -> String {
+    "completed".to_string()
 }
 
 /// How far the research pipeline is allowed to reach for evidence.
@@ -104,6 +116,139 @@ struct ResearchSynthesisOutput {
     /// Where retrieved context contradicts older conventions or prior versions.
     pub contradictions_and_evolution: Vec<String>,
     pub open_questions: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
+struct SmartTitleOutput {
+    pub title: String,
+}
+
+pub fn clean_smart_title(raw: &str) -> String {
+    let mut s = raw.trim();
+    if s.starts_with("```") {
+        let lines: Vec<&str> = s.lines().collect();
+        if lines.len() >= 2 {
+            s = lines[1].trim();
+        }
+    }
+    s = s
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '*' || c == '#')
+        .trim();
+
+    for prefix in &["Research:", "Plan:", "Title:", "Goal:", "Topic:"] {
+        if s.to_lowercase().starts_with(&prefix.to_lowercase()) {
+            s = s[prefix.len()..].trim();
+        }
+    }
+    s = s
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '*' || c == '#')
+        .trim();
+
+    if let Some(first_line) = s.lines().find(|l| !l.trim().is_empty()) {
+        s = first_line.trim();
+    }
+
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    if words.len() > 7 {
+        words.into_iter().take(6).collect::<Vec<&str>>().join(" ")
+    } else {
+        words.join(" ")
+    }
+}
+
+pub fn fallback_title_from_query(query: &str) -> String {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to", "for", "with",
+        "about", "against", "between", "into", "through", "during", "before", "after",
+        "above", "below", "from", "up", "down", "out", "off", "over", "under", "find",
+        "me", "ways", "i", "can", "how", "what", "why", "who", "where", "when", "is",
+        "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+        "did", "will", "would", "shall", "should", "may", "might", "must", "could",
+        "please", "help", "need", "want", "tell", "show"
+    ];
+
+    let words: Vec<&str> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let key_words: Vec<&str> = words
+        .iter()
+        .copied()
+        .filter(|w| !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+        .take(5)
+        .collect();
+
+    let chosen: Vec<&str> = if !key_words.is_empty() {
+        key_words
+    } else {
+        words.into_iter().take(5).collect()
+    };
+
+    if chosen.is_empty() {
+        return "Untitled Investigation".to_string();
+    }
+
+    chosen
+        .into_iter()
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+pub async fn generate_smart_title(
+    model: Option<&dyn ModelProvider>,
+    query: &str,
+) -> String {
+    let q = query.trim();
+    if q.is_empty() {
+        return "Untitled Investigation".to_string();
+    }
+
+    if let Some(m) = model {
+        let schema = schemars::schema_for!(SmartTitleOutput);
+        let schema_val = serde_json::to_value(&schema).unwrap_or_default();
+        let system_prompt = "Summarize the user's research or planning goal into a concise, professional title (3 to 6 words maximum, no quotes, no 'Research:' prefix). Output strictly JSON conforming to the schema.";
+        let user_prompt = format!(
+            "Summarize the following research goal into a concise, professional title (3 to 6 words maximum, no quotes, no 'Research:' prefix):\n\n{}",
+            q
+        );
+
+        let timeout_fut = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            m.generate_json(&schema_val, system_prompt, &user_prompt),
+        );
+
+        if let Ok(Ok(raw_json)) = timeout_fut.await {
+            let extracted = if let Ok(parsed) = serde_json::from_str::<SmartTitleOutput>(&raw_json) {
+                Some(parsed.title)
+            } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw_json) {
+                v.get("title").and_then(|t| t.as_str()).map(|s| s.to_string())
+            } else {
+                Some(raw_json)
+            };
+
+            if let Some(cand) = extracted {
+                let cleaned = clean_smart_title(&cand);
+                if !cleaned.is_empty() {
+                    return cleaned;
+                }
+            }
+        }
+    }
+
+    fallback_title_from_query(q)
 }
 
 pub fn extract_domain_from_url(url: &str) -> String {
@@ -345,7 +490,8 @@ pub async fn execute_multi_query_research(
         synthesize_with_temporal_grounding(engine, inquiry, &today, &documents, &findings).await;
 
     // 7. Assemble the grounded research document.
-    let mut md = format!("# {}\n\n", inquiry.trim());
+    let title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
+    let mut md = format!("# {}\n\n", title);
     md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
     md.push_str(&format!(
         "> **Evidence basis:** {} live web source{} · retrieved {}\n\n",
@@ -424,13 +570,24 @@ pub async fn execute_multi_query_research(
         message: "Research complete.".to_string(),
     });
 
+    let search_status = if documents.is_empty() {
+        "web_search_failed".to_string()
+    } else {
+        "web_search_success".to_string()
+    };
+    let external_sources_count = documents.len();
+
     Ok(WebResearchResult {
         query: inquiry.to_string(),
+        title,
         search_queries_used: queries,
         documents,
         findings,
         synthesized_markdown: md,
         mode_used: WebSearchMode::AlwaysSearch,
+        search_status,
+        external_sources_count,
+        matching_vault_artifacts: Vec::new(),
         stages,
         sources,
     })
@@ -536,33 +693,86 @@ async fn synthesize_with_temporal_grounding(
 // Local vault evidence path + mode-aware dispatcher
 // ---------------------------------------------------------------------------
 
-/// Extracts the distinct, meaningful keywords from an inquiry (len >= 4, max 8).
+/// Extracts the distinct, meaningful keywords from an inquiry (len >= 4, max 8),
+/// dropping common inquiry stop-words so relevance filtering remains strict.
 pub fn inquiry_keywords(inquiry: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "find", "ways", "through", "what", "when", "where", "which", "with", "from", "into",
+        "about", "more", "most", "some", "such", "than", "that", "them", "then", "there",
+        "these", "they", "this", "those", "have", "been", "were", "will", "would", "could",
+        "should", "your", "mine", "ours", "make", "also", "just", "like", "need", "want",
+        "tell", "know", "show", "help", "please", "using", "used", "does", "done", "doing",
+        "each", "many", "much", "very", "every", "over", "under", "both", "only", "other"
+    ];
+
     let mut out: Vec<String> = Vec::new();
     for raw in inquiry.split(|c: char| !c.is_alphanumeric()) {
         let w = raw.trim().to_lowercase();
-        if w.len() >= 4 && !out.contains(&w) {
+        if w.len() >= 4 && !STOP_WORDS.contains(&w.as_str()) && !out.contains(&w) {
             out.push(w);
+        }
+    }
+    if out.is_empty() {
+        for raw in inquiry.split(|c: char| !c.is_alphanumeric()) {
+            let w = raw.trim().to_lowercase();
+            if w.len() >= 3 && !out.contains(&w) {
+                out.push(w);
+            }
         }
     }
     out.truncate(8);
     out
 }
 
-/// A lightweight, dependency-free relevance score: how many distinct inquiry
-/// keywords appear in the artifact's title or body.
-fn keyword_hits(inquiry: &str, title: &str, content: &str) -> usize {
-    let haystack = format!("{} {}", title, content).to_lowercase();
-    inquiry_keywords(inquiry)
-        .iter()
-        .filter(|k| haystack.contains(k.as_str()))
-        .count()
+/// A strict relevance score: evaluates distinct keyword occurrences in title vs. body.
+/// Enforces that arbitrary, loosely matching notes (e.g. matching 1 incidental word in body)
+/// receive a score of 0 and are excluded.
+pub fn calculate_relevance_score(inquiry: &str, title: &str, content: &str) -> usize {
+    let keywords = inquiry_keywords(inquiry);
+    if keywords.is_empty() {
+        return 0;
+    }
+    let title_lower = title.to_lowercase();
+    let content_lower = content.to_lowercase();
+
+    let mut title_hits = 0;
+    let mut content_hits = 0;
+
+    for k in &keywords {
+        if title_lower.contains(k.as_str()) {
+            title_hits += 1;
+        }
+        if content_lower.contains(k.as_str()) {
+            content_hits += 1;
+        }
+    }
+
+    // Strict threshold:
+    // When the query has multiple keywords (>= 2):
+    // 1. Artifact must have >= 1 keyword match in title, OR
+    // 2. Artifact must match at least 2 distinct keywords in content.
+    // Incidental single-word body matches receive 0 to prevent irrelevant vault injection.
+    if keywords.len() >= 2 {
+        if title_hits == 0 && content_hits < 2 {
+            return 0;
+        }
+        if keywords.len() >= 3 && title_hits == 0 {
+            let overlap = content_hits as f32 / keywords.len() as f32;
+            if overlap < 0.3 {
+                return 0;
+            }
+        }
+    } else if title_hits == 0 && content_hits == 0 {
+        return 0;
+    }
+
+    title_hits * 5 + content_hits
 }
 
-/// Searches the local vault for artifacts matching the inquiry, ranked by keyword hits.
+/// Searches the local vault for artifacts matching the inquiry, ranked by strict relevance.
 ///
 /// Returns `(artifact_id, title, content_md)` triples. Uses `LIKE` on the top keywords
-/// (the workspace has no FTS5 index) then re-ranks in Rust so the ordering is exact.
+/// then re-ranks and filters strictly in Rust.
 pub fn search_local_vault(
     engine: &Engine,
     inquiry: &str,
@@ -607,7 +817,7 @@ pub fn search_local_vault(
     let mut scored: Vec<(usize, (String, String, String))> = Vec::new();
     for row in rows {
         let (id, title, content) = row?;
-        let score = keyword_hits(inquiry, &title, &content);
+        let score = calculate_relevance_score(inquiry, &title, &content);
         if score > 0 {
             scored.push((score, (id, title, content)));
         }
@@ -617,7 +827,6 @@ pub fn search_local_vault(
     Ok(scored.into_iter().take(limit).map(|(_, v)| v).collect())
 }
 
-
 /// Answers an inquiry strictly from artifacts already in the vault — no network access.
 fn execute_local_vault_research(
     engine: &Engine,
@@ -626,6 +835,7 @@ fn execute_local_vault_research(
     stages: &mut Vec<ResearchStage>,
 ) -> Result<WebResearchResult, CoreError> {
     let hits = search_local_vault(engine, inquiry, limit_docs)?;
+    let matching_vault_artifacts: Vec<String> = hits.iter().map(|(id, _, _)| id.clone()).collect();
 
     stages.push(ResearchStage {
         stage: "vault".to_string(),
@@ -680,7 +890,8 @@ fn execute_local_vault_research(
     }
 
     let today = crate::format_date_utc(engine.clock().now_ms());
-    let mut md = format!("# {}\n\n", inquiry.trim());
+    let title = fallback_title_from_query(inquiry);
+    let mut md = format!("# {}\n\n", title);
     md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
     md.push_str(&format!(
         "> **Evidence basis:** local vault only ({} matching artifact{}) · as of {}\n\n",
@@ -736,16 +947,19 @@ fn execute_local_vault_research(
 
     Ok(WebResearchResult {
         query: inquiry.to_string(),
+        title,
         search_queries_used: vec![inquiry.trim().to_string()],
         documents,
         findings,
         synthesized_markdown: md,
         mode_used: WebSearchMode::LocalVaultOnly,
+        search_status: "local_vault_only".to_string(),
+        external_sources_count: 0,
+        matching_vault_artifacts,
         stages: stages.clone(),
         sources,
     })
 }
-
 
 /// **The single entry point for user-facing research.**
 ///
@@ -792,7 +1006,11 @@ pub async fn execute_research(
             }
             stages.push(notice);
         }
-        return execute_local_vault_research(engine, inquiry, limit_docs, &mut stages);
+        let mut res = execute_local_vault_research(engine, inquiry, limit_docs, &mut stages)?;
+        if mode != WebSearchMode::LocalVaultOnly {
+            res.search_status = "web_search_failed".to_string();
+        }
+        return Ok(res);
     };
 
     if !should_search_web {
@@ -816,26 +1034,83 @@ pub async fn execute_research(
         }
     };
 
-    let mut result = execute_multi_query_research(
+    let web_res = execute_multi_query_research(
         engine,
         inquiry,
         provider,
         limit_docs,
         Some(&labelled),
     )
-    .await?;
+    .await;
 
-    // Keep the returned stage log consistent with what the UI already saw.
-    if let Some(first) = result.stages.first_mut() {
-        if first.stage == "searching" {
-            first.message = format!(
-                "Searching web for \"{}\" via {}...",
-                inquiry.trim(),
-                provider_label
-            );
+    match web_res {
+        Ok(mut result) if !result.documents.is_empty() => {
+            result.search_status = "web_search_success".to_string();
+            result.external_sources_count = result.documents.len();
+            result.matching_vault_artifacts = Vec::new();
+
+            // Keep the returned stage log consistent with what the UI already saw.
+            if let Some(first) = result.stages.first_mut() {
+                if first.stage == "searching" {
+                    first.message = format!(
+                        "Searching web for \"{}\" via {}...",
+                        inquiry.trim(),
+                        provider_label
+                    );
+                }
+            }
+            Ok(result)
+        }
+        _ => {
+            // Web search provider failed, returned 0 results, or was unreachable.
+            let warn_stage = ResearchStage {
+                stage: "searching".to_string(),
+                message: "⚠️ Web search returned no results; synthesized using local context.".to_string(),
+            };
+            if let Some(cb) = on_stage {
+                cb(warn_stage.clone());
+            }
+            stages.push(warn_stage);
+
+            let mut vault_res = execute_local_vault_research(engine, inquiry, limit_docs, &mut stages)?;
+            vault_res.search_status = "web_search_failed".to_string();
+            vault_res.external_sources_count = 0;
+            vault_res.mode_used = WebSearchMode::LocalVaultOnly;
+
+            let today = crate::format_date_utc(engine.clock().now_ms());
+            let smart_title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
+            vault_res.title = smart_title.clone();
+
+            let mut md = format!("# {}\n\n", smart_title);
+            md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
+            md.push_str(&format!(
+                "> **Evidence basis:** ⚠️ Web search returned no results; synthesized using local context ({} matching vault artifact{}) · as of {}\n\n",
+                vault_res.matching_vault_artifacts.len(),
+                if vault_res.matching_vault_artifacts.len() == 1 { "" } else { "s" },
+                today
+            ));
+            md.push_str("## Local Vault Evidence\n");
+            if vault_res.findings.is_empty() {
+                md.push_str("_No matching evidence found in the local vault for this inquiry._\n\n");
+            } else {
+                for f in &vault_res.findings {
+                    md.push_str(&format!(
+                        "- **{}**\n  > \"{}\"\n  — *Source:* {} (`{}`)\n\n",
+                        f.statement, f.quote, f.title, f.domain
+                    ));
+                }
+            }
+            md.push_str("## Open Questions & Next Steps\n- What specific sources or APIs should be queried to obtain external documentation?\n");
+            vault_res.synthesized_markdown = md;
+
+            if let Some(last) = vault_res.stages.last_mut() {
+                if last.stage == "done" {
+                    last.message = "⚠️ Web search returned no results; synthesized using local context.".to_string();
+                }
+            }
+
+            Ok(vault_res)
         }
     }
-
-    Ok(result)
 }
 

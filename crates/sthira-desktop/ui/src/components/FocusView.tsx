@@ -110,7 +110,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const [undoToast, setUndoToast] = useState<{ message: string; changeSetId: string } | null>(null);
 
   // Layout & Clean Binary Mode State ([ ✏️ Edit ] ⟷ [ 👁️ Preview ])
-  const [isMarginOpen, setIsMarginOpen] = useState(true);
+  const [showMargin, setShowMargin] = useState(false);
   const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [activeModelName, setActiveModelName] = useState('Active Model');
   const [activeModelId, setActiveModelId] = useState<string | undefined>(undefined);
@@ -460,7 +460,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
             currentContentRef.current,
             currentTitleRef.current || null,
             targetProjectId
-          ).catch((e) => console.warn('Unmount auto-save failed', e));
+          )?.catch?.((e: any) => console.warn('Unmount auto-save failed', e));
         }
       }
     };
@@ -898,20 +898,20 @@ export const FocusView: React.FC<FocusViewProps> = ({
           <button
             type="button"
             data-testid="btn-toggle-epistemic-margin"
-            onClick={() => setIsMarginOpen(!isMarginOpen)}
+            onClick={() => setShowMargin(!showMargin)}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
-              isMarginOpen
+              showMargin
                 ? 'bg-[#282C25] text-white dark:bg-[#EDEAE2] dark:text-[#121310] shadow-2xs'
                 : 'bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
             }`}
             title="Toggle Epistemic Margin Sidebar"
           >
-            {isMarginOpen ? (
+            {showMargin ? (
               <PanelRightClose className="w-3.5 h-3.5" />
             ) : (
               <PanelRightOpen className="w-3.5 h-3.5" />
             )}
-            <span className="hidden sm:inline">Margin</span>
+            <span className="hidden sm:inline">📖 Margin</span>
           </button>
 
           {/* Theme Mode Toggle */}
@@ -949,7 +949,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
       <div className="flex-1 flex overflow-hidden w-full relative">
         {/* Generous Full-Height Document Canvas */}
         <div className="flex-1 h-full overflow-y-auto bg-[#FAF8F3] dark:bg-[#121310]">
-          <div className="max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full bg-white dark:bg-[#181915] border-x border-[#E8E5DC] dark:border-[#262822] flex flex-col shadow-2xs relative">
+          <div
+            data-testid="editor-canvas"
+            className={`transition-all duration-200 ${
+              showMargin ? 'max-w-4xl lg:max-w-5xl' : 'flex-1 max-w-5xl mx-auto'
+            } px-12 py-10 min-h-full bg-white dark:bg-[#181915] border-x border-[#E8E5DC] dark:border-[#262822] flex flex-col shadow-2xs relative`}
+          >
             {/* Phase 19/20: Live Run Banner — the pipeline's real stages (research) or
                 the LLM token stream (plan) render here, inside the full-width center
                 document canvas. */}
@@ -960,14 +965,23 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 className={`mb-6 rounded-2xl border px-4 py-3 flex items-start gap-3 text-xs shadow-2xs ${
                   documentRun.status === 'error'
                     ? 'bg-[#FDF3F2] dark:bg-[#2A1B1A] border-[#E7C9C6] dark:border-[#5A3A36] text-[#8C3B33] dark:text-[#E8A79E]'
-                    : documentRun.status === 'done'
-                      ? 'bg-[#F1F7F0] dark:bg-[#1C261A] border-[#CCDCCC] dark:border-[#2E4A28] text-[#2D5A27] dark:text-[#88D080]'
-                      : 'bg-[#F7F5EF] dark:bg-[#1C1D19] border-[#E8E5DC] dark:border-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
+                    : documentRun.status === 'warning' ||
+                      (documentRun.status === 'done' &&
+                        (documentRun.mode === 'local_vault_only' ||
+                          documentRun.message.includes('Web search returned no results') ||
+                          documentRun.message.includes('local context')))
+                      ? 'bg-[#FFFBEB] dark:bg-[#2A2415] border-[#FDE68A] dark:border-[#53431D] text-[#92400E] dark:text-[#FCD34D]'
+                      : documentRun.status === 'done'
+                        ? 'bg-[#F1F7F0] dark:bg-[#1C261A] border-[#CCDCCC] dark:border-[#2E4A28] text-[#2D5A27] dark:text-[#88D080]'
+                        : 'bg-[#F7F5EF] dark:bg-[#1C1D19] border-[#E8E5DC] dark:border-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
                 }`}
               >
                 {documentRun.status === 'running' ? (
                   <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
-                ) : documentRun.status === 'done' ? (
+                ) : documentRun.status === 'done' &&
+                  documentRun.mode !== 'local_vault_only' &&
+                  !documentRun.message.includes('Web search returned no results') &&
+                  !documentRun.message.includes('local context') ? (
                   <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
                 ) : (
                   <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -983,8 +997,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       )}
                       {documentRun.kind === 'plan'
                         ? 'Planning'
-                        : documentRun.mode === 'local_vault_only'
-                          ? 'Local Vault Research'
+                        : documentRun.mode === 'local_vault_only' ||
+                          documentRun.message.includes('Web search returned no results') ||
+                          documentRun.message.includes('local context')
+                          ? 'Local Vault Synthesis'
                           : 'Web Search'}
                     </span>
                     {documentRun.status === 'running' && (
@@ -1155,72 +1171,74 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 </button>
               </div>
 
-              {/* Right: Clean Binary Mode Switcher: [ ✏️ Edit ] ⟷ [ 👁️ Preview ] */}
-              <div className="inline-flex p-0.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27]">
-                <button
-                  type="button"
-                  data-testid="btn-toggle-edit-mode"
-                  onClick={() => setViewMode('edit')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                    viewMode === 'edit'
-                      ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                      : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-                  }`}
-                  title="Edit Markdown (Cmd+E)"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>✏️ Edit</span>
-                </button>
+              {/* Right: Clean Binary Mode Switcher & Page Action Menu */}
+              <div className="flex items-center gap-2">
+                <div className="inline-flex p-0.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27]">
+                  <button
+                    type="button"
+                    data-testid="btn-toggle-edit-mode"
+                    onClick={() => setViewMode('edit')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                      viewMode === 'edit'
+                        ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
+                        : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                    }`}
+                    title="Edit Markdown (Cmd+E)"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>✏️ Edit</span>
+                  </button>
 
-                <button
-                  type="button"
-                  data-testid="btn-toggle-preview-mode"
-                  onClick={() => setViewMode('preview')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                    viewMode === 'preview'
-                      ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                      : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-                  }`}
-                  title="Component-Decorated Rich Workspace (Cmd+E)"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>👁️ Preview</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    data-testid="btn-toggle-preview-mode"
+                    onClick={() => setViewMode('preview')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                      viewMode === 'preview'
+                        ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
+                        : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                    }`}
+                    title="Component-Decorated Rich Workspace (Cmd+E)"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>👁️ Preview</span>
+                  </button>
+                </div>
 
-              {/* Phase 17: Page Action Menu (top-right, beside the Edit ⟷ Preview toggle) */}
-              {(context?.artifact?.id || artifactId) && (
-                <PageActionMenu
-                  variant="toolbar"
-                  artifactId={context?.artifact?.id || artifactId || ''}
-                  artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
-                  contentMd={editorContent}
-                  projectId={projectId || null}
-                  objectTypes={objectTypes}
-                  onChanged={() => {
-                    loadProjectData();
-                  }}
-                  onOpenArtifact={(id, pid) => {
-                    if (onOpenArtifact) {
-                      onOpenArtifact(id, pid ?? null);
-                    } else {
+                {/* Phase 17: Page Action Menu (top-right, beside the Edit ⟷ Preview toggle) */}
+                {(context?.artifact?.id || artifactId) && (
+                  <PageActionMenu
+                    variant="toolbar"
+                    artifactId={context?.artifact?.id || artifactId || ''}
+                    artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
+                    contentMd={editorContent}
+                    projectId={projectId || null}
+                    objectTypes={objectTypes}
+                    onChanged={() => {
                       loadProjectData();
-                    }
-                  }}
-                  onProjectCreated={(newProjectId) => {
-                    onOpenArtifact?.(
-                      context?.artifact?.id || artifactId || '',
-                      newProjectId
-                    );
-                  }}
-                  onConverted={() => {
-                    loadProjectData();
-                  }}
-                  onDeleted={() => {
-                    onBack();
-                  }}
-                />
-              )}
+                    }}
+                    onOpenArtifact={(id, pid) => {
+                      if (onOpenArtifact) {
+                        onOpenArtifact(id, pid ?? null);
+                      } else {
+                        loadProjectData();
+                      }
+                    }}
+                    onProjectCreated={(newProjectId) => {
+                      onOpenArtifact?.(
+                        context?.artifact?.id || artifactId || '',
+                        newProjectId
+                      );
+                    }}
+                    onConverted={() => {
+                      loadProjectData();
+                    }}
+                    onDeleted={() => {
+                      onBack();
+                    }}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Inline AI Streaming Status Banner */}
@@ -1326,7 +1344,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
         </div>
 
         {/* Right Docked Collapsible Sidebar: Epistemic Margin */}
-        {isMarginOpen && (
+        {showMargin && (
           <aside
             data-testid="epistemic-margin-sidebar"
             className="w-80 shrink-0 border-l border-[#E8E5DC] dark:border-[#262822] bg-[#FAF9F6] dark:bg-[#141512] h-full overflow-y-auto p-5 flex flex-col space-y-5 animate-in slide-in-from-right duration-150"
@@ -1344,7 +1362,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsMarginOpen(false)}
+                  onClick={() => setShowMargin(false)}
                   className="text-[#8C8A82] dark:text-[#6E6D66] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] p-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] transition-colors"
                   title="Collapse Sidebar"
                 >

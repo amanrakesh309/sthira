@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use sthira_core::{
     db::search_repo,
     engines::research_engine::{
-        execute_research, inquiry_keywords, search_local_vault, ResearchStage, WebSearchMode,
+        clean_smart_title, execute_research, fallback_title_from_query, generate_smart_title,
+        inquiry_keywords, search_local_vault, ResearchStage, WebSearchMode,
     },
     search::{ScrapedWebDocument, SearchProvider, SearchResultItem},
     ArtifactType, Authorship, Engine,
@@ -387,6 +388,129 @@ async fn test_local_vault_search_ranks_by_keyword_overlap() {
     assert!(
         !hits.iter().any(|(_, title, _)| title == "Unrelated Cooking Notes"),
         "artifacts with zero keyword overlap must be excluded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Smart LLM Title Generation with concise prompt and fallback
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn test_smart_title_generator_generates_concise_titles_and_respects_fallback() {
+    let (_tmp, _engine) = setup();
+
+    // 1. Fallback when model returns empty / default: extracts 4-5 key words in Title Case, filtering stop words
+    let raw_query = "find me ways i can earn money online through amazon kdp";
+    let fallback = fallback_title_from_query(raw_query);
+    assert_eq!(fallback, "Earn Money Online Amazon Kdp");
+
+    // 2. Cleaning model outputs: strip quotes, Research:/Plan: prefixes, and code blocks
+    assert_eq!(
+        clean_smart_title("\"Research: Amazon KDP Global Publishing Strategy\""),
+        "Amazon KDP Global Publishing Strategy"
+    );
+    assert_eq!(
+        clean_smart_title("Plan: Modern Distributed Database Architecture"),
+        "Modern Distributed Database Architecture"
+    );
+
+    // 3. Model with canned response generates the exact smart title
+    let canned_model = DeterministicFakeModel::new("smart-title-model");
+    canned_model.register_response(
+        "Summarize the following research goal into a concise, professional title (3 to 6 words maximum, no quotes, no 'Research:' prefix):\n\nfind me ways i can earn money online through amazon kdp",
+        r#"{"title": "Amazon KDP Global Publishing Strategy"}"#,
+    );
+    let title = generate_smart_title(Some(&canned_model), raw_query).await;
+    assert_eq!(title, "Amazon KDP Global Publishing Strategy");
+
+    // 4. Model failure / timeout cleanly falls back to Title Case key words
+    let empty_model = DeterministicFakeModel::new("empty-model");
+    let fallback_from_gen = generate_smart_title(Some(&empty_model), raw_query).await;
+    assert_eq!(fallback_from_gen, "Earn Money Online Amazon Kdp");
+}
+
+// ---------------------------------------------------------------------------
+// 8. Research engine sets external_sources_count = 0 and warns when search fails
+// ---------------------------------------------------------------------------
+struct FailingSearchProvider;
+
+#[async_trait]
+impl SearchProvider for FailingSearchProvider {
+    async fn search(&self, _query: &str, _limit: usize) -> Result<Vec<SearchResultItem>, String> {
+        Ok(Vec::new()) // returns 0 results
+    }
+}
+
+#[tokio::test]
+async fn test_research_engine_sets_external_sources_count_zero_and_no_fake_complete_web_search() {
+    let (_tmp, engine) = setup();
+    let failing_provider = FailingSearchProvider;
+
+    let result = execute_research(
+        &engine,
+        "find me ways i can earn money online through amazon kdp",
+        WebSearchMode::AlwaysSearch,
+        Some(&failing_provider),
+        "DuckDuckGo",
+        4,
+        None,
+    )
+    .await
+    .expect("failing search should degrade to local context gracefully");
+
+    // Must set external_sources_count to 0
+    assert_eq!(result.external_sources_count, 0);
+    // Must set search_status to web_search_failed
+    assert_eq!(result.search_status, "web_search_failed");
+    // Mode used degrades to local vault only
+    assert_eq!(result.mode_used, WebSearchMode::LocalVaultOnly);
+
+    // Must clearly inform the user in markdown evidence basis
+    assert!(
+        result.synthesized_markdown.contains("⚠️ Web search returned no results; synthesized using local context"),
+        "evidence basis must inform user that web search returned no results"
+    );
+
+    // Stages must not claim complete web search without warning
+    let last_stage = result.stages.last().unwrap();
+    assert!(
+        last_stage.message.contains("⚠️ Web search returned no results; synthesized using local context"),
+        "stage banner must reflect local context fallback warning: {}",
+        last_stage.message
+    );
+
+    // Strict relevance filtering ensures unrelated notes are excluded
+    assert_eq!(result.matching_vault_artifacts.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 9. Strict relevance filtering rejects completely unrelated notes
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn test_strict_relevance_filter_rejects_unrelated_vault_notes() {
+    let (_tmp, engine) = setup();
+
+    // Create a note that contains incidental single words like "notes" or "design"
+    engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Learning System Design from Scratch"),
+            "# Learning System Design from Scratch\n\nDistributed consensus, Paxos, Raft, partitioning, system design notes.\n",
+            None,
+        )
+        .unwrap();
+
+    let hits = search_local_vault(
+        &engine,
+        "Amazon KDP Global Publishing Strategy",
+        8,
+    )
+    .unwrap();
+
+    // Unrelated note MUST NOT be injected
+    assert!(
+        hits.is_empty(),
+        "unrelated note 'Learning System Design from Scratch' must not match Amazon KDP query"
     );
 }
 

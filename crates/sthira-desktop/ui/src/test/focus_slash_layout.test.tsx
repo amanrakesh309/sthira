@@ -124,27 +124,45 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
       expect(screen.getByTestId('input-artifact-title')).toHaveValue('Trip Planner App Architecture');
     });
 
-    // Verify the document sheet canvas has generous width and borders
-    const editorCanvas = container.querySelector('.max-w-4xl') || container.querySelector('.lg\\:max-w-5xl');
+    // Verify the document sheet canvas expands smoothly to full width when margin is collapsed
+    const editorCanvas = screen.getByTestId('editor-canvas');
     expect(editorCanvas).toBeTruthy();
-    expect(editorCanvas?.className).toContain('min-h-full');
-    expect(editorCanvas?.className).toContain('bg-white');
-    expect(editorCanvas?.className).toContain('border-x');
+    expect(editorCanvas.className).toContain('flex-1');
+    expect(editorCanvas.className).toContain('max-w-5xl');
+    expect(editorCanvas.className).toContain('mx-auto');
+    expect(editorCanvas.className).toContain('min-h-full');
+    expect(editorCanvas.className).toContain('bg-white');
+    expect(editorCanvas.className).toContain('border-x');
 
-    // Verify Epistemic Margin right sidebar is docked with w-80
+    // Issue 1: Verify Epistemic Margin right sidebar is collapsed/hidden by default
+    expect(screen.queryByTestId('epistemic-margin-sidebar')).toBeNull();
+
+    // Test collapsible margin toggle button [ 📖 Margin ]
+    const toggleMarginBtn = screen.getByTestId('btn-toggle-epistemic-margin');
+    expect(toggleMarginBtn).toHaveTextContent('Margin');
+
+    // Click to open margin
+    fireEvent.click(toggleMarginBtn);
     const marginSidebar = screen.getByTestId('epistemic-margin-sidebar');
     expect(marginSidebar).toBeTruthy();
     expect(marginSidebar.className).toContain('w-80');
     expect(marginSidebar.className).toContain('border-l');
 
-    // Test collapsible margin toggle button
-    const toggleMarginBtn = screen.getByTestId('btn-toggle-epistemic-margin');
+    // Click again to close
     fireEvent.click(toggleMarginBtn);
     expect(screen.queryByTestId('epistemic-margin-sidebar')).toBeNull();
 
-    // Click again to reopen
-    fireEvent.click(toggleMarginBtn);
-    expect(screen.getByTestId('epistemic-margin-sidebar')).toBeTruthy();
+    // Issue 4: Verify toolbar action menu is a single button with Lucide icon and standard dimensions
+    const pageActionBtn = screen.getByTestId('page-action-menu-trigger');
+    expect(pageActionBtn).toBeTruthy();
+    expect(pageActionBtn.className).toContain('w-8');
+    expect(pageActionBtn.className).toContain('h-8');
+    expect(pageActionBtn.className).toContain('hover:bg-[#EFECE4]');
+    expect(pageActionBtn.className).toContain('text-[#5C5F58]');
+    // No extra dot text nodes (e.g. "•••" or "'''")
+    expect(pageActionBtn.querySelector('span')).toBeNull();
+    // Exactly one svg icon (MoreHorizontal)
+    expect(pageActionBtn.querySelectorAll('svg').length).toBe(1);
   });
 
   it('typing "/" in FocusView opens the Slash Command popover and selecting "/decision" inserts epistemic decision block', async () => {

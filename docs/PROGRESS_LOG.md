@@ -888,3 +888,52 @@
 - **`cargo test --workspace`: 107/107 tests PASSED.**
 - **`npm run build`: 0 TypeScript errors, 0 Vite errors.**
 
+## Phase 22: UX Polish & Functional Grounding (Issues 1-4)
+- **Status:** PASSED (Verification Gates Passed: Vitest 76/76, cargo test 107/107, npm run build 0 errors)
+
+### Issue 1: Hide Epistemic Margin by Default (`FocusView.tsx`)
+- Changed `showMargin` default state to collapsed: `const [showMargin, setShowMargin] = useState(false)`.
+- When collapsed, the editor canvas smoothly expands to full width (`flex-1 max-w-5xl mx-auto`).
+- Top toolbar toggle button `[ 📖 Margin ]` toggles the epistemic margin open and closed on demand.
+- Added graceful unmount handling for `saveArtifact` with optional chaining to prevent unhandled promise rejections in test environments.
+
+### Issue 2: Smart LLM Title Generation (`research_engine.rs`, `router_engine.rs`, `commands.rs`)
+- Research and Plan creation no longer uses raw prompts directly as titles (e.g. avoiding `"Research: find me ways i can earn money..."`).
+- Implemented `generate_smart_title` using a fast title-generation prompt against the active model:
+  `"Summarize the following research goal into a concise, professional title (3 to 6 words maximum, no quotes, no 'Research:' prefix):\n\n{query}"`
+- Applied a 1.5s timeout on model execution with deterministic fallback to the first 4-5 key words converted to Title Case.
+- Cleaned leading/trailing quotes and redundant prefixes in `clean_smart_title`.
+- Updated `handle_create_research_page` and `handle_run_research_into_page` to asynchronously generate and persist smart titles to the SQLite database.
+
+### Issue 3: Fix Fake "Web Search Complete" & Irrelevant Vault Fallback (`research_engine.rs`, `FocusView.tsx`, `App.tsx`)
+- Checked result count and execution status of `SearchProvider`.
+- If the web search provider fails, returns 0 results, or is unreachable:
+  - Sets `search_status = "web_search_failed"`, `external_sources_count = 0`.
+  - Disables the green `[ 🌐 WEB SEARCH Research complete ]` banner.
+  - Synthesizes with local vault context and informs user with warning state: `⚠️ Web search returned no results; synthesized using local context.`
+  - In `FocusView.tsx`, warning states render an amber `AlertTriangle` badge labeled `Local Vault Synthesis` instead of a misleading green web search banner.
+- Implemented strict relevance filtering (`calculate_relevance_score`) in local vault retrieval:
+  - Inquiries are stripped of common conversational stop words (`find`, `ways`, `through`, `what`, `where`, etc.).
+  - Title matches are weighted 5x; multi-keyword inquiries require title match or at least 2 content hits and >= 30% overlap.
+  - Completely unrelated notes (e.g. "Learning System Design from Scratch" for an Amazon KDP query) score 0 and are omitted from `matching_vault_artifacts`.
+
+### Issue 4: Fix Misaligned Toolbar Dots (`PageActionMenu.tsx`, `FocusView.tsx`)
+- Cleaned up the formatting bar action menu right beside `[Edit] [Preview]`.
+- Removed redundant `{variant === 'toolbar' && <span className="text-[11px] font-semibold">•••</span>}` that produced the staggered six-dot visual glitch.
+- Standardized the action menu `<button>` to Lucide `MoreHorizontal` with dimensions `w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#EFECE4] text-[#5C5F58]`.
+
+### Automated Tests & Verification
+- **Backend Tests (`crates/sthira-core/tests/research_engine_test.rs`):**
+  - `test_smart_title_generator_generates_concise_titles_and_respects_fallback`: PASSED.
+  - `test_research_engine_sets_external_sources_count_zero_and_no_fake_complete_web_search`: PASSED.
+  - `test_strict_relevance_filter_rejects_unrelated_vault_notes`: PASSED.
+- **Frontend Vitest (`crates/sthira-desktop/ui/src/test/focus_slash_layout.test.tsx`):**
+  - Epistemic margin collapsed by default (`showMargin = false`).
+  - `[ 📖 Margin ]` button toggles margin open and closed.
+  - Action menu rendered as single clean button with Lucide `MoreHorizontal` and no duplicate dot text.
+- **Suite Results:**
+  - `cargo test --workspace`: 107/107 PASSED.
+  - `npx vitest run`: 16/16 test files passed, 76/76 tests PASSED.
+  - `npm run build`: 0 TypeScript errors, 0 Vite errors.
+
+

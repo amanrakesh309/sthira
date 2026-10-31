@@ -31,14 +31,15 @@ import {
   saveArtifact,
 } from '../api/ipc';
 import { PageActionMenu } from '../components/PageActionMenu';
-import type {
-  ExplorePlanTab,
-  ScheduledTopicView,
-  ScheduledTopicCadence,
-  ScheduledTopicType,
-  ProviderModelEntry,
-  WebSearchMode,
-  WorkspaceIndexItem,
+import {
+  generateSmartGoalTitle,
+  type ExplorePlanTab,
+  type ScheduledTopicView,
+  type ScheduledTopicCadence,
+  type ScheduledTopicType,
+  type ProviderModelEntry,
+  type WebSearchMode,
+  type WorkspaceIndexItem,
 } from '../types/sthira';
 
 export interface ExplorePlanViewProps {
@@ -337,7 +338,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
       if (onStartPlan) {
         await onStartPlan(g, selectedPlanProject);
       } else {
-        const title = `Plan: ${g.length > 60 ? `${g.slice(0, 60)}...` : g}`;
+        const title = generateSmartGoalTitle(g);
         const draft = await createPage(selectedPlanProject, title);
         await saveArtifact(draft.id, `# ${title}\n\n## Goal\n${g}\n`, title, selectedPlanProject);
         onOpenArtifact?.(draft.id, selectedPlanProject);

@@ -3209,7 +3209,7 @@ pub async fn cmd_execute_web_research(
 /// `Authorship::External`, which is what allows grounded quotes to reach
 /// `Provenance::SourceBacked`). `is_unfinished_draft` is forced to `1` because no
 /// evidence has been gathered yet.
-pub fn handle_create_research_page(
+pub async fn handle_create_research_page(
     engine: &Engine,
     query: String,
     project_id: Option<String>,
@@ -3219,7 +3219,12 @@ pub fn handle_create_research_page(
         return Err("Research query cannot be empty".to_string());
     }
 
-    let title = format!("Research: {q}");
+    let title = sthira_core::engines::research_engine::generate_smart_title(
+        Some(engine.model().as_ref()),
+        q,
+    )
+    .await;
+
     let initial = format!(
         "# {title}\n\n> **Status:** draft — researching…\n\n## Research Inquiry\n{q}\n\n\
          _Evidence gathering in progress. Sources and grounded findings will appear here._\n"
@@ -3251,12 +3256,12 @@ pub fn handle_create_research_page(
 }
 
 #[tauri::command]
-pub fn cmd_create_research_page(
+pub async fn cmd_create_research_page(
     query: String,
     project_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    handle_create_research_page(&state.engine, query, project_id)
+    handle_create_research_page(&state.engine, query, project_id).await
 }
 
 /// Runs the autonomous research pipeline and writes the grounded document **into the
@@ -3326,8 +3331,8 @@ pub async fn handle_run_research_into_page(
     {
         let writer = engine.db().writer();
         let _ = writer.execute(
-            "UPDATE artifacts SET is_unfinished_draft = 0 WHERE id = ?1;",
-            params![artifact_id],
+            "UPDATE artifacts SET title = ?1, is_unfinished_draft = 0 WHERE id = ?2;",
+            params![result.title, artifact_id],
         );
     }
 

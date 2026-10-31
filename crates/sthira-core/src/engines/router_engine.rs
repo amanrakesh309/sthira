@@ -247,6 +247,14 @@ impl Engine {
 
 
         let breakdown = if let Some(mut b) = llm_res {
+            b.page_title = crate::engines::research_engine::clean_smart_title(&b.page_title);
+            b.project_name = crate::engines::research_engine::clean_smart_title(&b.project_name);
+            if b.page_title.is_empty() {
+                b.page_title = crate::engines::research_engine::fallback_title_from_query(raw);
+            }
+            if b.project_name.is_empty() {
+                b.project_name = b.page_title.clone();
+            }
             if b.phases.len() < 3 {
                 let default_phases = match mode {
                     OperationalMode::Plan => vec![
@@ -291,12 +299,11 @@ impl Engine {
             }
             b
         } else {
-            let clean_topic = if raw.len() > 40 {
-                let tr: String = raw.chars().take(40).collect();
-                format!("{}...", tr)
-            } else {
-                raw.to_string()
-            };
+            let clean_topic = crate::engines::research_engine::generate_smart_title(
+                Some(resolved.provider.as_ref()),
+                raw,
+            )
+            .await;
 
             let (p1, p2, p3, q1, q2) = match mode {
                 OperationalMode::Plan => (
@@ -328,12 +335,12 @@ impl Engine {
             };
 
             LlmPlanBreakdown {
-                summary: format!("{}: {}", if mode == OperationalMode::Plan { "Plan" } else { "Research" }, raw),
+                summary: format!("{}: {}", if mode == OperationalMode::Plan { "Plan" } else { "Research" }, clean_topic),
                 phases: vec![p1, p2, p3],
                 open_questions: vec![q1, q2],
                 project_name: clean_topic.clone(),
                 project_purpose: format!("Execute work for: {}", raw),
-                page_title: format!("{} — Notes", clean_topic),
+                page_title: clean_topic.clone(),
                 page_content,
             }
         };

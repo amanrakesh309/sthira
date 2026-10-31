@@ -610,12 +610,11 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
         title="Page actions"
         className={
           variant === 'toolbar'
-            ? 'inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7] transition-colors cursor-pointer'
+            ? 'w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#EFECE4] dark:hover:bg-[#252820] text-[#5C5F58] dark:text-[#A8A69E] transition-colors cursor-pointer'
             : 'p-1.5 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer'
         }
       >
-        <MoreHorizontal className="w-3.5 h-3.5" />
-        {variant === 'toolbar' && <span className="text-[11px] font-semibold">•••</span>}
+        <MoreHorizontal className="w-4 h-4" />
       </button>
 
       {/* Dropdown */}

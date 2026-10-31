@@ -159,7 +159,7 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
 
     // The banner lives INSIDE the full-width center document canvas.
     const banner = screen.getByTestId('document-run-banner');
-    expect(banner.closest('.max-w-4xl')).not.toBeNull();
+    expect(banner.closest('.max-w-5xl') || banner.closest('.max-w-4xl')).not.toBeNull();
     expect(screen.getByTestId('center-workspace').contains(banner)).toBe(true);
 
     // The pipeline ran against the newly created page.
