@@ -8,6 +8,10 @@ import { App } from '../App';
 const mockInvoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
+  // `streamAdaptiveRun` constructs a Tauri Channel to receive progressive chunks.
+  Channel: class {
+    onmessage: ((message: unknown) => void) | null = null;
+  },
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({

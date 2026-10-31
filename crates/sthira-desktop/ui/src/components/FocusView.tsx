@@ -19,6 +19,9 @@ import {
   PanelRightOpen,
   Info,
   X,
+  Globe,
+  ShieldCheck,
+  AlertTriangle,
 } from 'lucide-react';
 import { ContextualResumePane } from './ContextualResumePane';
 import { ProjectHistoryDrawer } from './ProjectHistoryDrawer';
@@ -26,10 +29,12 @@ import { AmbientProposalPill } from './AmbientProposalPill';
 import { UndoToast } from './UndoToast';
 import { EpistemicBadge } from './EpistemicBadge';
 import { SlashCommandMenu, type SlashCommandItem } from './SlashCommandMenu';
+import type { DocumentRunState } from '../types/sthira';
 import { ThemeToggle } from './ThemeToggle';
 import { QuickObjectCreatorCard } from './objects/QuickObjectCreatorCard';
 import { TemplateSelectorPopover } from './objects/TemplateSelectorPopover';
 import { DocumentPropertyHeader } from './objects/DocumentPropertyHeader';
+import { PageActionMenu } from './PageActionMenu';
 import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
 import {
@@ -65,7 +70,15 @@ interface FocusViewProps {
   onContentUpdate?: (content: string) => void;
   onSave?: (savedArtifact: Artifact) => void;
   onTitleUpdate?: (artifactId: string, newTitle: string) => void;
+  /** Phase 17: used by the Page Action Menu to redirect context (e.g. after duplicating). */
+  onOpenArtifact?: (artifactId: string, projectId?: string | null) => void;
   realtimeTitleUpdate?: { id: string; title: string } | null;
+  /**
+   * Phase 19/20: live streaming run (research pipeline stages or plan tokens) to render
+   * as a progress banner and live stream inside the full-width center document canvas.
+   */
+  documentRun?: DocumentRunState | null;
+  onDismissDocumentRun?: () => void;
 }
 
 export const FocusView: React.FC<FocusViewProps> = ({
@@ -77,7 +90,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
   onContentUpdate,
   onSave,
   onTitleUpdate,
+  onOpenArtifact,
   realtimeTitleUpdate,
+  documentRun,
+  onDismissDocumentRun,
 }) => {
   const [context, setContext] = useState<ArtifactContext | null>(null);
   const [brief, setBrief] = useState<ResumeBrief | null>(null);
@@ -412,6 +428,15 @@ export const FocusView: React.FC<FocusViewProps> = ({
       }
     };
   }, [editorContent, title, handleSave]);
+
+  // Phase 19/20: when a run finishes writing into this page, reload the body so the
+  // grounded document replaces the draft placeholder.
+  useEffect(() => {
+    if (!documentRun || documentRun.refreshToken === 0) return;
+    if (artifactId && documentRun.artifactId !== artifactId) return;
+    loadProjectData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentRun?.refreshToken, documentRun?.artifactId]);
 
   // Flush save on unmount only if dirty
   useEffect(() => {
@@ -925,6 +950,85 @@ export const FocusView: React.FC<FocusViewProps> = ({
         {/* Generous Full-Height Document Canvas */}
         <div className="flex-1 h-full overflow-y-auto bg-[#FAF8F3] dark:bg-[#121310]">
           <div className="max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full bg-white dark:bg-[#181915] border-x border-[#E8E5DC] dark:border-[#262822] flex flex-col shadow-2xs relative">
+            {/* Phase 19/20: Live Run Banner — the pipeline's real stages (research) or
+                the LLM token stream (plan) render here, inside the full-width center
+                document canvas. */}
+            {documentRun && (
+              <div
+                data-testid="document-run-banner"
+                data-run-kind={documentRun.kind}
+                className={`mb-6 rounded-2xl border px-4 py-3 flex items-start gap-3 text-xs shadow-2xs ${
+                  documentRun.status === 'error'
+                    ? 'bg-[#FDF3F2] dark:bg-[#2A1B1A] border-[#E7C9C6] dark:border-[#5A3A36] text-[#8C3B33] dark:text-[#E8A79E]'
+                    : documentRun.status === 'done'
+                      ? 'bg-[#F1F7F0] dark:bg-[#1C261A] border-[#CCDCCC] dark:border-[#2E4A28] text-[#2D5A27] dark:text-[#88D080]'
+                      : 'bg-[#F7F5EF] dark:bg-[#1C1D19] border-[#E8E5DC] dark:border-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
+                }`}
+              >
+                {documentRun.status === 'running' ? (
+                  <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
+                ) : documentRun.status === 'done' ? (
+                  <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                )}
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-[11px] uppercase tracking-wider flex items-center gap-1">
+                      {documentRun.kind === 'plan' ? (
+                        <Sparkles className="w-3 h-3" />
+                      ) : (
+                        <Globe className="w-3 h-3" />
+                      )}
+                      {documentRun.kind === 'plan'
+                        ? 'Planning'
+                        : documentRun.mode === 'local_vault_only'
+                          ? 'Local Vault Research'
+                          : 'Web Search'}
+                    </span>
+                    {documentRun.status === 'running' && (
+                      <span className="text-[10px] opacity-70 animate-pulse">live</span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 truncate" data-testid="document-run-message">
+                    {documentRun.message}
+                  </p>
+                  <p className="mt-0.5 text-[10px] opacity-70 truncate">
+                    {documentRun.kind === 'plan' ? 'Goal' : 'Inquiry'}: {documentRun.query}
+                  </p>
+                </div>
+
+                {documentRun.status !== 'running' && onDismissDocumentRun && (
+                  <button
+                    type="button"
+                    data-testid="btn-dismiss-document-run"
+                    onClick={onDismissDocumentRun}
+                    className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+                    title="Dismiss"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Phase 20: live token stream for `plan` runs, rendered directly in the
+                center document canvas while the model is still generating. */}
+            {documentRun?.status === 'running' && documentRun.streamedMarkdown && (
+              <div
+                data-testid="document-live-stream"
+                className="mb-6 rounded-2xl border border-[#E8E5DC] dark:border-[#2C2E27] bg-[#FCFBF7] dark:bg-[#16170F] px-5 py-4 shadow-2xs"
+              >
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[#8C8A82] dark:text-[#6E6D66] mb-2">
+                  Live stream
+                </div>
+                <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-[#1E201C] dark:text-[#EDEAE2] max-h-[50vh] overflow-y-auto">
+                  {documentRun.streamedMarkdown}
+                </pre>
+              </div>
+            )}
+
             {/* Contextual Resume Brief */}
             {brief && (
               <div className="mb-6">
@@ -1083,6 +1187,40 @@ export const FocusView: React.FC<FocusViewProps> = ({
                   <span>👁️ Preview</span>
                 </button>
               </div>
+
+              {/* Phase 17: Page Action Menu (top-right, beside the Edit ⟷ Preview toggle) */}
+              {(context?.artifact?.id || artifactId) && (
+                <PageActionMenu
+                  variant="toolbar"
+                  artifactId={context?.artifact?.id || artifactId || ''}
+                  artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
+                  contentMd={editorContent}
+                  projectId={projectId || null}
+                  objectTypes={objectTypes}
+                  onChanged={() => {
+                    loadProjectData();
+                  }}
+                  onOpenArtifact={(id, pid) => {
+                    if (onOpenArtifact) {
+                      onOpenArtifact(id, pid ?? null);
+                    } else {
+                      loadProjectData();
+                    }
+                  }}
+                  onProjectCreated={(newProjectId) => {
+                    onOpenArtifact?.(
+                      context?.artifact?.id || artifactId || '',
+                      newProjectId
+                    );
+                  }}
+                  onConverted={() => {
+                    loadProjectData();
+                  }}
+                  onDeleted={() => {
+                    onBack();
+                  }}
+                />
+              )}
             </div>
 
             {/* Inline AI Streaming Status Banner */}

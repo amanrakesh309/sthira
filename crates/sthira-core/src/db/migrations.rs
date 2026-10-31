@@ -6,7 +6,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     if user_version == 0 {
         let schema_sql = include_str!("schema.sql");
         conn.execute_batch(schema_sql)?;
-        conn.execute_batch("PRAGMA user_version = 6;")?;
+        conn.execute_batch("PRAGMA user_version = 8;")?;
     } else {
         if user_version < 2 {
             conn.execute_batch(
@@ -111,6 +111,46 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
 
                  CREATE INDEX IF NOT EXISTS idx_object_templates_type ON object_templates(object_type_id);
                  PRAGMA user_version = 6;",
+            )?;
+        }
+        if user_version < 7 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS scheduled_topics (
+                     id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL,
+                     prompt_query TEXT NOT NULL,
+                     topic_type TEXT NOT NULL CHECK(topic_type IN ('research', 'plan')),
+                     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                     cadence TEXT NOT NULL CHECK(cadence IN ('daily', 'weekly', 'manual')),
+                     model_id TEXT,
+                     search_provider_id TEXT,
+                     is_active INTEGER NOT NULL DEFAULT 1,
+                     last_run_at INTEGER,
+                     created_at INTEGER NOT NULL
+                 );
+
+                 CREATE TABLE IF NOT EXISTS scheduled_topic_runs (
+                     id TEXT PRIMARY KEY,
+                     topic_id TEXT NOT NULL REFERENCES scheduled_topics(id) ON DELETE CASCADE,
+                     artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                     sources_scraped_count INTEGER NOT NULL DEFAULT 0,
+                     executed_at INTEGER NOT NULL
+                 );
+
+                 CREATE INDEX IF NOT EXISTS idx_scheduled_topics_active ON scheduled_topics(is_active, topic_type);
+                 CREATE INDEX IF NOT EXISTS idx_scheduled_topic_runs_topic ON scheduled_topic_runs(topic_id, executed_at DESC);
+                 PRAGMA user_version = 7;",
+            )?;
+        }
+        if user_version < 8 {
+            // Phase 18.1: wall-clock scheduling. Additive columns, so existing topics
+            // keep the legacy rolling-interval behaviour (NULL = no fixed time).
+            conn.execute_batch(
+                "ALTER TABLE scheduled_topics ADD COLUMN schedule_time_minutes INTEGER
+                     CHECK(schedule_time_minutes IS NULL OR (schedule_time_minutes >= 0 AND schedule_time_minutes <= 1439));
+                 ALTER TABLE scheduled_topics ADD COLUMN schedule_weekday INTEGER
+                     CHECK(schedule_weekday IS NULL OR (schedule_weekday >= 0 AND schedule_weekday <= 6));
+                 PRAGMA user_version = 8;",
             )?;
         }
     }

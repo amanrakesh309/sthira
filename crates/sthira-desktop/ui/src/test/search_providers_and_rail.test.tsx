@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ModelSettingsModal } from '../components/ModelSettingsModal';
-import { RightModeRail } from '../components/RightModeRail';
+
 
 const mockInvoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
-describe('Phase 10: Search Providers & Web Evidence Extraction UI Tests', () => {
+describe('Phase 10: Search Providers UI Tests', () => {
   const sampleProviders = [
     {
       id: 'duckduckgo',
@@ -124,58 +124,5 @@ describe('Phase 10: Search Providers & Web Evidence Extraction UI Tests', () => 
       expect(screen.getByText(/Official Architectural Reference & Standard/i)).toBeInTheDocument();
     });
   });
-
-  it('renders [Include Web Search] chip in RightModeRail and displays findings with [Import to Vault]', async () => {
-    const onMutated = vi.fn();
-    render(
-      <RightModeRail
-        activeProjectId="proj-distributed-consensus"
-        activeArtifactId="art-note-1"
-        activeDocumentContent="# Notes"
-        onWorkspaceMutated={onMutated}
-      />
-    );
-
-    // Open Research Mode tab using aria-label
-    const researchTabIcon = screen.getByLabelText('Research');
-    fireEvent.click(researchTabIcon);
-
-    // Verify [Include Web Search] chip is present and active
-    const webSearchChip = screen.getByRole('button', { name: /Include Web Search/i });
-    expect(webSearchChip).toBeInTheDocument();
-    expect(screen.getByText(/Live Search Active/i)).toBeInTheDocument();
-
-    // Fill query
-    const input = screen.getByPlaceholderText(/How does speculative decoding scale/i);
-    fireEvent.change(input, { target: { value: 'Rust asynchronous runtime invariants' } });
-
-    // Submit inquiry
-    const submitBtn = screen.getByRole('button', { name: /Investigate Evidence/i });
-    fireEvent.click(submitBtn);
-
-    // Verify web citation card with domain and verified quote
-    await waitFor(() => {
-      expect(screen.getByText(/Web Citations/i)).toBeInTheDocument();
-      expect(screen.getByText(/docs.rs/i)).toBeInTheDocument();
-      expect(screen.getByText(/Verified Quote • External Source/i)).toBeInTheDocument();
-    });
-
-    // Click [Import to Vault]
-    const importBtn = screen.getAllByRole('button', { name: /Import to Vault/i })[0];
-    fireEvent.click(importBtn);
-
-    // Verify button changes to "Imported to Vault" and mutates workspace
-    await waitFor(() => {
-      expect(screen.getAllByText(/Imported to Vault/i).length).toBeGreaterThan(0);
-      expect(onMutated).toHaveBeenCalled();
-    });
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      'cmd_import_web_source_to_vault',
-      expect.objectContaining({
-        url: 'https://docs.rs/sthira',
-        title: 'Sthira Rust Reference',
-      })
-    );
-  });
 });
+

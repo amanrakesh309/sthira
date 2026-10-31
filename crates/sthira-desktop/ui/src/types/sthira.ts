@@ -407,25 +407,45 @@ export interface SearchProviderEntry {
   is_default: boolean;
 }
 
+/**
+ * Phase 19: a single verified quote grounded against retrieved evidence.
+ * Mirrors `sthira_core::engines::research_engine::WebResearchFinding`.
+ */
 export interface WebResearchFinding {
-  query: string;
-  url: string;
-  domain: string;
-  favicon_url: string;
-  title: string;
+  statement: string;
   quote: string;
-  start_offset: number;
-  end_offset: number;
-  markdown_excerpt: string;
-  verified: boolean;
+  source_url: string;
+  domain: string;
+  title: string;
+  favicon_url: string;
+  quote_start?: number | null;
+  quote_end?: number | null;
 }
 
+/** Mirrors `sthira_core::search::ScrapedWebDocument`. */
+export interface ScrapedWebDocument {
+  url: string;
+  title: string;
+  content_md: string;
+  published_date?: string | null;
+}
+
+/**
+ * Phase 19: the full result of a research run.
+ * Mirrors `sthira_core::engines::research_engine::WebResearchResult`.
+ */
 export interface WebResearchResult {
-  original_prompt: string;
-  generated_queries: string[];
+  query: string;
+  search_queries_used: string[];
+  documents: ScrapedWebDocument[];
   findings: WebResearchFinding[];
-  sources_scraped: number;
-  provider_used: string;
+  synthesized_markdown: string;
+  /** Which evidence path actually ran (local vault vs. live web). */
+  mode_used: WebSearchMode;
+  /** Ordered progress stages, replayable by the UI. */
+  stages: ResearchStage[];
+  /** Numbered citation index backing `[Source N]` markers. */
+  sources: ResearchSource[];
 }
 
 export type ProgressiveStreamChunk =
@@ -569,6 +589,121 @@ export type NoteScopeFilter = 'all' | 'projects' | 'standalone';
 
 /** Sort order applied inside the Notes & Pages tab. Pinned notes always float first. */
 export type NoteSortKey = 'updated' | 'created' | 'title_asc' | 'title_desc';
+export type ExplorePlanTab = 'research' | 'plan' | 'trackers' | 'digests';
 
+// ---------------------------------------------------------------------------
+// Phase 18: Continuous & Scheduled Research / Planning Topics
+// ---------------------------------------------------------------------------
+
+export type ScheduledTopicType = 'research' | 'plan';
+export type ScheduledTopicCadence = 'daily' | 'weekly' | 'manual';
+
+export interface ScheduledTopicRunView {
+  id: string;
+  artifact_id: string;
+  artifact_title: string;
+  sources_scraped_count: number;
+  executed_at: number;
+}
+
+export interface ScheduledTopicView {
+  id: string;
+  title: string;
+  prompt_query: string;
+  topic_type: ScheduledTopicType;
+  project_id?: string | null;
+  project_name?: string | null;
+  cadence: ScheduledTopicCadence;
+  model_id?: string | null;
+  search_provider_id?: string | null;
+  is_active: boolean;
+  last_run_at?: number | null;
+  created_at: number;
+  /** Phase 18.1: `"HH:MM"` (UTC) firing time, or null for a rolling interval. */
+  schedule_time?: string | null;
+  /** Phase 18.1: ISO weekday anchor (0=Monday .. 6=Sunday) for weekly topics. */
+  schedule_weekday?: number | null;
+  /** Phase 18.1: next expected wall-clock firing. */
+  next_run_at?: number | null;
+  /** Phase 18.1: human-readable schedule summary. */
+  schedule_label?: string | null;
+  /** Past run artifacts, newest first. */
+  runs: ScheduledTopicRunView[];
+}
+
+export interface CreateScheduledTopicInput {
+  title: string;
+  prompt_query: string;
+  topic_type: ScheduledTopicType;
+  project_id?: string | null;
+  cadence?: ScheduledTopicCadence;
+  model_id?: string | null;
+  search_provider_id?: string | null;
+  /** Phase 18.1: `"HH:MM"` (UTC) time of day to fire at. */
+  schedule_time?: string | null;
+  /** Phase 18.1: ISO weekday anchor (0=Monday .. 6=Sunday) for weekly topics. */
+  schedule_weekday?: number | null;
+}
+
+/** Emitted on `sthira://scheduled-topic-ready` when an autonomous run completes. */
+export interface ScheduledTopicReadyEvent {
+  topic_id: string;
+  topic_title: string;
+  artifact_id: string;
+  topic_type: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 19: Center-Workspace Research Pipeline
+// ---------------------------------------------------------------------------
+
+/** How far the research pipeline may reach for evidence. */
+export type WebSearchMode = 'local_vault_only' | 'auto' | 'always_search';
+
+/** A single ordered progress step streamed from the research pipeline. */
+export interface ResearchStage {
+  /** `vault` | `searching` | `scraped` | `synthesizing` | `done` */
+  stage: string;
+  message: string;
+}
+
+/** A numbered, citable evidence source rendered as `[Source N]`. */
+export interface ResearchSource {
+  index: number;
+  url: string;
+  domain: string;
+  title: string;
+  favicon_url: string;
+}
+
+/**
+ * Live state of a streaming document run, owned by `App` so the banner and the live
+ * stream can be rendered inside the full-width center `FocusView`.
+ *
+ * Phase 20: generalised from research-only to cover both `research` (pipeline stages
+ * streamed from the Rust engine) and `plan` (LLM tokens streamed into the page).
+ */
+export interface DocumentRunState {
+  artifactId: string;
+  query: string;
+  /** Which generator produced this run. */
+  kind: 'research' | 'plan';
+  /** Only meaningful for `research` runs. */
+  mode?: WebSearchMode;
+  status: 'running' | 'done' | 'error';
+  /** Latest progress banner text, e.g. `Searching web for "..." via SearXNG...`. */
+  message: string;
+  /** Live accumulated markdown for token-streamed (`plan`) runs. */
+  streamedMarkdown: string;
+  /** Bumped when the artifact body has been rewritten, so the editor reloads. */
+  refreshToken: number;
+  error?: string | null;
+}
+
+/**
+ * @deprecated Phase 20 superseded this with {@link DocumentRunState}, which also covers
+ * `plan` runs. Kept as an alias so older call sites keep type-checking.
+ */
+export type ResearchRunState = DocumentRunState;
 
 

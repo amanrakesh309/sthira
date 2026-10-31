@@ -23,6 +23,30 @@ pub use search::{
 pub use models::objects::{
     ObjectInstance, ObjectItem, ObjectTemplate, ObjectType, PropertyDefinition, PropertyType,
 };
+pub use models::scheduled_topics::{
+    format_hhmm, is_topic_due, iso_weekday_of, most_recent_scheduled_instant,
+    next_scheduled_instant, parse_hhmm, ScheduledTopic, ScheduledTopicRun, TopicCadence, TopicType,
+};
+
+/// Converts epoch milliseconds to an ISO-8601 `YYYY-MM-DD` civil date (UTC).
+///
+/// Implemented inline (Howard Hinnant's `civil_from_days`) so the core keeps a
+/// dependency-free, fully deterministic date stamp shared by digest titles and the
+/// research pipeline's temporal grounding instruction.
+pub fn format_date_utc(now_ms: i64) -> String {
+    let days = now_ms.div_euclid(86_400_000);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
 pub use models::router::{
     OperationalMode, PlanProposedAction, ProviderEntry, ProviderModelEntry, StructuredPlanPreview,
 };
@@ -567,6 +591,79 @@ impl Engine {
             None,
             now_ms,
         )?;
+
+        Ok(())
+    }
+
+    /// Atomically relocates an artifact between projects (or from standalone into a
+    /// project) inside a **single SQLite transaction**.
+    ///
+    /// `from_project_id` is *soft*-detached (`detached_at` is stamped rather than the row
+    /// being deleted) so historical context is preserved and the link remains
+    /// re-attachable — matching `Engine::attach_artifact`'s
+    /// `ON CONFLICT ... DO UPDATE SET detached_at = NULL` contract. `to_project_id` is
+    /// then attached.
+    ///
+    /// Both the `artifact_detached` and `artifact_attached` rows are written to the
+    /// append-only `session_events` log **within the same transaction**, so the
+    /// provenance chain that resume briefs, project history and reversibility consume
+    /// stays gapless. This is why the relocation lives in the engine rather than the
+    /// desktop command layer: `log_event_tx` is crate-private and re-implementing the
+    /// event log outside `sthira-core` would violate the append-only invariant.
+    pub fn move_artifact_to_project(
+        &self,
+        artifact_id: &str,
+        from_project_id: Option<&str>,
+        to_project_id: &str,
+    ) -> Result<(), CoreError> {
+        let now_ms = self.clock.now_ms();
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+
+        if let Some(from) = from_project_id {
+            tx.execute(
+                "UPDATE project_artifacts SET detached_at = ?1
+                 WHERE project_id = ?2 AND artifact_id = ?3 AND detached_at IS NULL;",
+                params![now_ms, from, artifact_id],
+            )?;
+
+            self.log_event_tx(
+                &tx,
+                Some(from),
+                Some(artifact_id),
+                Actor::User,
+                EventType::ArtifactDetached,
+                Materiality::Minor,
+                serde_json::json!({
+                    "project_id": from,
+                    "artifact_id": artifact_id,
+                    "reason": "move_to_project",
+                }),
+                None,
+                now_ms,
+            )?;
+        }
+
+        tx.execute(
+            "INSERT INTO project_artifacts (project_id, artifact_id, added_at, link_origin, proposal_id)
+             VALUES (?1, ?2, ?3, 'user_explicit', NULL)
+             ON CONFLICT(project_id, artifact_id) DO UPDATE SET detached_at = NULL;",
+            params![to_project_id, artifact_id, now_ms],
+        )?;
+
+        self.log_event_tx(
+            &tx,
+            Some(to_project_id),
+            Some(artifact_id),
+            Actor::User,
+            EventType::ArtifactAttached,
+            Materiality::Substantive,
+            serde_json::json!({ "link_origin": "user_explicit", "reason": "move_to_project" }),
+            None,
+            now_ms,
+        )?;
+
+        tx.commit()?;
 
         Ok(())
     }

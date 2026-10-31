@@ -397,3 +397,39 @@ CREATE TABLE IF NOT EXISTS web_research_cache (
 
 CREATE INDEX IF NOT EXISTS idx_web_research_cache_url ON web_research_cache(url);
 
+-- Phase 18: Continuous & Scheduled Research / Planning Topics
+CREATE TABLE IF NOT EXISTS scheduled_topics (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,                         -- e.g., "SSD Streaming & NVMe"
+    prompt_query TEXT NOT NULL,                  -- Search objective or planning instructions
+    topic_type TEXT NOT NULL CHECK(topic_type IN ('research', 'plan')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('daily', 'weekly', 'manual')),
+    model_id TEXT,                               -- Specific model override, or NULL for default
+    search_provider_id TEXT,                     -- SearXNG, Brave, Tavily, etc.
+    is_active INTEGER NOT NULL DEFAULT 1,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    -- Phase 18.1: Wall-clock scheduling. Minutes since midnight (UTC), 0..1439.
+    -- NULL keeps the legacy rolling-interval behaviour (every 24h / 7d from last run).
+    schedule_time_minutes INTEGER
+        CHECK(schedule_time_minutes IS NULL OR (schedule_time_minutes >= 0 AND schedule_time_minutes <= 1439)),
+    -- Phase 18.1: Weekday anchor for `weekly` topics (ISO: 0=Monday .. 6=Sunday).
+    -- NULL means "anchor on the weekday the topic was created".
+    schedule_weekday INTEGER
+        CHECK(schedule_weekday IS NULL OR (schedule_weekday >= 0 AND schedule_weekday <= 6))
+);
+
+-- Every autonomous execution lands here so prior digests can act as an
+-- anti-duplication boundary for the next run.
+CREATE TABLE IF NOT EXISTS scheduled_topic_runs (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL REFERENCES scheduled_topics(id) ON DELETE CASCADE,
+    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    sources_scraped_count INTEGER NOT NULL DEFAULT 0,
+    executed_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_topics_active ON scheduled_topics(is_active, topic_type);
+CREATE INDEX IF NOT EXISTS idx_scheduled_topic_runs_topic ON scheduled_topic_runs(topic_id, executed_at DESC);
+

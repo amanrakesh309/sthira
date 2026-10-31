@@ -31,6 +31,10 @@ import type {
   SidebarItemsResponse,
   WorkspaceIndexData,
   WorkspaceIndexTab,
+  ScheduledTopicView,
+  CreateScheduledTopicInput,
+  WebSearchMode,
+  ResearchStage,
 } from '../types/sthira';
 
 // Check if running inside Tauri runtime
@@ -1189,30 +1193,118 @@ export async function getKnowledgeGraph(): Promise<KnowledgeGraphData> {
   };
 }
 
+/**
+ * Deep-copies a note. Returns the **new artifact id**.
+ *
+ * @param newTitle Optional explicit title; defaults server-side to `"{title} (Copy)"`.
+ * @param targetProjectId Optional project to attach the copy to; when omitted the copy
+ *   inherits the source's active project association.
+ */
 export async function duplicateArtifact(
   artifactId: string,
+  newTitle?: string | null,
   targetProjectId?: string | null
-): Promise<Artifact> {
+): Promise<string> {
   if (isTauri) {
-    return await invoke<Artifact>('cmd_duplicate_artifact', {
+    return await invoke<string>('cmd_duplicate_artifact', {
       artifactId,
       artifact_id: artifactId,
+      newTitle: newTitle || null,
+      new_title: newTitle || null,
       targetProjectId: targetProjectId || null,
       target_project_id: targetProjectId || null,
     });
   }
-  return {
-    id: `art-dup-${Date.now()}`,
-    artifact_type: 'note',
-    authorship: 'user',
-    title: 'Copy of Note',
-    content_md: '# Copy of Note\n\n',
-    content_hash: '',
-    version: 1,
-    is_unfinished_draft: false,
-    created_at: Date.now(),
-    updated_at: Date.now(),
-  };
+  return `art-dup-${Date.now()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17: Page Action Menu IPC Bridge
+// ---------------------------------------------------------------------------
+
+/** Links a note to a project (join-table only — zero content duplication). */
+export async function linkArtifactToProject(
+  artifactId: string,
+  projectId: string
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_link_artifact_to_project', {
+      artifactId,
+      artifact_id: artifactId,
+      projectId,
+      project_id: projectId,
+    });
+  }
+}
+
+/** Reassigns a note from one project to another in a single transaction. */
+export async function moveArtifactToProject(
+  artifactId: string,
+  fromProjectId: string | null,
+  toProjectId: string
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_move_artifact_to_project', {
+      artifactId,
+      artifact_id: artifactId,
+      fromProjectId: fromProjectId || null,
+      from_project_id: fromProjectId || null,
+      toProjectId,
+      to_project_id: toProjectId,
+    });
+  }
+}
+
+/** Creates a new project seeded with this note. Returns the new project id. */
+export async function createProjectWithArtifact(
+  projectName: string,
+  artifactId: string
+): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_create_project_with_artifact', {
+      projectName,
+      project_name: projectName,
+      artifactId,
+      artifact_id: artifactId,
+    });
+  }
+  return `proj-${Date.now()}`;
+}
+
+/**
+ * Registers an existing note as an instance of an object type. The note's Markdown body
+ * is preserved byte-for-byte; only an `object_instances` row is written.
+ */
+export async function convertArtifactToObject(
+  artifactId: string,
+  objectTypeId: string,
+  initialProperties?: Record<string, any> | null
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_convert_artifact_to_object', {
+      artifactId,
+      artifact_id: artifactId,
+      objectTypeId,
+      object_type_id: objectTypeId,
+      initialProperties: initialProperties || null,
+      initial_properties: initialProperties || null,
+    });
+  }
+}
+
+/** Detaches a note from a project, returning it to the standalone pool. */
+export async function detachArtifactFromProject(
+  artifactId: string,
+  projectId: string
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_detach_artifact_from_project', {
+      artifactId,
+      artifact_id: artifactId,
+      projectId,
+      project_id: projectId,
+    });
+  }
 }
 
 export async function addArtifactToProject(
@@ -1440,42 +1532,47 @@ export async function executeWebResearch(
     });
   }
 
-  // Realistic mock research result
+  // Browser-preview fallback mirroring the Rust `WebResearchResult` contract.
   const quote = `Asynchronous research engines formulate deterministic query branches to verify external citations without altering active workspace files.`;
+  const url = `https://docs.rs/spec/${encodeURIComponent(query)}`;
+  const favicon = 'https://www.google.com/s2/favicons?domain=docs.rs&sz=32';
   return {
-    original_prompt: query,
-    generated_queries: [
+    query,
+    search_queries_used: [
       `${query} technical specification`,
       `${query} rust architecture`,
       `${query} invariants`,
     ],
-    sources_scraped: 2,
-    provider_used: 'DuckDuckGo (Headless HTML)',
+    documents: [
+      {
+        url,
+        title: `${query} Architecture & Safety Specifications`,
+        content_md: `# ${query} Reference\n\n${quote}\n`,
+        published_date: null,
+      },
+    ],
     findings: [
       {
-        query: `${query} technical specification`,
-        url: `https://docs.rs/spec/${encodeURIComponent(query)}`,
-        domain: 'docs.rs',
-        favicon_url: `https://www.google.com/s2/favicons?domain=docs.rs&sz=32`,
-        title: `${query} Architecture & Safety Specifications`,
+        statement: quote,
         quote,
-        start_offset: 0,
-        end_offset: quote.length,
-        markdown_excerpt: `# ${query} Reference\n\n${quote}\n\nAll verified quotes maintain zero unsolicited writes.`,
-        verified: true,
+        source_url: url,
+        domain: 'docs.rs',
+        title: `${query} Architecture & Safety Specifications`,
+        favicon_url: favicon,
+        quote_start: 0,
+        quote_end: quote.length,
       },
-      {
-        query: `${query} rust architecture`,
-        url: `https://crates.io/crates/${encodeURIComponent(query)}`,
-        domain: 'crates.io',
-        favicon_url: `https://www.google.com/s2/favicons?domain=crates.io&sz=32`,
-        title: `${query} on Crates.io`,
-        quote: `Modular search engine and scraping pipeline with SQLite caching and verifiable quote references.`,
-        start_offset: 0,
-        end_offset: 78,
-        markdown_excerpt: `## Overview\n\nModular search engine and scraping pipeline with SQLite caching and verifiable quote references.`,
-        verified: true,
-      },
+    ],
+    synthesized_markdown: `# ${query}\n\n## Synthesis\n${quote}\n\n## Contradictions & Evolution\n_None detected._\n`,
+    mode_used: 'always_search' as const,
+    stages: [
+      { stage: 'searching', message: `Searching web for "${query}" via DuckDuckGo...` },
+      { stage: 'scraped', message: 'Scraped 1 source...' },
+      { stage: 'synthesizing', message: 'Synthesizing research...' },
+      { stage: 'done', message: 'Research complete.' },
+    ],
+    sources: [
+      { index: 1, url, domain: 'docs.rs', title: `${query} Architecture & Safety Specifications`, favicon_url: favicon },
     ],
   };
 }
@@ -1721,4 +1818,146 @@ export async function getWorkspaceIndex(tab?: WorkspaceIndexTab, search?: string
 
 
 
+
+
+// ---------------------------------------------------------------------------
+// Phase 18: Continuous & Scheduled Research / Planning Topics
+// ---------------------------------------------------------------------------
+
+export async function listScheduledTopics(
+  topicType?: 'research' | 'plan' | null
+): Promise<ScheduledTopicView[]> {
+  if (isTauri) {
+    return await invoke<ScheduledTopicView[]>('cmd_list_scheduled_topics', {
+      topicType: topicType || null,
+      topic_type: topicType || null,
+    });
+  }
+  return [];
+}
+
+export async function createScheduledTopic(
+  topic: CreateScheduledTopicInput
+): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_create_scheduled_topic', { topic });
+  }
+  return `topic-${Date.now()}`;
+}
+
+/** Runs a topic immediately; resolves to the id of the generated artifact. */
+export async function triggerScheduledTopicRun(topicId: string): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_trigger_scheduled_topic_run', {
+      topicId,
+      topic_id: topicId,
+    });
+  }
+  return `art-digest-${Date.now()}`;
+}
+
+export async function toggleScheduledTopicActive(
+  topicId: string,
+  isActive: boolean
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_toggle_scheduled_topic_active', {
+      topicId,
+      topic_id: topicId,
+      isActive,
+      is_active: isActive,
+    });
+  }
+}
+
+export async function deleteScheduledTopic(topicId: string): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_delete_scheduled_topic', { topicId, topic_id: topicId });
+  }
+}
+
+/**
+ * Subscribes to autonomous-run completions pushed by the desktop scheduler.
+ * Returns an unlisten function.
+ */
+export async function onScheduledTopicReady(
+  handler: (event: import('../types/sthira').ScheduledTopicReadyEvent) => void
+): Promise<() => void> {
+  if (!isTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlisten = await listen<import('../types/sthira').ScheduledTopicReadyEvent>(
+    'sthira://scheduled-topic-ready',
+    (e) => handler(e.payload)
+  );
+  return unlisten;
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 19: Center-Workspace Research Pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates the draft research page that will host a run, returning its `artifact_id`.
+ *
+ * The caller navigates to this id immediately so the run is watched in the **center
+ * workspace** rather than trapped in the right rail.
+ */
+export async function createResearchPage(
+  query: string,
+  projectId?: string | null
+): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_create_research_page', {
+      query,
+      projectId: projectId || null,
+      project_id: projectId || null,
+    });
+  }
+  return `art-research-${Date.now()}`;
+}
+
+/**
+ * Runs the autonomous research pipeline into an existing page, streaming **real**
+ * progress stages so `FocusView` can render a live banner.
+ *
+ * No URL is required — the pipeline generates its own search queries.
+ */
+export async function runResearchIntoPage(
+  artifactId: string,
+  query: string,
+  webSearchMode: WebSearchMode,
+  onStage?: (stage: ResearchStage) => void
+): Promise<WebResearchResult> {
+  if (isTauri) {
+    const channel = new Channel<ResearchStage>();
+    channel.onmessage = (message) => {
+      onStage?.(message);
+    };
+    return await invoke<WebResearchResult>('cmd_run_research_into_page', {
+      artifactId,
+      artifact_id: artifactId,
+      query,
+      webSearchMode,
+      web_search_mode: webSearchMode,
+      onProgress: channel,
+      on_progress: channel,
+    });
+  }
+
+  // Browser-preview fallback: replay the same stage narrative locally.
+  onStage?.({ stage: 'searching', message: `Searching web for "${query}" via DuckDuckGo...` });
+  onStage?.({ stage: 'scraped', message: 'Scraped 3 sources...' });
+  onStage?.({ stage: 'synthesizing', message: 'Synthesizing research...' });
+  return {
+    query,
+    search_queries_used: [`${query} overview`],
+    documents: [],
+    findings: [],
+    synthesized_markdown: `# ${query}\n\n## Synthesis\nPreview mode — no live pipeline available.\n\n## Contradictions & Evolution\n_None detected._\n`,
+    mode_used: webSearchMode,
+    stages: [],
+    sources: [],
+  };
+}
 

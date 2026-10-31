@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use sthira_core::{llm::TieredModelProvider, Clock, Engine};
 use sthira_desktop::{
-    register_commands, seed_demo_workspace_if_empty, spawn_event_bridge, AppState,
+    register_commands, seed_demo_workspace_if_empty, spawn_event_bridge,
+    spawn_scheduled_topic_scheduler, AppState,
 };
 
 struct DesktopClock;
@@ -52,7 +53,8 @@ fn main() {
     let builder = tauri::Builder::default()
         .manage(app_state)
         .setup(move |app| {
-            spawn_event_bridge(app.handle().clone(), engine);
+            spawn_event_bridge(app.handle().clone(), engine.clone());
+            spawn_scheduled_topic_scheduler(app.handle().clone(), engine);
             Ok(())
         });
 

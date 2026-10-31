@@ -1,10 +1,12 @@
 pub mod commands;
 pub mod events;
+pub mod scheduler;
 pub mod seed;
 pub mod state;
 
 pub use commands::*;
 pub use events::spawn_event_bridge;
+pub use scheduler::{spawn_scheduled_topic_scheduler, ScheduledTopicReadyEvent};
 pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
 pub use state::AppState;
 
@@ -61,6 +63,11 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_get_knowledge_graph,
         commands::cmd_duplicate_artifact,
         commands::cmd_add_artifact_to_project,
+        commands::cmd_link_artifact_to_project,
+        commands::cmd_move_artifact_to_project,
+        commands::cmd_create_project_with_artifact,
+        commands::cmd_convert_artifact_to_object,
+        commands::cmd_detach_artifact_from_project,
         commands::cmd_duplicate_project,
         commands::cmd_rename_project,
         commands::cmd_rename_artifact,
@@ -69,11 +76,18 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_test_search_provider,
         commands::cmd_import_web_source_to_vault,
         commands::cmd_execute_web_research,
+        commands::cmd_create_research_page,
+        commands::cmd_run_research_into_page,
         commands::cmd_stream_adaptive_run,
         commands::cmd_get_sidebar_items,
         commands::cmd_toggle_pin,
         commands::cmd_get_workspace_index,
         commands::cmd_record_access,
+        commands::cmd_list_scheduled_topics,
+        commands::cmd_create_scheduled_topic,
+        commands::cmd_trigger_scheduled_topic_run,
+        commands::cmd_toggle_scheduled_topic_active,
+        commands::cmd_delete_scheduled_topic,
     ])
 }
 

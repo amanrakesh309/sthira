@@ -160,15 +160,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
       if (cmd === 'cmd_list_object_types') return [];
       if (cmd === 'cmd_get_object_type_counts') return {};
       if (cmd === 'cmd_duplicate_artifact') {
-        return {
-          id: 'page-1-copy',
-          artifact_type: 'note',
-          authorship: 'user',
-          title: 'Alpha Note 1 (Copy)',
-          content_md: 'Copied content',
-          version: 1,
-          updated_at: 2000,
-        };
+        return 'page-1-copy';
       }
       if (cmd === 'cmd_add_artifact_to_project') {
         return true;
@@ -206,7 +198,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
 
     // 1. Test Duplicate Note
     await user.click(pageMenuBtn);
-    const duplicatePageBtn = await screen.findByTestId('btn-duplicate-page-page-1');
+    const duplicatePageBtn = await screen.findByTestId('page-action-duplicate');
     await user.click(duplicatePageBtn);
 
     await waitFor(() => {
@@ -221,7 +213,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
 
     // 2. Test Add to Project Modal
     await user.click(pageMenuBtn);
-    const addToProjectBtn = await screen.findByText(/Add to Project\.\.\./i);
+    const addToProjectBtn = await screen.findByTestId('page-action-link');
     await user.click(addToProjectBtn);
 
     // Modal opens, choose "Beta Project" and confirm
@@ -243,7 +235,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
 
     // 3. Test Inline Rename of Note
     await user.click(pageMenuBtn);
-    const renameNoteBtn = await screen.findByText(/Rename/i);
+    const renameNoteBtn = await screen.findByTestId('page-action-rename');
     await user.click(renameNoteBtn);
 
     const renameInput = await screen.findByTestId('input-rename-page-page-1');

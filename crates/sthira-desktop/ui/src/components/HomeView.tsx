@@ -11,7 +11,12 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { UniversalInputBar } from './UniversalInputBar';
-import type { HomeStateView, WorkspaceIndexTab } from '../types/sthira';
+import type {
+  HomeStateView,
+  WorkspaceIndexTab,
+  WebSearchMode,
+  WebResearchResult,
+} from '../types/sthira';
 
 interface HomeViewProps {
   homeState: HomeStateView;
@@ -25,6 +30,13 @@ interface HomeViewProps {
   onOpenAccount?: () => void;
   onOpenFlow: (mode: 'research' | 'plan' | 'capture', initialPrompt?: string) => void;
   onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
+  /** Phase 20: research/plan stream into the center workspace instead of a side rail. */
+  onStartResearch?: (
+    query: string,
+    mode: WebSearchMode,
+    projectId?: string | null
+  ) => Promise<WebResearchResult | null>;
+  onStartPlan?: (goal: string, projectId?: string | null) => Promise<string | null>;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -37,6 +49,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onOpenSettings,
   onOpenFlow,
   onNavigateWorkspaceIndex,
+  onStartResearch,
+  onStartPlan,
 }) => {
   // Deduplicate recent_items vs loose_captures so the exact same note does not appear twice
   const looseCaptureIds = new Set((homeState.loose_captures || []).map((c) => c.id));
@@ -129,6 +143,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
             onOpenFlow={onOpenFlow}
             onOpenSettings={onOpenSettings}
             projects={homeState.projects}
+            onStartResearch={onStartResearch}
+            onStartPlan={onStartPlan}
           />
         </section>
 

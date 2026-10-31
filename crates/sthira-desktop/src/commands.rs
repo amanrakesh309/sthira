@@ -2536,49 +2536,66 @@ pub fn cmd_get_knowledge_graph(
     handle_get_knowledge_graph(&state.engine)
 }
 
+/// Deep-copies an artifact row, assigns a fresh UUID + timestamp, sets the title
+/// (defaulting to `"{original_title} (Copy)"`), and optionally attaches the copy to
+/// `target_project_id`. Returns the **new artifact id**.
+///
+/// When `target_project_id` is `None` the copy inherits the source's first active
+/// project association so duplicating from inside a project keeps it in that project.
 pub fn handle_duplicate_artifact(
     engine: &Engine,
     artifact_id: String,
+    new_title: Option<String>,
     target_project_id: Option<String>,
-) -> Result<Artifact, String> {
+) -> Result<String, String> {
     let source = engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
     let source_title = source.title.as_deref().unwrap_or("Untitled Note");
-    let new_title = format!("{} (Copy)", source_title);
+    let title = new_title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| format!("{} (Copy)", source_title));
+
+    // `create_artifact` mints a fresh UUID, timestamps and vault file, and records the
+    // initial revision + `artifact_created` session event.
     let new_art = engine
         .create_artifact(
             source.artifact_type,
             source.authorship,
-            Some(&new_title),
+            Some(&title),
             &source.content_md,
             source.source_url.as_deref(),
         )
         .map_err(|e| e.to_string())?;
 
-    let project_to_attach = target_project_id.or_else(|| {
-        let reader = engine.db().reader().ok()?;
-        reader
-            .query_row(
-                "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL LIMIT 1;",
-                params![artifact_id],
-                |r| r.get(0),
-            )
-            .ok()
-    });
+    let project_to_attach = match target_project_id {
+        Some(pid) if !pid.trim().is_empty() => Some(pid),
+        _ => {
+            let reader = engine.db().reader().map_err(|e| e.to_string())?;
+            reader
+                .query_row(
+                    "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL LIMIT 1;",
+                    params![artifact_id],
+                    |r| r.get(0),
+                )
+                .ok()
+        }
+    };
 
     if let Some(pid) = project_to_attach {
         let _ = engine.attach_artifact(&pid, &new_art.id, "user_explicit", None);
     }
 
-    Ok(new_art)
+    Ok(new_art.id)
 }
 
 #[tauri::command]
 pub fn cmd_duplicate_artifact(
     artifact_id: String,
+    new_title: Option<String>,
     target_project_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Artifact, String> {
-    handle_duplicate_artifact(&state.engine, artifact_id, target_project_id)
+) -> Result<String, String> {
+    handle_duplicate_artifact(&state.engine, artifact_id, new_title, target_project_id)
 }
 
 pub fn handle_add_artifact_to_project(
@@ -2599,6 +2616,238 @@ pub fn cmd_add_artifact_to_project(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     handle_add_artifact_to_project(&state.engine, artifact_id, project_id)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17: Page Action Menu Commands (Link / Move / Create-with / Convert / Detach)
+// ---------------------------------------------------------------------------
+
+/// Links an artifact to a project with **zero content duplication** — the artifact row
+/// and its Markdown body are untouched; only a `project_artifacts` join row is added.
+///
+/// Idempotent: re-linking an already-linked artifact is a no-op (the existing
+/// `attach_artifact` `ON CONFLICT ... detached_at = NULL` clause also un-detaches a
+/// previously detached link).
+pub fn handle_link_artifact_to_project(
+    engine: &Engine,
+    artifact_id: String,
+    project_id: String,
+) -> Result<(), String> {
+    // Fail loudly if the artifact does not exist rather than writing a dangling link.
+    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+
+    let already_linked: bool = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        reader
+            .query_row(
+                "SELECT 1 FROM project_artifacts
+                 WHERE project_id = ?1 AND artifact_id = ?2 AND detached_at IS NULL;",
+                params![project_id, artifact_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+    };
+
+    if already_linked {
+        return Ok(());
+    }
+
+    engine
+        .attach_artifact(&project_id, &artifact_id, "user_explicit", None)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_link_artifact_to_project(
+    artifact_id: String,
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_link_artifact_to_project(&state.engine, artifact_id, project_id)
+}
+
+/// Reassigns an artifact from `from_project_id` (optional) to `to_project_id` inside a
+/// single SQLite transaction, emitting both audit events. See
+/// `Engine::move_artifact_to_project` for why the transaction lives in the engine.
+pub fn handle_move_artifact_to_project(
+    engine: &Engine,
+    artifact_id: String,
+    from_project_id: Option<String>,
+    to_project_id: String,
+) -> Result<(), String> {
+    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+
+    let from = from_project_id.filter(|p| !p.trim().is_empty());
+    engine
+        .move_artifact_to_project(&artifact_id, from.as_deref(), &to_project_id)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_move_artifact_to_project(
+    artifact_id: String,
+    from_project_id: Option<String>,
+    to_project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_move_artifact_to_project(&state.engine, artifact_id, from_project_id, to_project_id)
+}
+
+/// Creates a brand-new project and immediately associates `artifact_id` with it.
+/// Returns the new project id so the caller can redirect context.
+pub fn handle_create_project_with_artifact(
+    engine: &Engine,
+    project_name: String,
+    artifact_id: String,
+) -> Result<String, String> {
+    let name = project_name.trim();
+    if name.is_empty() {
+        return Err("Project name cannot be empty".to_string());
+    }
+    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+
+    // `origin_artifact_id` records the note this project was born from (provenance).
+    let project = engine
+        .create_project(name, Some(&artifact_id))
+        .map_err(|e| e.to_string())?;
+    let _ = engine.set_project_purpose(&project.id, &format!("Project {name}"));
+    engine
+        .attach_artifact(&project.id, &artifact_id, "user_explicit", None)
+        .map_err(|e| e.to_string())?;
+
+    Ok(project.id)
+}
+
+#[tauri::command]
+pub fn cmd_create_project_with_artifact(
+    project_name: String,
+    artifact_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_create_project_with_artifact(&state.engine, project_name, artifact_id)
+}
+
+/// Registers an existing artifact as an instance of `object_type_id`.
+///
+/// **The artifact's Markdown body is never touched** — `artifacts.content_md`,
+/// `content_hash`, `version` and its vault file all stay byte-identical, so no epistemic
+/// re-extraction or authorship laundering can occur. Only an `object_instances` row is
+/// written.
+///
+/// Property resolution (lowest → highest precedence):
+/// `object_types.schema_json` default values → `initial_properties` → any property
+/// values already stored on the instance (so re-converting never destroys data).
+pub fn handle_convert_artifact_to_object(
+    engine: &Engine,
+    artifact_id: String,
+    object_type_id: String,
+    initial_properties: Option<serde_json::Value>,
+) -> Result<(), String> {
+    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+
+    let (obj_type, existing) = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        let obj_type = sthira_core::db::objects_repo::get_object_type(&reader, &object_type_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Object type '{}' not found", object_type_id))?;
+        let existing = sthira_core::db::objects_repo::get_object_instance(&reader, &artifact_id)
+            .map_err(|e| e.to_string())?;
+        (obj_type, existing)
+    };
+
+    let mut properties = serde_json::Map::new();
+    for prop in &obj_type.schema {
+        if let Some(def) = &prop.default_value {
+            properties.insert(prop.key.clone(), def.clone());
+        }
+    }
+    if let Some(init) = initial_properties.as_ref().and_then(|v| v.as_object()) {
+        for (k, v) in init {
+            properties.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(prev) = existing.as_ref().and_then(|i| i.properties.as_object()) {
+        for (k, v) in prev {
+            properties.insert(k.clone(), v.clone());
+        }
+    }
+
+    let now_ms = engine.clock().now_ms();
+    let instance = ObjectInstance {
+        artifact_id: artifact_id.clone(),
+        object_type_id,
+        properties: serde_json::Value::Object(properties),
+        updated_at: now_ms,
+    };
+
+    let writer = engine.db().writer();
+    sthira_core::db::objects_repo::upsert_object_instance(&writer, &instance)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_convert_artifact_to_object(
+    artifact_id: String,
+    object_type_id: String,
+    initial_properties: Option<serde_json::Value>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_convert_artifact_to_object(
+        &state.engine,
+        artifact_id,
+        object_type_id,
+        initial_properties,
+    )
+}
+
+/// Detaches an artifact from a project, returning it to the Standalone Notes pool.
+///
+/// **Soft detach by design:** `project_artifacts.detached_at` is stamped rather than the
+/// row being deleted, because the schema documents detach as "preserves historical
+/// context" and the resume-brief / project-history / reversibility engines all read the
+/// `artifact_detached` session event. A hard `DELETE` would silently rewrite history and
+/// break `tests/frozen/phase9_modes_registry.rs`. The link stays re-attachable via
+/// `attach_artifact`'s `ON CONFLICT ... detached_at = NULL`.
+pub fn handle_detach_artifact_from_project(
+    engine: &Engine,
+    artifact_id: String,
+    project_id: String,
+) -> Result<(), String> {
+    let is_linked: bool = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        reader
+            .query_row(
+                "SELECT 1 FROM project_artifacts
+                 WHERE project_id = ?1 AND artifact_id = ?2 AND detached_at IS NULL;",
+                params![project_id, artifact_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+    };
+
+    if !is_linked {
+        return Err(format!(
+            "Note is not actively linked to project '{}'",
+            project_id
+        ));
+    }
+
+    engine
+        .detach_artifact(&project_id, &artifact_id)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_detach_artifact_from_project(
+    artifact_id: String,
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_detach_artifact_from_project(&state.engine, artifact_id, project_id)
 }
 
 pub fn handle_duplicate_project(
@@ -2931,6 +3180,7 @@ pub async fn handle_execute_web_research(
         &query,
         provider.as_ref(),
         3,
+        None,
     )
     .await
     .map_err(|e| e.to_string())
@@ -2943,6 +3193,167 @@ pub async fn cmd_execute_web_research(
     state: State<'_, AppState>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
     handle_execute_web_research(&state.engine, query, model_id).await
+}
+
+// ---------------------------------------------------------------------------
+// Phase 19: Center-Workspace Research Pipeline
+// ---------------------------------------------------------------------------
+
+/// Creates the **draft research artifact** that will host a research run.
+///
+/// Returns the new `artifact_id` immediately so the UI can switch the middle
+/// workspace to `FocusView` and watch the pipeline fill the page in — research results
+/// are never trapped inside the narrow right rail.
+///
+/// Authorship is `External` (Phase 10 convention: web-derived research is tagged
+/// `Authorship::External`, which is what allows grounded quotes to reach
+/// `Provenance::SourceBacked`). `is_unfinished_draft` is forced to `1` because no
+/// evidence has been gathered yet.
+pub fn handle_create_research_page(
+    engine: &Engine,
+    query: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("Research query cannot be empty".to_string());
+    }
+
+    let title = format!("Research: {q}");
+    let initial = format!(
+        "# {title}\n\n> **Status:** draft — researching…\n\n## Research Inquiry\n{q}\n\n\
+         _Evidence gathering in progress. Sources and grounded findings will appear here._\n"
+    );
+
+    let art = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::External,
+            Some(&title),
+            &initial,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+
+    {
+        let writer = engine.db().writer();
+        let _ = writer.execute(
+            "UPDATE artifacts SET is_unfinished_draft = 1 WHERE id = ?1;",
+            params![art.id],
+        );
+    }
+
+    if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
+        let _ = engine.attach_artifact(&pid, &art.id, "user_explicit", None);
+    }
+
+    Ok(art.id)
+}
+
+#[tauri::command]
+pub fn cmd_create_research_page(
+    query: String,
+    project_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_create_research_page(&state.engine, query, project_id)
+}
+
+/// Runs the autonomous research pipeline and writes the grounded document **into the
+/// existing artifact**, streaming real progress stages to the caller over a Tauri
+/// `Channel` so `FocusView` can render a live banner.
+///
+/// No URL is ever required — the pipeline generates its own search queries, dispatches
+/// them to the configured `SearchProvider`, scrapes the top documents, grounds quotes
+/// with `VerifiedQuote::verify`, and synthesizes with an explicit temporal instruction.
+pub async fn handle_run_research_into_page(
+    engine: &Engine,
+    artifact_id: String,
+    query: String,
+    web_search_mode: Option<String>,
+    on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
+) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
+    use sthira_core::engines::research_engine::{execute_research, WebSearchMode};
+
+    // Verify the target page exists before doing any expensive work.
+    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+
+    let mode = web_search_mode
+        .as_deref()
+        .map(WebSearchMode::from_str_lossy)
+        .unwrap_or(WebSearchMode::Auto);
+
+    let entry = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::db::search_repo::get_default_search_provider(&reader)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| sthira_core::search::SearchProviderEntry {
+                id: "duckduckgo".to_string(),
+                display_name: "DuckDuckGo".to_string(),
+                provider_type: "duckduckgo_scraper".to_string(),
+                endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
+                api_key: None,
+                is_enabled: true,
+                is_default: true,
+            })
+    };
+    let provider_label = entry.display_name.clone();
+    let provider = sthira_core::search::build_search_provider(&entry);
+
+    // Forward every real pipeline stage to the UI as it happens.
+    let progress = move |stage: sthira_core::engines::research_engine::ResearchStage| {
+        let _ = on_progress.send(stage);
+    };
+
+    let result = execute_research(
+        engine,
+        query.trim(),
+        mode,
+        Some(provider.as_ref()),
+        &provider_label,
+        4,
+        Some(&progress),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Fill the page in with the grounded document and clear the draft flag.
+    engine
+        .update_artifact(&artifact_id, &result.synthesized_markdown, Actor::User, None)
+        .map_err(|e| e.to_string())?;
+
+    {
+        let writer = engine.db().writer();
+        let _ = writer.execute(
+            "UPDATE artifacts SET is_unfinished_draft = 0 WHERE id = ?1;",
+            params![artifact_id],
+        );
+    }
+
+    engine.emit_event(sthira_core::CoreEvent::ArtifactChanged {
+        id: artifact_id,
+    });
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn cmd_run_research_into_page(
+    artifact_id: String,
+    query: String,
+    web_search_mode: Option<String>,
+    on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
+    state: State<'_, AppState>,
+) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
+    handle_run_research_into_page(
+        &state.engine,
+        artifact_id,
+        query,
+        web_search_mode,
+        on_progress,
+    )
+    .await
 }
 
 pub async fn handle_stream_adaptive_run(
@@ -3574,4 +3985,299 @@ pub fn cmd_get_workspace_index(
     handle_get_workspace_index(&state.engine, tab, search)
 }
 
+
+
+// ============================================================================
+// Phase 18: Continuous & Scheduled Research / Planning Topics
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTopicRunView {
+    pub id: String,
+    pub artifact_id: String,
+    pub artifact_title: String,
+    pub sources_scraped_count: i64,
+    pub executed_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTopicView {
+    pub id: String,
+    pub title: String,
+    pub prompt_query: String,
+    pub topic_type: String,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub cadence: String,
+    pub model_id: Option<String>,
+    pub search_provider_id: Option<String>,
+    pub is_active: bool,
+    pub last_run_at: Option<i64>,
+    pub created_at: i64,
+    /// Phase 18.1: `"HH:MM"` (UTC) the topic fires at, or `None` for a rolling interval.
+    pub schedule_time: Option<String>,
+    /// Phase 18.1: ISO weekday anchor (0=Monday .. 6=Sunday) for weekly topics.
+    pub schedule_weekday: Option<u8>,
+    /// Phase 18.1: next expected wall-clock firing, when one is known.
+    pub next_run_at: Option<i64>,
+    /// Phase 18.1: human-readable schedule summary for the card.
+    pub schedule_label: String,
+    /// Past run artifacts, newest first — powers the "Previous Digests" list.
+    pub runs: Vec<ScheduledTopicRunView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateScheduledTopicInput {
+    pub title: String,
+    pub prompt_query: String,
+    pub topic_type: String,
+    pub project_id: Option<String>,
+    pub cadence: Option<String>,
+    pub model_id: Option<String>,
+    pub search_provider_id: Option<String>,
+    /// Phase 18.1: `"HH:MM"` (UTC) time of day to fire at. `None` = rolling interval.
+    pub schedule_time: Option<String>,
+    /// Phase 18.1: ISO weekday anchor (0=Monday .. 6=Sunday) for weekly topics.
+    pub schedule_weekday: Option<u8>,
+}
+
+fn weekday_label(w: u8) -> &'static str {
+    match w % 7 {
+        0 => "Mon",
+        1 => "Tue",
+        2 => "Wed",
+        3 => "Thu",
+        4 => "Fri",
+        5 => "Sat",
+        _ => "Sun",
+    }
+}
+
+/// Human-readable one-line summary of a topic's schedule, e.g. `Daily at 06:00 (UTC)`.
+fn schedule_label(cadence: sthira_core::TopicCadence, minutes: Option<i64>, weekday: Option<u8>) -> String {
+    let time = minutes.map(sthira_core::format_hhmm);
+    match (cadence, time) {
+        (sthira_core::TopicCadence::Manual, _) => "Manual only".to_string(),
+        (sthira_core::TopicCadence::Daily, None) => "Daily (rolling 24h)".to_string(),
+        (sthira_core::TopicCadence::Daily, Some(t)) => format!("Daily at {t} (UTC)"),
+        (sthira_core::TopicCadence::Weekly, None) => "Weekly (rolling 7d)".to_string(),
+        (sthira_core::TopicCadence::Weekly, Some(t)) => match weekday {
+            Some(w) => format!("Weekly · {} at {t} (UTC)", weekday_label(w)),
+            None => format!("Weekly at {t} (UTC)"),
+        },
+    }
+}
+
+fn to_topic_view(
+    engine: &Engine,
+    topic: sthira_core::ScheduledTopic,
+) -> Result<ScheduledTopicView, String> {
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+
+    let project_name: Option<String> = topic.project_id.as_deref().and_then(|pid| {
+        reader
+            .query_row(
+                "SELECT name FROM projects WHERE id = ?1;",
+                params![pid],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+    });
+
+    let runs = sthira_core::db::scheduled_topics_repo::list_runs_for_topic(&reader, &topic.id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|run| {
+            let artifact_title = reader
+                .query_row(
+                    "SELECT COALESCE(title, 'Untitled') FROM artifacts WHERE id = ?1;",
+                    params![run.artifact_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .unwrap_or_else(|_| "Deleted digest".to_string());
+            ScheduledTopicRunView {
+                id: run.id,
+                artifact_id: run.artifact_id,
+                artifact_title,
+                sources_scraped_count: run.sources_scraped_count,
+                executed_at: run.executed_at,
+            }
+        })
+        .collect();
+
+    // Phase 18.1: derive schedule presentation values before moving fields out of `topic`.
+    let schedule_time = topic.schedule_time_minutes.map(sthira_core::format_hhmm);
+    let next_run_at = topic.next_run_at(engine.clock().now_ms());
+    let label = schedule_label(
+        topic.cadence,
+        topic.schedule_time_minutes,
+        topic.schedule_weekday,
+    );
+
+    Ok(ScheduledTopicView {
+        id: topic.id,
+        title: topic.title,
+        prompt_query: topic.prompt_query,
+        topic_type: topic.topic_type.as_str().to_string(),
+        project_id: topic.project_id,
+        project_name,
+        cadence: topic.cadence.as_str().to_string(),
+        model_id: topic.model_id,
+        search_provider_id: topic.search_provider_id,
+        is_active: topic.is_active,
+        last_run_at: topic.last_run_at,
+        created_at: topic.created_at,
+        schedule_time,
+        schedule_weekday: topic.schedule_weekday,
+        next_run_at,
+        schedule_label: label,
+        runs,
+    })
+}
+
+pub fn handle_list_scheduled_topics(
+    engine: &Engine,
+    topic_type: Option<String>,
+) -> Result<Vec<ScheduledTopicView>, String> {
+    let filter = topic_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(sthira_core::TopicType::from_str_lossy);
+
+    let topics = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::db::scheduled_topics_repo::list_topics_by_type(&reader, filter)
+            .map_err(|e| e.to_string())?
+    };
+
+    topics
+        .into_iter()
+        .map(|t| to_topic_view(engine, t))
+        .collect()
+}
+
+#[tauri::command]
+pub fn cmd_list_scheduled_topics(
+    topic_type: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ScheduledTopicView>, String> {
+    handle_list_scheduled_topics(&state.engine, topic_type)
+}
+
+
+pub fn handle_create_scheduled_topic(
+    engine: &Engine,
+    input: CreateScheduledTopicInput,
+) -> Result<String, String> {
+    let title = input.title.trim();
+    let prompt = input.prompt_query.trim();
+    if title.is_empty() {
+        return Err("Topic title cannot be empty".to_string());
+    }
+    if prompt.is_empty() {
+        return Err("Topic objective prompt cannot be empty".to_string());
+    }
+
+    // Phase 18.1: validate the optional wall-clock time ("HH:MM", UTC).
+    let schedule_time_minutes = match input
+        .schedule_time
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(raw) => Some(sthira_core::parse_hhmm(raw).ok_or_else(|| {
+            format!("Invalid schedule time '{raw}' — expected HH:MM in 24-hour form")
+        })?),
+        None => None,
+    };
+
+    let schedule_weekday = match input.schedule_weekday {
+        Some(w) if w > 6 => return Err("Schedule weekday must be 0 (Monday) .. 6 (Sunday)".to_string()),
+        other => other,
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let topic = sthira_core::ScheduledTopic {
+        id: id.clone(),
+        title: title.to_string(),
+        prompt_query: prompt.to_string(),
+        topic_type: sthira_core::TopicType::from_str_lossy(&input.topic_type),
+        project_id: input.project_id.filter(|p| !p.trim().is_empty()),
+        cadence: input
+            .cadence
+            .as_deref()
+            .map(sthira_core::TopicCadence::from_str_lossy)
+            .unwrap_or(sthira_core::TopicCadence::Daily),
+        model_id: input.model_id.filter(|m| !m.trim().is_empty()),
+        search_provider_id: input.search_provider_id.filter(|s| !s.trim().is_empty()),
+        is_active: true,
+        last_run_at: None,
+        created_at: engine.clock().now_ms(),
+        schedule_time_minutes,
+        schedule_weekday,
+    };
+
+    let writer = engine.db().writer();
+    sthira_core::db::scheduled_topics_repo::create_topic(&writer, &topic)
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn cmd_create_scheduled_topic(
+    topic: CreateScheduledTopicInput,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_create_scheduled_topic(&state.engine, topic)
+}
+
+/// Runs a topic immediately in the background and returns the created artifact id.
+pub async fn handle_trigger_scheduled_topic_run(
+    engine: &Engine,
+    topic_id: String,
+) -> Result<String, String> {
+    sthira_core::engines::scheduled_runner::execute_topic_run(engine, &topic_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_trigger_scheduled_topic_run(
+    topic_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_trigger_scheduled_topic_run(&state.engine, topic_id).await
+}
+
+pub fn handle_toggle_scheduled_topic_active(
+    engine: &Engine,
+    topic_id: String,
+    is_active: bool,
+) -> Result<(), String> {
+    let writer = engine.db().writer();
+    sthira_core::db::scheduled_topics_repo::update_topic_status(&writer, &topic_id, is_active)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_toggle_scheduled_topic_active(
+    topic_id: String,
+    is_active: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_toggle_scheduled_topic_active(&state.engine, topic_id, is_active)
+}
+
+pub fn handle_delete_scheduled_topic(engine: &Engine, topic_id: String) -> Result<(), String> {
+    let writer = engine.db().writer();
+    sthira_core::db::scheduled_topics_repo::delete_topic(&writer, &topic_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_delete_scheduled_topic(
+    topic_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_delete_scheduled_topic(&state.engine, topic_id)
+}
 

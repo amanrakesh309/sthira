@@ -3,7 +3,6 @@ import { HomeView } from './components/HomeView';
 import { FocusView } from './components/FocusView';
 import { CanvasView } from './components/CanvasView';
 import { LeftSidebar } from './components/LeftSidebar';
-import { RightModeRail } from './components/RightModeRail';
 import { SearchModal } from './components/SearchModal';
 import { ModelSettingsModal } from './components/ModelSettingsModal';
 import { AccountModal } from './components/AccountModal';
@@ -13,17 +12,51 @@ import { ObjectTypeBuilderModal } from './components/objects/ObjectTypeBuilderMo
 import { ObjectTypeManagerModal } from './components/objects/ObjectTypeManagerModal';
 import { GraphView } from './views/GraphView';
 import { WorkspaceIndexView } from './views/WorkspaceIndexView';
-import { getHomeState, promoteToProject, listObjectTypes, isTauri } from './api/ipc';
-import type { HomeStateView, ObjectType, WorkspaceIndexTab } from './types/sthira';
+import { ExplorePlanView } from './views/ExplorePlanView';
+import {
+  getHomeState,
+  promoteToProject,
+  listObjectTypes,
+  isTauri,
+  createResearchPage,
+  createPage,
+  runResearchIntoPage,
+  saveArtifact,
+  streamAdaptiveRun,
+} from './api/ipc';
+import type {
+  HomeStateView,
+  ObjectType,
+  WorkspaceIndexTab,
+  ExplorePlanTab,
+  DocumentRunState,
+  WebSearchMode,
+  WebResearchResult,
+} from './types/sthira';
 
 export const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'home' | 'focus' | 'canvas' | 'objects' | 'graph' | 'workspace_index'>('home');
+  const [currentView, setCurrentView] = useState<
+    | 'home'
+    | 'focus'
+    | 'canvas'
+    | 'objects'
+    | 'graph'
+    | 'workspace_index'
+    | 'scheduled_topics'
+    | 'explore_plan'
+  >('home');
   const [workspaceIndexTab, setWorkspaceIndexTab] = useState<WorkspaceIndexTab>('all');
+  const [explorePlanTab, setExplorePlanTab] = useState<ExplorePlanTab>('research');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
   const [activeObjectTypeId, setActiveObjectTypeId] = useState<string | null>(null);
-  const [activeDocumentContent, setActiveDocumentContent] = useState<string>('');
+  /**
+   * Phase 20: live streaming document run, owned here so `FocusView` (the full-width
+   * center workspace) can render both the progress banner and the live token stream.
+   * There is no right-hand drawer any more — this is the only place runs surface.
+   */
+  const [documentRun, setDocumentRun] = useState<DocumentRunState | null>(null);
   const [isLeftSidebarCollapsed, setIsLeftSidebarCollapsed] = useState(false);
   const [treeRefreshTrigger, setTreeRefreshTrigger] = useState(0);
   const [realtimeTitleUpdate, setRealtimeTitleUpdate] = useState<{ id: string; title: string } | null>(null);
@@ -146,6 +179,181 @@ export const App: React.FC = () => {
     setCurrentView('workspace_index');
   };
 
+  const handleNavigateExplorePlan = (tab?: ExplorePlanTab) => {
+    setActiveProjectId(null);
+    setActiveArtifactId(null);
+    setActiveCanvasId(null);
+    setActiveObjectTypeId(null);
+    if (typeof tab === 'string') {
+      setExplorePlanTab(tab);
+    } else {
+      setExplorePlanTab('research');
+    }
+    setCurrentView('explore_plan');
+  };
+
+  const handleNavigateScheduledTopics = () => {
+    handleNavigateExplorePlan('trackers');
+  };
+
+  /**
+   * Phase 19/20: the single entry point for user-facing research.
+   *
+   * Creates a draft research page, **immediately switches the center workspace to
+   * `FocusView`** with that page loaded, then runs the autonomous pipeline into it while
+   * streaming real progress stages. Nothing is ever routed to a side drawer.
+   */
+  const handleStartResearch = async (
+    query: string,
+    mode: WebSearchMode = 'auto',
+    projectId?: string | null
+  ): Promise<WebResearchResult | null> => {
+    const q = query.trim();
+    if (!q) return null;
+
+    const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
+    let artifactId: string | null = null;
+
+    try {
+      artifactId = await createResearchPage(q, targetProject);
+
+      // 1. Center-page navigation happens immediately, before any slow work.
+      setActiveArtifactId(artifactId);
+      if (targetProject) setActiveProjectId(targetProject);
+      setCurrentView('focus');
+
+      setDocumentRun({
+        artifactId,
+        query: q,
+        kind: 'research',
+        mode,
+        status: 'running',
+        message: 'Creating research page…',
+        streamedMarkdown: '',
+        refreshToken: 0,
+      });
+
+      // 2. Stream the pipeline's real stages into the banner.
+      const result = await runResearchIntoPage(artifactId, q, mode, (stage) => {
+        setDocumentRun((prev) =>
+          prev && prev.artifactId === artifactId ? { ...prev, message: stage.message } : prev
+        );
+      });
+
+      // 3. Mark complete and ask the editor to reload the now-populated page.
+      setDocumentRun((prev) =>
+        prev && prev.artifactId === artifactId
+          ? {
+              ...prev,
+              status: 'done',
+              message: 'Research complete.',
+              refreshToken: prev.refreshToken + 1,
+            }
+          : prev
+      );
+
+      await loadState();
+      setTreeRefreshTrigger((prev) => prev + 1);
+      return result;
+    } catch (err: any) {
+      console.error('Research run failed', err);
+      const message = err?.toString?.() || 'Research failed';
+      setDocumentRun((prev) =>
+        prev && artifactId && prev.artifactId === artifactId
+          ? { ...prev, status: 'error', error: message, message }
+          : prev
+      );
+      return null;
+    }
+  };
+
+  /**
+   * Phase 20: `Plan` mode. Creates a `Plan: <Goal>` draft, navigates to it immediately,
+   * then streams LLM tokens straight into the page body — the live stream renders in the
+   * center document canvas rather than a rail panel.
+   */
+  const handleStartPlan = async (
+    goal: string,
+    projectId?: string | null
+  ): Promise<string | null> => {
+    const g = goal.trim();
+    if (!g) return null;
+
+    const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
+    const title = `Plan: ${g.length > 60 ? `${g.slice(0, 60)}...` : g}`;
+    let artifactId: string | null = null;
+
+    try {
+      const draft = await createPage(targetProject, title);
+      artifactId = draft.id;
+
+      // 1. Navigate to the center workspace before streaming begins.
+      setActiveArtifactId(artifactId);
+      if (targetProject) setActiveProjectId(targetProject);
+      setCurrentView('focus');
+
+      const draftBody = `# ${title}\n\n> **Status:** drafting — planning…\n\n## Goal\n${g}\n`;
+      await saveArtifact(artifactId, draftBody, title, targetProject);
+
+      setDocumentRun({
+        artifactId,
+        query: g,
+        kind: 'plan',
+        status: 'running',
+        message: 'Planning…',
+        streamedMarkdown: '',
+        refreshToken: 0,
+      });
+
+      // 2. Stream tokens into the page as they arrive.
+      let accumulated = '';
+      await streamAdaptiveRun(g, 'plan', null, (chunk) => {
+        if (chunk.type !== 'text_token') return;
+        accumulated += chunk.payload;
+        const live = accumulated;
+        setDocumentRun((prev) =>
+          prev && prev.artifactId === artifactId
+            ? { ...prev, streamedMarkdown: live, message: 'Drafting plan…' }
+            : prev
+        );
+      });
+
+      // 3. Persist the finished plan and reload the page.
+      const body = accumulated.trim()
+        ? accumulated.trim().startsWith('#')
+          ? accumulated.trim()
+          : `# ${title}\n\n${accumulated.trim()}`
+        : `${draftBody}\n## Plan\n_No streamed content was returned._\n`;
+
+      await saveArtifact(artifactId, body, title, targetProject);
+
+      setDocumentRun((prev) =>
+        prev && prev.artifactId === artifactId
+          ? {
+              ...prev,
+              status: 'done',
+              message: 'Plan complete.',
+              streamedMarkdown: '',
+              refreshToken: prev.refreshToken + 1,
+            }
+          : prev
+      );
+
+      await loadState();
+      setTreeRefreshTrigger((prev) => prev + 1);
+      return artifactId;
+    } catch (err: any) {
+      console.error('Plan run failed', err);
+      const message = err?.toString?.() || 'Planning failed';
+      setDocumentRun((prev) =>
+        prev && artifactId && prev.artifactId === artifactId
+          ? { ...prev, status: 'error', error: message, message }
+          : prev
+      );
+      return null;
+    }
+  };
+
   const handlePromoteLooseCapture = async (artifactId: string) => {
     try {
       const newProjectId = await promoteToProject([artifactId], 'Promoted Exploration');
@@ -177,6 +385,8 @@ export const App: React.FC = () => {
           setActiveObjectTypeId(null);
         }}
         onNavigateWorkspaceIndex={handleNavigateWorkspaceIndex}
+        onNavigateExplorePlan={handleNavigateExplorePlan}
+        onNavigateScheduledTopics={handleNavigateScheduledTopics}
         onOpenProject={handleOpenProject}
         onOpenArtifact={handleOpenArtifact}
         onOpenCanvas={handleOpenCanvas}
@@ -196,8 +406,13 @@ export const App: React.FC = () => {
         }}
       />
 
-      {/* Main Content Area */}
-      <main className={`flex-1 h-screen ${currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'} bg-[#F5F3EC] dark:bg-[#121310] flex flex-col relative`}>
+      {/* Main Content Area — the full-width center workspace. There is deliberately no
+          persistent right-hand drawer; every mode (research, plan, synthesis) streams
+          into this container. */}
+      <main
+        data-testid="center-workspace"
+        className={`flex-1 h-full min-w-0 ${currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'} bg-[#FAF8F3] dark:bg-[#121310] flex flex-col relative`}
+      >
         {currentView === 'home' && (
           <HomeView
             homeState={homeState}
@@ -211,6 +426,8 @@ export const App: React.FC = () => {
             onOpenAccount={() => setIsAccountOpen(true)}
             onOpenFlow={(mode, initialPrompt) => setActiveFlow({ mode, initialPrompt })}
             onNavigateWorkspaceIndex={handleNavigateWorkspaceIndex}
+            onStartResearch={handleStartResearch}
+            onStartPlan={handleStartPlan}
           />
         )}
 
@@ -241,7 +458,16 @@ export const App: React.FC = () => {
             }}
             onOpenCanvas={handleOpenCanvas}
             onOpenSearch={() => setIsSearchOpen(true)}
-            onContentUpdate={(c) => setActiveDocumentContent(c)}
+            onOpenArtifact={handleOpenArtifact}
+            onContentUpdate={() => {}}
+            documentRun={
+              documentRun &&
+              documentRun.artifactId ===
+                (activeArtifactId || (homeState as any)?.active_artifact_id)
+                ? documentRun
+                : null
+            }
+            onDismissDocumentRun={() => setDocumentRun(null)}
             onSave={(art) => {
               setActiveArtifactId(art.id);
               loadState();
@@ -298,6 +524,17 @@ export const App: React.FC = () => {
           })()
         )}
 
+        {(currentView === 'explore_plan' || currentView === 'scheduled_topics') && (
+          <ExplorePlanView
+            initialTab={explorePlanTab}
+            onOpenArtifact={handleOpenArtifact}
+            onStartResearch={handleStartResearch}
+            onStartPlan={handleStartPlan}
+            onBack={() => setCurrentView('home')}
+            onWorkspaceMutated={loadState}
+          />
+        )}
+
         {currentView === 'graph' && (
           <GraphView
             onOpenProject={handleOpenProject}
@@ -308,19 +545,6 @@ export const App: React.FC = () => {
           />
         )}
       </main>
-
-      {/* Step 3: Right Mode Rail (Capture, Research, Plan, Act) */}
-      <RightModeRail
-        activeProjectId={activeProjectId}
-        activeArtifactId={activeArtifactId}
-        activeDocumentContent={activeDocumentContent}
-        onApplyContentUpdate={(newContent) => {
-          setActiveDocumentContent(newContent);
-          loadState();
-        }}
-        onWorkspaceMutated={loadState}
-        onOpenArtifact={handleOpenArtifact}
-      />
 
       {/* Global Interactive Modals */}
       <SearchModal

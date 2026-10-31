@@ -588,3 +588,303 @@
   - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
   - `cargo check --workspace`: clean (no Rust changes required).
 
+
+## Phase 17: Page Action Menu (`...`) — Project Association, Duplication, Conversion & Lifecycle
+- **Status:** PASSED (Verified via Rust Integration Tests, Vitest React Suite & Production Builds)
+- **Step 0: Core Engine Support (preserving epistemic contracts):**
+  - Added `Engine::move_artifact_to_project(artifact_id, from_project_id, to_project_id)` to `crates/sthira-core/src/lib.rs`.
+  - **Why this lives in the engine, not the command layer:** `Engine::log_event_tx` is crate-private, and the `session_events` table is strictly append-only (DB triggers reject UPDATE/DELETE). A raw SQL transaction in `sthira-desktop` would have silently dropped the `artifact_attached` / `artifact_detached` audit rows that resume briefs, project history and the reversibility engine all read. The relocation therefore runs as **one SQLite transaction** (soft-detach source → attach target → both audit events) inside the crate that owns the event log.
+- **Step 1: Backend IPC Commands (`crates/sthira-desktop/src/commands.rs`, registered in `lib.rs`):**
+  1. `cmd_link_artifact_to_project(artifact_id, project_id)` — join-table insert only; **zero content duplication** (artifact row, `content_md`, `content_hash` and `version` untouched). Idempotent (re-linking is a no-op) and fails loudly on a missing artifact rather than writing a dangling row.
+  2. `cmd_move_artifact_to_project(artifact_id, from_project_id?, to_project_id)` — single-transaction reassignment via the new engine method; also handles standalone → project (`from = None`).
+  3. `cmd_create_project_with_artifact(project_name, artifact_id)` — creates the project (trimmed name validated non-empty), records `projects.origin_artifact_id` for provenance, sets a purpose, attaches the note, and returns the new project id.
+  4. `cmd_duplicate_artifact(artifact_id, new_title?, target_project_id?) -> Result<String, String>` — **extended in place** from the legacy `(artifact_id, target_project_id) -> Artifact` shape to the specified signature. Deep-copies the row via `create_artifact` (fresh UUID, timestamp, vault file, initial revision + `artifact_created` event), titles it `new_title` or `"{original_title} (Copy)"`, and attaches the copy to `target_project_id` (defaulting to the source's active project). Returns the new artifact id.
+  5. `cmd_convert_artifact_to_object(artifact_id, object_type_id, initial_properties?)` — writes only an `object_instances` row. **The Markdown body is preserved byte-for-byte** (no re-extraction, no authorship laundering, no version bump). Property precedence: schema `default_value`s → `initial_properties` → existing instance values, so re-converting never destroys data.
+  6. `cmd_detach_artifact_from_project(artifact_id, project_id)` — returns the note to the Standalone pool.
+     - **Deliberate deviation from a hard `DELETE`:** the schema documents `project_artifacts.detached_at` as *"Soft detach preserves historical context"*, `Engine::attach_artifact` re-activates a detached row via `ON CONFLICT ... DO UPDATE SET detached_at = NULL`, and `tests/frozen/phase9_modes_registry.rs` asserts `detached_at IS NOT NULL` after a detach. A hard delete would rewrite history and break a frozen gate, so detach is implemented as a soft detach through `Engine::detach_artifact` (stamps `detached_at` + logs `artifact_detached`). It errors when the note is not actively linked instead of silently no-op'ing.
+
+
+- **Step 2: Page Action Menu (`crates/sthira-desktop/ui/src/components/PageActionMenu.tsx`, 665 lines):**
+  - Discrete three-dots trigger (`MoreHorizontal` + `•••` label in toolbar variant) styled in Warm Stone (`hover:bg-[#EFECE4] rounded-lg p-1.5`); `variant: 'toolbar' | 'row'` and `align: 'left' | 'right'`.
+  - **Project Management:** `🔗 Link to Project...` (built-in searchable project picker, or delegated to the parent's `AddToProjectModal` when `onLinkProjectRequested` is supplied), `📦 Move to Project...` (picker, current project marked and disabled), `➕ Create Project with this Note` (inline name input + Create & Open, redirects context), `↩️ Detach from Project` (**only rendered when the note belongs to a project**).
+  - **Duplication & Transform:** `📋 Duplicate Note` (calls `cmd_duplicate_artifact`, shows a toast with `[Open]`), `🏷️ Convert to Object Type ▾` (submenu listing every registered type — `Idea`, `Task`, `Decision`, `Source`, plus user-created types), optional `✏️ Rename` (when the parent passes `onRename`, used by the sidebar's inline-rename flow).
+  - **Clipboard & Links:** `📄 Copy Markdown` (clipboard API with an `execCommand` fallback for restricted contexts), `🔗 Copy Note Link` (`sthira://artifact/{id}`).
+  - **Destructive:** `🗑️ Delete Page...` → inline safe-deletion confirmation whose copy explains the real semantics (shared note ⇒ detached from this project only; otherwise purged), then calls `cmd_delete_artifact`.
+  - Escape / outside-click dismissal, busy + inline error states, and a self-contained result toast.
+  - **IPC bridge (`api/ipc.ts`)** extended with `linkArtifactToProject`, `moveArtifactToProject`, `createProjectWithArtifact`, `convertArtifactToObject`, `detachArtifactFromProject`; `duplicateArtifact` now returns `Promise<string>` (the new id) and accepts an optional `newTitle`.
+- **Step 3: Mount Points:**
+  1. **`FocusView.tsx`** — `<PageActionMenu variant="toolbar">` mounted in the document toolbar immediately to the right of the `[ ✏️ Edit ] ⟷ [ 👁️ Preview ]` toggle, hydrated with the live artifact id, title, `editorContent`, `projectId` and the loaded `objectTypes`. New optional `onOpenArtifact` prop (wired from `App.tsx`) lets the duplicate toast and "Create Project with this Note" redirect context.
+  2. **`LeftSidebar.tsx`** — the two legacy per-row menus (project pages `btn-page-menu-*` and loose notes `btn-loose-page-menu-*`) were **replaced** by a single unified `PageActionMenu` per note row, hover-revealed via `opacity-0 group-hover/*:opacity-100 focus-within:opacity-100`. Trigger testids are preserved. `Rename` and `Link to Project` delegate back to the sidebar's existing inline-rename state and `AddToProjectModal`, so no capability was lost and the removed dead code (`handleDuplicateNoteAction`, `FolderPlus`, `deleteArtifact` imports) was pruned.
+  3. **`WorkspaceIndexView.tsx`** — `PageActionMenu` added to every note row in the **Notes & Pages** tab and to non-project rows of the **All Items** tab, enabling Link / Duplicate / Delete straight from the dashboard.
+- **Step 4: Verification & Automated Tests:**
+  1. **Backend Integration Tests (`crates/sthira-desktop/tests/page_actions_test.rs`): 5/5 PASSED.**
+     - `test_link_artifact_to_project_links_without_duplication` — exactly one active join row, artifact row count unchanged, `content_md`/`content_hash`/`version` identical, re-link idempotent, missing artifact rejected.
+     - `test_create_project_with_artifact_creates_project_and_associates_note` — new project with trimmed name and `origin_artifact_id` set, note actively linked, blank name rejected.
+     - `test_duplicate_artifact_produces_independent_note_with_fresh_uuid` — fresh UUID, artifact count +1, `(Copy)` default title, content parity, inherits project, and **editing the copy leaves the original untouched**; explicit title + explicit target project verified.
+     - `test_convert_artifact_to_object_creates_instance_and_preserves_content` — `object_instances` row with schema defaults + supplied properties, body/hash/version byte-identical, re-convert preserves stored values, unknown type rejected.
+     - `test_move_and_detach_artifact_between_projects` — source link inactive after move, target active, `detached_at` stamped (**row preserved, not deleted**), standalone → project move, detach returns to standalone, detaching an unlinked note errors, re-link reactivates the same row.
+  2. **Frontend Vitest Suite (`crates/sthira-desktop/ui/src/test/page_action_menu.test.tsx`): 4/4 PASSED.**
+     - Test 1 — opening the menu renders every option across all four groups (Detach present when the note is in a project).
+     - Test 2 — clicking **Duplicate Note** invokes `cmd_duplicate_artifact` with `{artifactId, targetProjectId}` and surfaces the `[Open]` toast which forwards the new id to `onOpenArtifact`.
+     - Test 3 — standalone notes hide Detach; `Link to Project...` opens the searchable picker, live search filters the list, and selecting a project calls `cmd_link_artifact_to_project`.
+     - Test 4 — the Convert submenu lists registered types and calls `cmd_convert_artifact_to_object`.
+     - `settings_autosave_realtime.test.tsx` updated for the unified menu testids (`page-action-duplicate`, `page-action-link`, `page-action-rename`) and the new string-returning `cmd_duplicate_artifact`.
+  3. **Verification Gates:**
+     - Full Rust workspace test suite (`cargo test --workspace --no-fail-fast`): **90 passed, 0 failed** (exit 0), incl. new `page_actions_test.rs`: 5/5.
+     - Full UI Vitest suite (`npm test`): **60/60 tests PASSED across all 13 test suites**.
+     - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
+
+## Phase 18: Continuous & Scheduled Research / Planning Topics
+- **Status:** PASSED (Verified via Rust Integration Tests, Vitest React Suite & Production Builds)
+- **Step 1: Database Layer & Models (`crates/sthira-core`):**
+  1. **SQLite Schema (`db/schema.sql` + `db/migrations.rs`, schema version 7):**
+     - `scheduled_topics(id, title, prompt_query, topic_type ∈ {research, plan}, project_id → projects ON DELETE SET NULL, cadence ∈ {daily, weekly, manual}, model_id, search_provider_id, is_active, last_run_at, created_at)`.
+     - `scheduled_topic_runs(id, topic_id → scheduled_topics ON DELETE CASCADE, artifact_id → artifacts ON DELETE CASCADE, sources_scraped_count, executed_at)`.
+     - `idx_scheduled_topics_active(is_active, topic_type)` and `idx_scheduled_topic_runs_topic(topic_id, executed_at DESC)`.
+     - Migration block `user_version < 7`; fresh databases jump straight to `PRAGMA user_version = 7`.
+  2. **Models (`models/scheduled_topics.rs`):** `TopicType`, `TopicCadence` (with `due_interval_ms()`), `ScheduledTopic`, `ScheduledTopicRun`, plus the single shared cadence predicate `is_topic_due(cadence, last_run_at, now_ms)`.
+  3. **Repository (`db/scheduled_topics_repo.rs`):** `create_topic`, `get_topic`, `list_topics_by_type` (optional type filter), `list_active_topics`, `update_topic_status`, `update_topic_last_run`, `record_topic_run`, `list_runs_for_topic`, `delete_topic`.
+     - `delete_topic` cascades the run rows but **deliberately preserves the generated artifacts** — deleting a topic never destroys a digest the user already read.
+- **Step 2: Autonomous Execution Engine & Scheduler:**
+  1. **`engines/scheduled_runner.rs`:**
+     - `execute_topic_run(engine, topic_id)` / `execute_topic_run_with_provider(engine, topic_id, Option<&dyn SearchProvider>)` — the injectable variant lets the whole autonomous path run deterministically offline.
+     - **Research branch:** builds the **anti-duplication boundary** from prior run digests (`build_continuity_boundary` — the `- **statement**` findings of the last 5 runs, capped at 1400 chars), injects it into the inquiry as an explicit `CONTINUITY BOUNDARY` instruction, resolves the search backend (per-topic override → workspace default → DuckDuckGo fallback), runs the existing multi-query pipeline (`generate_search_queries` → `SearchProvider::search` → `scraper::scrape_and_clean_url` → `VerifiedQuote::verify`), and writes `Digest: {Title} — {YYYY-MM-DD}` with **`Authorship::External`**.
+     - **Plan branch:** evaluates the linked project's recorded milestones (`history::get_project_history`) and unresolved dependencies (open `epistemic_nodes` joined through `project_artifacts`), synthesizes progress / completed milestones / blockers / next phase, and writes `Plan Review: {Title} — {YYYY-MM-DD}` with **`Authorship::AiGenerated`**. Degrades to a deterministic, fact-only review if synthesis fails or times out.
+     - `format_date_utc(now_ms)` implements Hinnant's `civil_from_days` inline — no new date dependency.
+     - Both branches attach the artifact to `project_id` when set, then `record_topic_run` + `update_topic_last_run` and emit `CoreEvent::ArtifactChanged`.
+     - `list_due_topics(engine, now_ms)` — the single cadence evaluation used by both the scheduler and the tests.
+  2. **`crates/sthira-desktop/src/scheduler.rs`:** `spawn_scheduled_topic_scheduler(app_handle, engine)` runs a `tauri::async_runtime::spawn` loop — once immediately on startup (so a window missed while the app was closed fires right away) and then every **30 minutes**. Due topics execute **sequentially** (each run performs multiple scrapes, so serialising keeps background work low-impact), and each completion emits `sthira://scheduled-topic-ready`. Wired into `main.rs` alongside `spawn_event_bridge`.
+- **Step 3: Desktop IPC Commands (`commands.rs`, registered in `lib.rs`):**
+  - `cmd_list_scheduled_topics(topic_type?) -> Result<Vec<ScheduledTopicView>, String>` — `ScheduledTopicView` carries resolved `project_name` and the `runs[]` history (each with its artifact title) for the UI.
+  - `cmd_create_scheduled_topic(topic: CreateScheduledTopicInput) -> Result<String, String>` — validates non-empty title/objective, defaults cadence to `daily`, active by default.
+  - `cmd_trigger_scheduled_topic_run(topic_id) -> Result<String, String>` — runs immediately, returns the created artifact id.
+  - `cmd_toggle_scheduled_topic_active(topic_id, is_active) -> Result<(), String>`.
+  - `cmd_delete_scheduled_topic(topic_id) -> Result<(), String>`.
+
+
+- **Step 4: UI Enhancements in the Right Mode Rail (`crates/sthira-desktop/ui`):**
+  1. **Sub-tab segmented control** added to both `ResearchPanel.tsx` and `PlanPanel.tsx`: `[ ⚡ Quick ]` ⟷ `[ ⏱️ Scheduled Topics ]`, preserving the existing on-the-fly streaming UI untouched on the Quick side. `RightModeRail` forwards `onOpenArtifact` into both panels (prop widened to accept `projectId?: string | null`).
+  2. **`components/ScheduledTopicsList.tsx`:**
+     - **Topic Creation Card** — title, detailed objective prompt, frequency selector (`Daily (Autonomous) | Weekly | Manual Only`), optional project dropdown, model-override dropdown (populated from the provider catalog), and `[ + Save Scheduled Topic ]` with a saving spinner.
+     - **Active Topics List** — Warm Stone cards (`#FAF8F3` container, `#FFFFFF` cards, `#E8E5DC` borders) showing title, objective summary, cadence badge, project chip and relative last-run time; `[ 🔄 Run Now ]` with a live spinner, an Active/Pause toggle, and delete.
+     - **Collapsible "Previous Digests / Reviews"** per topic listing past run artifacts with source counts; clicking a run opens the generated note directly in `FocusView`.
+     - Subscribes to `sthira://scheduled-topic-ready` (via the new `onScheduledTopicReady` bridge) so autonomous runs raise an in-panel toast and refresh the list.
+  - `types/sthira.ts` and `api/ipc.ts` extended with `ScheduledTopicView`, `ScheduledTopicRunView`, `CreateScheduledTopicInput`, `ScheduledTopicReadyEvent` and the five IPC wrappers.
+- **Robustness fix found during testing (affects production, not just tests):**
+  - The plan branch originally resolved the workspace default model through `providers_repo::get_default_model`, which falls back to *any enabled model* — the seeded Ollama entry. With Ollama not running, every autonomous plan run blocked for ~44s before degrading. Fixed by honouring the column's own contract (`model_id` = "Specific model override, or NULL for default"): the provider registry is now consulted **only when a topic explicitly sets an override**, otherwise the engine's configured model is used — exactly like the research branch. The synthesis call is additionally wrapped in a **90s bounded timeout** so a background job can never hang indefinitely. This took the plan-topic test from 44s to 0.03s.
+- **Step 5: Verification & Automated Tests:**
+  1. **Backend Integration Tests (`crates/sthira-core/tests/scheduled_topics_test.rs`): 6/6 PASSED.**
+     - `test_create_list_and_filter_topics_by_type` — create / list / filter `research` vs `plan`, round-trip a topic, status toggle, delete (and delete-again errors).
+     - `test_cadence_evaluation_flags_topics_older_than_24_hours` — the pure window logic (daily never-run/23h/25h, weekly 2d/8d, manual never due) **plus** scheduler-level `list_due_topics` enumeration, including that pausing removes a topic from the due set.
+     - `test_execute_research_topic_produces_grounded_digest_with_citations` — mock `SearchProvider` + mock LLM + pre-seeded `web_research_cache`: asserts the provider was queried, the digest title carries the ISO date, **`Authorship::External`**, grounded-evidence and citation sections contain the real source domain, the note is attached to the linked project, and the run row + `last_run_at` are recorded with `sources_scraped_count > 0`.
+     - `test_second_run_applies_continuity_boundary` — the first run leaves no boundary; its findings seed the boundary; the second run embeds `Previously Covered` + `Anti-duplication boundary applied` and the search planner receives the `CONTINUITY BOUNDARY` instruction.
+     - `test_execute_plan_topic_produces_plan_review` — plan review title/date, **`Authorship::AiGenerated`**, progress/blockers/next-phase sections, project attachment, run recorded, and an unscoped (no-project) review still works.
+     - `test_execute_unknown_topic_errors`.
+  2. **Frontend Vitest Suite (`crates/sthira-desktop/ui/src/test/scheduled_topics.test.tsx`): 5/5 PASSED.**
+     - Test 1 — `ResearchPanel` segmented control toggles Quick ⟷ Scheduled Topics (and the Quick editor unmounts/remounts).
+     - Test 2 — `PlanPanel` segmented control toggles, and requests `topicType: 'plan'`.
+     - Test 3 — submitting the creation card dispatches `cmd_create_scheduled_topic` with the correct payload, refreshes the list, renders the new card and resets the form.
+     - Test 4 — `[ Run Now ]` dispatches `cmd_trigger_scheduled_topic_run` and surfaces the generated artifact via `onOpenArtifact`.
+     - Test 5 — the Active/Pause toggle dispatches `cmd_toggle_scheduled_topic_active`, and expanding "Previous Digests" + clicking a run opens it in `FocusView`.
+  3. **Verification Gates:**
+     - Full Rust workspace test suite (`cargo test --workspace --no-fail-fast`): **96 passed, 0 failed** (exit 0), incl. new `scheduled_topics_test.rs`: 6/6.
+     - Full UI Vitest suite (`npm test`): **65/65 tests PASSED across all 14 test suites**.
+     - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
+
+## Phase 18.1: Wall-Clock Scheduling ("run every day at 06:00")
+- **Status:** PASSED (Verified via Rust Integration Tests, Vitest React Suite & Production Builds)
+- **Motivation:** Phase 18 topics only knew a *rolling interval* ("24h since the last run"), so a daily digest drifted to whatever time it happened to last fire — a 06:00 topic could end up running at 14:00. Users now pick an explicit time of day (and a weekday anchor for weekly topics).
+- **Step 1: Schema & Models (`crates/sthira-core`, schema version 8):**
+  - Two additive columns on `scheduled_topics`:
+    - `schedule_time_minutes INTEGER` — minutes since midnight (UTC), `0..=1439`, `CHECK`-constrained. `NULL` preserves the legacy rolling-interval behaviour, so **existing topics are unaffected by the migration**.
+    - `schedule_weekday INTEGER` — ISO weekday anchor `0=Monday .. 6=Sunday`, `CHECK`-constrained; `NULL` anchors on the weekday the topic was created.
+  - Migration block `user_version < 8` (two `ALTER TABLE ADD COLUMN`s); fresh databases go straight to `PRAGMA user_version = 8`.
+  - `models/scheduled_topics.rs` gained the pure, dependency-free time arithmetic: `format_hhmm`, `parse_hhmm`, `iso_weekday_of` (1970-01-01 was a Thursday, hence `(days + 3).rem_euclid(7)`), `most_recent_scheduled_instant`, `next_scheduled_instant`, plus `ScheduledTopic::is_due(now_ms)` / `ScheduledTopic::next_run_at(now_ms)`.
+- **Scheduling semantics (single implementation, shared by scheduler and tests):**
+  - **Wall-clock mode** (`schedule_time_minutes` set) — a topic is due for the *most recent occurrence* of its configured moment, but only when that occurrence is **after `created_at`** and **after `last_run_at`**. The `created_at` floor is deliberate: a topic created at 10:00 asking for `06:00` waits until tomorrow instead of firing immediately on creation.
+  - **Rolling mode** (`schedule_time_minutes` = `NULL`) — the Phase 18 behaviour (never-run ⇒ due, otherwise `now - last_run > interval`), retained for backward compatibility.
+  - `daily` uses today's (or yesterday's) occurrence; `weekly` uses the most recent configured weekday (falling back to the creation weekday).
+  - `manual` topics are never autonomously due and expose no next-run, even when a time is set. Paused topics are excluded.
+- **Step 2: IPC (`crates/sthira-desktop/src/commands.rs`):**
+  - `CreateScheduledTopicInput` gained `schedule_time: Option<String>` (`"HH:MM"`) and `schedule_weekday: Option<u8>`.
+  - `handle_create_scheduled_topic` validates the time via `parse_hhmm` (rejecting `24:00`, `12:60`, malformed input with a clear error) and range-checks the weekday.
+  - `ScheduledTopicView` gained `schedule_time` (`"HH:MM"`), `schedule_weekday`, `next_run_at` (server-computed) and a human `schedule_label` (`"Daily at 06:00 (UTC)"`, `"Weekly · Mon at 06:00 (UTC)"`, `"Manual only"`, `"Daily (rolling 24h)"`).
+- **Step 3: UI (`ScheduledTopicsList.tsx`):**
+  - Creation card: a `Run at (UTC)` `<input type="time">` (defaulting to `06:00`) plus an `On day` weekday selector that appears only for `weekly`. Both controls are hidden for `Manual Only`, and a `Fires: Every day at 06:00` hint summarises the choice for daily topics. The time is sent as `null` for manual topics.
+  - Topic cards now render the `schedule_label` (with a calendar-clock icon) and a compact `Next in 7h` countdown from `next_run_at` (new `formatUntil` helper).
+- **Known limitation (documented, not hidden):** times are evaluated in **UTC**, consistent with the existing `format_date_utc` digest-title convention. The engine clock is a UTC epoch with no tz database available, so local-time scheduling requires a tz-offset setting; the column and helpers are structured so adding one is a presentation-layer change.
+- **Step 4: Verification & Automated Tests:**
+  1. **Backend (`crates/sthira-core/tests/scheduled_topics_test.rs`): 11/11 PASSED** (5 new wall-clock tests).
+     - `test_daily_wall_clock_scheduling_fires_at_configured_time` — not due at 05:30, due at 06:00, still due later that day if it never ran, **not** re-fired the same day after running, fires again at 06:00 the next day, and a topic created at 10:00 for `06:00` correctly waits until tomorrow. Also asserts `next_run_at`.
+     - `test_weekly_wall_clock_scheduling_anchors_on_weekday` — the computed instant lands on a Monday, weekly topics don't re-fire within the same week, the next run is always a Monday, and a `NULL` weekday anchors on the creation weekday.
+     - `test_hhmm_parsing_and_formatting_roundtrip` — valid parses, out-of-range rejections (`24:00`, `12:60`, `12`), and format/parse round-trips.
+     - `test_manual_and_paused_topics_ignore_wall_clock_time` — manual topics never due and no next run; paused topics excluded from `list_due_topics`.
+     - `test_wall_clock_topic_runs_end_to_end_and_stamps_last_run` — a 06:00 topic created yesterday is enumerated as due, executes end-to-end, stamps `last_run_at`, and is no longer due afterwards.
+  2. **Frontend (`crates/sthira-desktop/ui/src/test/scheduled_topics.test.tsx`): 8/8 PASSED** (3 new).
+     - Test 6 — the time picker shows for daily/weekly (with the weekday selector only for weekly) and disappears for manual.
+     - Test 7 — the selected `schedule_time: '07:30'` and `schedule_weekday: 2` are dispatched inside `cmd_create_scheduled_topic`.
+     - Test 8 — the topic card renders `Daily at 06:00 (UTC)` and the `Next in …` countdown.
+  3. **Verification Gates:**
+     - Full Rust workspace test suite (`cargo test --workspace --no-fail-fast`): **101 passed, 0 failed** (exit 0), incl. `scheduled_topics_test.rs`: 11/11.
+     - Full UI Vitest suite (`npm test`): **68/68 tests PASSED across all 14 test suites**.
+     - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
+
+
+---
+
+## Phase 19: Autonomous Research in the Center Workspace
+
+**Goal:** Research results must open as a **new artifact in the center `FocusView`** (never trapped in the Right Mode Rail), and web search must be fully **autonomous and query-based** — no URL input — surfaced through a `[ 🌐 Web Search ]` mode pill and a live progress banner.
+
+### Step 1: Core pipeline — real stage streaming + numbered citations (`crates/sthira-core/src/engines/research_engine.rs`)
+
+- **`format_date_utc` hoisted to the crate root** (`crates/sthira-core/src/lib.rs`) via Hinnant's `civil_from_days`, so the scheduled-digest titles and the research pipeline share one date implementation. `scheduled_runner.rs` now delegates to `crate::format_date_utc`.
+- **`WebSearchMode { LocalVaultOnly, Auto, AlwaysSearch }`** with `from_str_lossy` / `as_str`. Unknown values fail safe to `Auto`.
+- **`ResearchStage { stage, message }`** and **`ResearchSource { index, url, domain, title, favicon_url }`**; `WebResearchResult` extended with `mode_used`, `stages` and `sources`.
+- **Real-time stage emission (not post-hoc).** `execute_multi_query_research` takes `on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>` and pushes each stage at the *true* moment it runs: `searching` → `scraped` → `synthesizing` → `done`. `execute_research` wraps the caller's callback so the live `searching` banner already reads `Searching web for "…" via {provider}…` as it is emitted.
+- **Numbered citation index.** A single `sources: Vec<ResearchSource>` backs every `[Source N]` marker; findings map URL → index through a lookup closure. The markdown body now emits `## Synthesis`, `## Contradictions & Evolution`, `## Grounded Web Evidence & Verified Findings` (with `[Source N]` + favicon), `## Sources`, epistemic hypotheses and open questions.
+- **`synthesize_with_temporal_grounding(...)`** injects the exact instruction `"Today is {date}. Use the retrieved web context for current specifications, versions, and benchmarks. If the retrieved context contradicts older conventions, explicitly flag the difference…"`, wrapped in a **90s bounded timeout** with a deterministic evidence-only fallback that never fabricates a contradiction list.
+- **Local-vault evidence path.** `inquiry_keywords`, `keyword_hits`, `search_local_vault(engine, inquiry, limit)` (LIKE on the top-3 keywords, re-ranked in Rust — no FTS5 exists in this schema) and `execute_local_vault_research(...)`, which grounds quotes through the **same** `VerifiedQuote::verify` contract against local artifacts (`sthira://artifact/{id}`), so vault-sourced and web-sourced findings are epistemically comparable.
+- **Mode-aware dispatcher `execute_research(engine, inquiry, mode, provider, provider_label, limit_docs, on_stage)`.** `Auto` escalates to the web when vault coverage < 2 hits; `Auto`/`AlwaysSearch` **degrade to the vault** (with a stage message) when no provider is configured rather than failing the run.
+
+
+
+### Step 2: IPC — create the page, then fill it (`crates/sthira-desktop/src/commands.rs`)
+
+- **`cmd_create_research_page(query, project_id) -> String`** creates a draft artifact titled `Research: <Query>` with `Authorship::External` (Phase 10 convention — web-derived research is `External`, which is what lets grounded quotes reach `Provenance::SourceBacked`), forces `is_unfinished_draft = 1`, and optionally attaches it to a project. It returns the id **immediately** so the UI can navigate before any slow work starts.
+- **`cmd_run_research_into_page(artifact_id, query, web_search_mode, on_progress: Channel<ResearchStage>)`** resolves the default `SearchProvider`, forwards every real stage over the Tauri `Channel`, writes `synthesized_markdown` into the existing artifact, clears `is_unfinished_draft`, and emits `CoreEvent::ArtifactChanged`. **No URL parameter exists anywhere in this signature.**
+- Both registered in `crates/sthira-desktop/src/lib.rs`.
+
+### Step 3: Frontend — center navigation, live banner, mode pill
+
+- **`types/sthira.ts`**: `WebSearchMode`, `ResearchStage`, `ResearchSource`, `ResearchRunState`, `ScrapedWebDocument`. `WebResearchResult` / `WebResearchFinding` were **re-aligned to the actual Rust contract** — they previously mirrored a browser mock (`original_prompt`, `generated_queries`, `provider_used`, `finding.url`, `markdown_excerpt`), which would have rendered `undefined` against the real backend.
+- **`api/ipc.ts`**: `createResearchPage(query, projectId)` and `runResearchIntoPage(artifactId, query, mode, onStage)` using a Tauri `Channel` (camelCase + snake_case arg keys, matching the existing `cmd_stream_adaptive_run` convention), plus a browser-preview fallback that replays the same stage narrative.
+- **`App.tsx` — `handleStartResearch(query, mode, projectId)`** is now the single research entry point: create page → `setActiveArtifactId` → `setCurrentView('focus')` **immediately** → stream stages into `researchRun` → on completion bump `refreshToken` and reload state. It returns the result so the rail can still render the citation list alongside. A `researchRun` prop is passed to `FocusView`.
+- **`FocusView.tsx`**: a live progress banner mounted at the top of the center document canvas (`data-testid="research-progress-banner"`), showing the mode, the streaming message and the inquiry, with a spinner while running, a verified shield on completion, an error state, and a dismiss button. A `refreshToken` effect reloads the body so the grounded document replaces the draft placeholder.
+- **`RightModeRail.tsx`**: the legacy `Inquiry or URL to Investigate` label and the binary `🌐 Include Web Search` toggle were **removed** and replaced by a plain prompt (`What should Sthira research?`) plus a 3-way `[ 🌐 Web Search: … ▾ ]` pill (`Local Vault Only` / `Auto` / `Always Search Web`). Submitting calls `onStartResearch`, and the fabricated hardcoded `claims` / `openQuestions` arrays were deleted in favour of real grounded findings.
+- **`ResearchPanel.tsx`**: carries its own `[ 🌐 Web Search ]` pill and a `Research in Workspace` action that routes through `onStartResearch` (distinct `panel-*` testids, since the panel and the rail form render together).
+- The `/research` slash command in `FocusView` already streams inline into the center editor, so it needed no change.
+
+### Step 4: Verification & Automated Tests
+
+1. **Backend (`crates/sthira-core/tests/research_engine_test.rs`): 6/6 PASSED** (new file, offline `MockSearchProvider` + seeded scrape cache).
+   - `test_query_without_url_drives_autonomous_search_and_grounded_citations` — a bare question (asserted to contain no `http`) drives the provider; the provider is only ever handed model-generated queries; stages arrive **live and in order** (`searching`/`scraped`/`synthesizing`) with the provider name and source count; the document carries `[Source 1]`, a `## Sources` index, real URLs, favicons, the fake-clock date and the `## Contradictions & Evolution` block.
+   - `test_local_vault_only_never_calls_the_search_provider` — provider call count is exactly 0; `## Local Vault Evidence` is emitted with `sthira://artifact/{id}` sources.
+   - `test_auto_mode_escalates_only_when_vault_coverage_is_thin` — covered vault stays local (0 provider calls); a thin vault escalates.
+   - `test_missing_provider_degrades_to_vault_without_failing` — degrades with a stage notice instead of erroring.
+   - `test_web_search_mode_parsing_and_keyword_extraction` and `test_local_vault_search_ranks_by_keyword_overlap`.
+2. **Frontend (`crates/sthira-desktop/ui/src/test/research_center_workspace.test.tsx`): 3/3 PASSED** (new file).
+   - Creates a page, navigates to `FocusView`, and asserts the banner is inside the **center** canvas (`closest('.max-w-4xl')`) rather than the rail; drives the stage stream by hand and asserts each message appears live; asserts completion flips the banner, exposes dismiss, and loads the grounded `## Synthesis` / `[Source 1]` body into the center editor.
+   - Asserts the selected pill mode (`always_search`) is forwarded to the pipeline.
+   - Asserts the `ResearchPanel` pill routes into the center workspace.
+3. **Updated:** `search_providers_and_rail.test.tsx` (pill replaces the toggle, submits via `onStartResearch`) and `scheduled_topics_test.rs` (`## Sources` / `[Source N]` / temporal-grounding assertions after the markdown restructure).
+4. **Verification Gates:**
+   - Full Rust workspace (`cargo test --workspace --no-fail-fast`): **107 passed, 0 failed** (exit 0), verified across three consecutive runs.
+   - Full UI Vitest suite (`npm test`): **71/71 tests PASSED across all 15 test suites**.
+   - `npx tsc --noEmit`: 0 errors. Production bundle build (`npm run build`): 0 TypeScript errors, 0 Vite errors.
+
+### Deviations & notes (flagged, not hidden)
+
+- **`Authorship::ExternalSource` does not exist.** The enum is `User | AiGenerated | External`; this phase uses `Authorship::External`, consistent with Phase 10 and `docs/plan.md`.
+- **The progress log lives at `docs/PROGRESS_LOG.md`**, not `.agent_state/PROGRESS_LOG.md` — that path does not exist in this repository.
+- **Pre-existing UI/backend contract drift was fixed as part of this phase.** The TS `WebResearchResult` mirrored a browser mock rather than the Rust response, so real Tauri builds would have shown blank citations. This is now aligned and covered by tests.
+- **`vitest.config.ts` gained `testTimeout: 20000`.** With 15 suites each spinning up an independent jsdom environment in parallel, full-`App` tests intermittently exceeded the 5s default and flaked (observed in the pre-existing `interactive_ui` and `deletion_and_graph` suites, both unrelated to research). The added headroom makes the suite deterministic — verified green across three consecutive full runs.
+
+
+
+---
+
+## Phase 20: Right-Rail Elimination — Center-Workspace Streaming & Scheduled Feeds View
+
+**Goal:** Eliminate the persistent Right Rail drawer. All research, planning and synthesis must stream and display directly inside the full-width center document editor (`FocusView.tsx`). Move Scheduled Topics to a dedicated view reachable from the Left Sidebar.
+
+### Step 1: Removed the persistent Right Mode Rail
+
+- **Deleted `RightModeRail.tsx`, `ResearchPanel.tsx` and `PlanPanel.tsx`** outright (and their now-orphaned `activeDocumentContent` state in `App.tsx`).
+- **`App.tsx`**: the rail JSX is gone. The center container is now `flex-1 h-full min-w-0 ... bg-[#FAF8F3]` and carries `data-testid="center-workspace"`, so it takes **all** available width between the Left Sidebar and the window border with no reserved right-hand margin.
+- **Deviation (flagged):** the container keeps its view-aware overflow (`currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'`) rather than a blanket `overflow-hidden`. `HomeView` and `WorkspaceIndexView` rely on the parent `<main>` for scrolling, so forcing `overflow-hidden` would have made those views unscrollable. Width/`flex-1` is what the requirement targeted and that is fully satisfied.
+
+### Step 2: Research & Plan now route straight into the center workspace
+
+- **`DocumentRunState`** (new, in `types/sthira.ts`) generalises the Phase 19 `ResearchRunState` to cover both generators: `kind: 'research' | 'plan'`, `message`, and `streamedMarkdown` for live token streaming. `ResearchRunState` remains as a deprecated alias.
+- **`App.tsx`** now owns `documentRun` and exposes two entry points:
+  - `handleStartResearch(query, mode, projectId)` — calls `cmd_create_research_page`, sets `activeArtifactId`, switches `currentView` to `'focus'` **before** any slow work, then streams the pipeline's real stages into the banner.
+  - `handleStartPlan(goal, projectId)` — calls `cmd_create_page` with title `Plan: <Goal>`, navigates immediately, writes a draft body, then calls `streamAdaptiveRun` and accumulates `text_token` chunks into `documentRun.streamedMarkdown` so tokens render live in the page, finally persisting the finished plan with `saveArtifact`.
+- **`UniversalInputBar.tsx`**: gained `onStartResearch` / `onStartPlan`. Pressing **Enter** in `Research` or `Plan` mode now navigates straight to the workspace — there is no intermediate `[Research in Workspace]` confirmation step (that button lived in the deleted `ResearchPanel`). The legacy `createPage`+`saveArtifact` path is retained as a fallback only when no center-workspace handler is wired, which keeps the existing `UniversalInputBar` unit tests valid.
+- **`HomeView.tsx`** threads both handlers down to the input bar.
+- **`FocusView.tsx`**: the banner was generalised to `data-testid="document-run-banner"` / `document-run-message` with `data-run-kind`, showing `Planning` (Sparkles) or `Web Search` / `Local Vault Research` (Globe), the live indicator, the inquiry/goal, and a dismiss control. A new `data-testid="document-live-stream"` block renders accumulated `streamedMarkdown` **inside the center document canvas** while a `plan` run is still generating.
+
+
+### Step 3: Scheduled & Continuous Topics relocated to the Left Sidebar
+
+- **New `views/ScheduledTopicsView.tsx`** — a full-width center-workspace dashboard with a header, then two sections (`data-testid="scheduled-section-research"` and `scheduled-section-plan`), each wrapping a `ScheduledTopicsList` instance. That component already owns the add-feed form, the cadence selector, the `Run at (UTC)` time picker, the weekday selector, the active/paused toggles and the previous-run digests that link into `FocusView`.
+- **`LeftSidebar.tsx`**: added a `⏱️ Scheduled Feeds` navigation item directly beneath `All Files` (and a matching icon in the collapsed rail), with a new `onNavigateScheduledTopics` prop and `data-testid="nav-scheduled-feeds"` / `nav-scheduled-feeds-collapsed`.
+- **`App.tsx`**: `currentView` union gained `'scheduled_topics'`; `handleNavigateScheduledTopics` clears the active artifact/object and renders `<ScheduledTopicsView />` inside the center workspace.
+
+### Step 4: Verification & Automated Tests
+
+1. **Frontend (`crates/sthira-desktop/ui/src/test/research_center_workspace.test.tsx`): 4/4 PASSED.**
+   - **Research from the Universal Input Bar** — pressing Enter in `Research` mode calls `cmd_create_research_page`, `activeView` transitions to the workspace, the artifact is loaded, the run banner is `data-run-kind="research"`, and it is asserted to live **inside** `[data-testid="center-workspace"]` and inside the center document canvas (`closest('.max-w-4xl')`). Stages are driven by hand and each message is asserted live; completion flips the banner and loads the grounded `## Synthesis` / `[Source 1]` body into the editor.
+   - **Plan mode** — asserts `cmd_create_page` was called with title `Plan: <Goal>`, the banner is `data-run-kind="plan"`, pushed `text_token` chunks render live in `document-live-stream` **inside the center canvas**, and the finished plan is persisted via `saveArtifact`.
+   - **Structural / no drawer** — asserts the center workspace has `flex-1` and `min-w-0`, carries **no** `mr-*`/`pr-*` right-rail margin, is the *immediate* next sibling of the sidebar (`sidebar.nextElementSibling === center`), and has nothing drawer-like (`ASIDE`) rendered after it. Also asserts the removed rail's surfaces (`research-query-input`, `web-search-mode-pill`, `panel-web-search-mode-pill`) no longer exist anywhere in the shell.
+   - **Scheduled Feeds navigation** — clicking `nav-scheduled-feeds` renders both feed sections inside the full-width center workspace.
+2. **Updated:**
+   - `scheduled_topics.test.tsx` — the two `ResearchPanel`/`PlanPanel` segmented-control tests were replaced with tests asserting `ScheduledTopicsView` renders both research and plan feeds and queries both topic types (`cmd_list_scheduled_topics` with `topicType: 'research'` and `'plan'`). The remaining `ScheduledTopicsList` tests are unchanged.
+   - `search_providers_and_rail.test.tsx` — the `RightModeRail` test was removed along with the component; the Phase 10 Web Search Providers test is unchanged.
+3. **Two genuine test-harness gaps fixed (removes all unhandled-error noise):**
+   - `universal_input_modes.test.tsx` mocked `@tauri-apps/api/core` with only `invoke`, but `streamAdaptiveRun` constructs a Tauri `Channel` — added the missing `Channel` stub.
+   - `ScheduledTopicsList` subscribes via `onScheduledTopicReady`, which calls the real `listen()`. Because `setup.ts` makes `isTauri` truthy, that rejected as an **unhandled rejection** under jsdom. Stubbed `onScheduledTopicReady` in both suites that mount the dashboard.
+4. **Verification Gates:**
+   - `cargo test --workspace --no-fail-fast`: **107 passed, 0 failed** (no Rust changes this phase; confirms no regression).
+   - `npm test` (Vitest): **71/71 tests PASSED across all 15 test suites, 0 unhandled errors**.
+   - `npx tsc --noEmit`: 0 errors. `npm run build`: 0 TypeScript errors, 0 Vite errors.
+
+### Deviations & notes (flagged, not hidden)
+
+- **`cmd_create_artifact` does not exist in the backend.** Plan drafts are created with the existing `cmd_create_page` (surfaced as `createPage`), which is the equivalent draft-creation command; research uses `cmd_create_research_page`. Both satisfy the requirement to initialise a draft artifact titled `Research: <Query>` / `Plan: <Query>`.
+- **Center-container overflow is view-aware, not a blanket `overflow-hidden`** — see Step 1. Home and All Files depend on the parent container for scrolling.
+- **`ResearchRunState` was kept as a deprecated type alias** to `DocumentRunState` so any external call sites continue to type-check.
+- The `HomeView` empty-state "Research"/"Plan something" links still open the guided `InteractiveFlowModal`. That is a distinct guided modal (not a side drawer) and was left untouched; the requirement about Enter-to-navigate applies to query submission and is fully satisfied.
+
+## Phase 21: Unified "Explore & Plan" Hub (`ExplorePlanView`)
+- **Status:** PASSED (Verification Gates Passed: Vitest 76/76, cargo test 107/107, npm run build 0 errors)
+
+### Step 1: Sidebar Renaming & Routing
+- Renamed the Left Sidebar navigation entry from `Scheduled Feeds` to `🧭 Explore & Plan` (`data-testid="nav-explore-plan"`), retaining `data-testid="nav-scheduled-feeds"` as an alias for full backward compatibility with earlier test suites.
+- Added `onNavigateExplorePlan` prop to `LeftSidebar.tsx` and updated collapsed and expanded button triggers.
+- Extended `currentView` in `LeftSidebar.tsx` and `App.tsx` with `'explore_plan'`.
+- Routed `handleNavigateExplorePlan` to render `<ExplorePlanView />` in the center workspace.
+
+### Step 2: Tabbed Workspace Implementation (`ExplorePlanView.tsx`)
+- Created `crates/sthira-desktop/ui/src/views/ExplorePlanView.tsx` with top segmented tabs matching `WorkspaceIndexView` (`All Files` design):
+  1. **Tab 1: `[ 🔍 Research ]`**:
+     - Full-width input card ("What would you like to research?") with `Auto` / `Enabled` / `Local Vault Only` Web Search mode toggle, model selector pill, project attachment selector, and `[ 🔍 Start Research ]` button.
+     - Submitting creates the research page and immediately navigates/streams into `FocusView` in the center workspace.
+     - "Recent Research" list (last 3 items) with `View all research notes →` button that switches to the `All Digests` tab filtered by research type.
+  2. **Tab 2: `[ 📋 Plan ]`**:
+     - Full-width planning input card ("What project, feature, or milestone set are we planning?") with model selector pill and project selector.
+     - Submitting creates the plan artifact and streams milestone synthesis into `FocusView`.
+     - "Recent Plans" list with `View all plans →` button that switches to the `All Digests` tab filtered by plan type.
+  3. **Tab 3: `[ ⏱️ Trackers ]`**:
+     - Badge displaying count of active recurring topics (`data-testid="badge-active-trackers"`).
+     - Wide grid of active and background trackers (`data-testid="trackers-grid"`), organized into Research and Plan sections (`data-testid="scheduled-section-research"` and `scheduled-section-plan`).
+     - Actions on each card: `[ 🔄 Run Now ]` (`cmd_trigger_scheduled_topic_run`), `[ ⏸️ Pause ]` / `[ ▶️ Resume ]` (`cmd_toggle_scheduled_topic_active`), and `[ 🗑️ Delete ]` (`cmd_delete_scheduled_topic`).
+     - `[ + New Tracker ]` button opening a modal to configure a recurring topic (title, prompt, daily/weekly frequency with time and weekday, project attachment).
+  4. **Tab 4: `[ 📚 All Digests ]`**:
+     - Filterable table of all generated artifacts where `artifact_type IN ('research', 'plan')`:
+       - Columns: `Title`, `Type` (Research badge / Plan badge), `Project` chip, `Date Generated`, and `•••` action menu (`PageActionMenu`).
+       - Search filter bar at the top to quickly find past research topics.
+       - Type filter pills (`All`, `Research`, `Plan`).
+       - Clicking any row opens that note in `FocusView`.
+
+### Step 3: Verification & Automated Tests
+- **Vitest (`crates/sthira-desktop/ui/src/test/explore_plan_view.test.tsx`): 5/5 PASSED.**
+  - Navigating to `Explore & Plan` and switching across all 4 tabs (`Research`, `Plan`, `Trackers`, `All Digests`).
+  - Clicking `View all research notes →` switches to the `All Digests` tab filtered by research type.
+  - `Trackers` tab renders existing topics and triggers `cmd_trigger_scheduled_topic_run`.
+  - Submitting research inquiry triggers `onStartResearch` and opens in `FocusView`.
+  - New Tracker modal opens and dispatches `cmd_create_scheduled_topic`.
+- **All 16 Vitest test suites: 76/76 tests PASSED (0 failures, 0 regressions).**
+- **`cargo test --workspace`: 107/107 tests PASSED.**
+- **`npm run build`: 0 TypeScript errors, 0 Vite errors.**
+

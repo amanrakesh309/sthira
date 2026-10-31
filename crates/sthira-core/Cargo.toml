@@ -63,6 +63,14 @@ name = "objects_test"
 path = "tests/objects_test.rs"
 
 [[test]]
+name = "scheduled_topics_test"
+path = "tests/scheduled_topics_test.rs"
+
+[[test]]
+name = "research_engine_test"
+path = "tests/research_engine_test.rs"
+
+[[test]]
 name = "live_llm_integration"
 path = "tests/live_llm_integration.rs"
 

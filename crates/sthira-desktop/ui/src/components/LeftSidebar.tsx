@@ -19,7 +19,6 @@ import {
   Pin,
   Copy,
   Edit3,
-  FolderPlus,
   Settings2,
 } from 'lucide-react';
 import {
@@ -28,8 +27,6 @@ import {
   createProject,
   listObjectTypes,
   getObjectTypeCounts,
-  deleteArtifact,
-  duplicateArtifact,
   duplicateProject,
   renameProject,
   renameArtifact,
@@ -38,6 +35,7 @@ import {
 } from '../api/ipc';
 import { ProjectDeletionModal } from './ProjectDeletionModal';
 import { AddToProjectModal } from './AddToProjectModal';
+import { PageActionMenu } from './PageActionMenu';
 import { ThemeToggle } from './ThemeToggle';
 import type {
   WorkspaceTree,
@@ -51,10 +49,22 @@ interface LeftSidebarProps {
   activeArtifactId?: string | null;
   activeCanvasId?: string | null;
   activeObjectTypeId?: string | null;
-  currentView: 'home' | 'focus' | 'canvas' | 'objects' | 'graph' | 'workspace_index';
+  currentView:
+    | 'home'
+    | 'focus'
+    | 'canvas'
+    | 'objects'
+    | 'graph'
+    | 'workspace_index'
+    | 'scheduled_topics'
+    | 'explore_plan';
   onNavigateHome: () => void;
   onNavigateGraph: () => void;
   onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
+  /** Opens the Explore & Plan tabbed workspace in the center workspace. */
+  onNavigateExplorePlan?: () => void;
+  /** Backward-compatible alias for onNavigateExplorePlan. */
+  onNavigateScheduledTopics?: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenArtifact: (artifactId: string, projectId?: string | null) => void;
   onOpenCanvas: (canvasId?: string, projectId?: string) => void;
@@ -81,6 +91,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onNavigateHome,
   onNavigateGraph,
   onNavigateWorkspaceIndex,
+  onNavigateExplorePlan,
+  onNavigateScheduledTopics,
   onOpenProject,
   onOpenArtifact,
   onOpenCanvas,
@@ -283,18 +295,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     }
   };
 
-  const handleDuplicateNoteAction = async (artId: string, projId?: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setOpenMenuId(null);
-    try {
-      const copy = await duplicateArtifact(artId, projId || null);
-      await loadTree();
-      onOpenArtifact(copy.id, projId);
-    } catch (err) {
-      console.error('Failed to duplicate note', err);
-    }
-  };
-
   const handleCreateProjectSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim() || isSubmittingProject) return;
@@ -456,6 +456,26 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           >
             <span className="text-sm">📁</span>
           </button>
+
+          {/* Explore & Plan Trigger */}
+          <button
+            type="button"
+            data-testid="nav-explore-plan-collapsed"
+            onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
+            title="🧭 Explore & Plan"
+            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+              currentView === 'explore_plan' || currentView === 'scheduled_topics'
+                ? 'bg-[#282C25] dark:bg-[#2C3026] text-white font-semibold'
+                : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F]'
+            }`}
+          >
+            <span className="text-sm">🧭</span>
+          </button>
+          <span
+            data-testid="nav-scheduled-feeds-collapsed"
+            className="hidden"
+            onClick={() => (onNavigateScheduledTopics ? onNavigateScheduledTopics() : onNavigateExplorePlan?.())}
+          />
         </div>
 
         {/* Bottom controls */}
@@ -581,6 +601,27 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <span className="text-xs">📁</span>
           <span>All Files</span>
         </button>
+
+        <button
+          type="button"
+          data-testid="nav-explore-plan"
+          onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
+          title="🧭 Explore & Plan — unified research, planning, trackers, and digests"
+          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border ${
+            currentView === 'explore_plan' || currentView === 'scheduled_topics'
+              ? 'bg-[#282C25] dark:bg-[#2C3026] text-white border-[#282C25] dark:border-[#3E4334] font-semibold shadow-xs'
+              : 'bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white border-[#E8E5DC]/80 dark:border-[#2C2E27]'
+          }`}
+        >
+          <span className="text-xs">🧭</span>
+          <span>Explore &amp; Plan</span>
+        </button>
+        {/* Backward-compatibility alias for tests referencing nav-scheduled-feeds */}
+        <span
+          data-testid="nav-scheduled-feeds"
+          className="hidden"
+          onClick={() => (onNavigateScheduledTopics ? onNavigateScheduledTopics() : onNavigateExplorePlan?.())}
+        />
       </div>
 
       {/* Tree Navigation Scroll Container */}
@@ -903,85 +944,34 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                                   <Pin className={`w-3 h-3 ${isPagePinned ? 'rotate-45' : ''}`} />
                                 </button>
 
-                                {/* 3-dots page menu button */}
-                                <button
-                                  type="button"
-                                  data-testid={`btn-page-menu-${page.id}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuId(openMenuId === `page-${page.id}` ? null : `page-${page.id}`);
+                                {/* Phase 17: unified Page Action Menu (Link / Move / Create / Detach / Duplicate / Convert / Copy / Delete) */}
+                                <span className="opacity-0 group-hover/page:opacity-100 focus-within:opacity-100 transition-opacity">
+                                  <PageActionMenu
+                                  variant="row"
+                                  align="right"
+                                  triggerTestId={`btn-page-menu-${page.id}`}
+                                  artifactId={page.id}
+                                  artifactTitle={page.title || 'Untitled note'}
+                                  projectId={proj.id}
+                                  onRename={() =>
+                                    startInlineRename(page.id, page.title || 'Untitled note', 'artifact')
+                                  }
+                                  onLinkProjectRequested={() =>
+                                    setAddToProjectTarget({
+                                      id: page.id,
+                                      title: page.title || 'Untitled Note',
+                                    })
+                                  }
+                                  onChanged={async () => {
+                                    await loadTree();
                                   }}
-                                  title="Page settings"
-                                  className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-opacity cursor-pointer"
-                                >
-                                  <MoreHorizontal className="w-3 h-3" />
-                                </button>
-
-                                {/* Page 3-Dots Popup Menu */}
-                                {openMenuId === `page-${page.id}` && (
-                                  <div className="absolute right-0 top-5 z-50 w-44 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-xl py-1 text-xs animate-in fade-in duration-100">
-                                    <button
-                                      type="button"
-                                      data-testid={`btn-pin-page-${page.id}`}
-                                      onClick={(e) => handleTogglePin(page.id, 'note', isPagePinned, e)}
-                                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#22241F] text-left text-[#3A3B36] dark:text-[#D4D1C7] cursor-pointer"
-                                    >
-                                      <Pin className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
-                                      <span>{isPagePinned ? 'Unpin Note' : 'Pin Note'}</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      data-testid={`btn-duplicate-page-${page.id}`}
-                                      onClick={(e) => handleDuplicateNoteAction(page.id, proj.id, e)}
-                                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                                    >
-                                      <Copy className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                                      <span>Duplicate</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      data-testid={`btn-add-to-project-page-${page.id}`}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setOpenMenuId(null);
-                                        setAddToProjectTarget({ id: page.id, title: page.title || 'Untitled Note' });
-                                      }}
-                                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                                    >
-                                      <FolderPlus className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                                      <span>Add to Project...</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      data-testid={`btn-rename-page-${page.id}`}
-                                      onClick={(e) => startInlineRename(page.id, page.title || 'Untitled note', 'artifact', e)}
-                                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                                      <span>Rename</span>
-                                    </button>
-                                    <div className="h-px bg-[#E8E5DC] dark:bg-[#2C2E27] my-1" />
-                                    <button
-                                      type="button"
-                                      data-testid={`btn-delete-page-${page.id}`}
-                                      onClick={async (e) => {
-                                        e.stopPropagation();
-                                        setOpenMenuId(null);
-                                        try {
-                                          await deleteArtifact(page.id, proj.id);
-                                          await loadTree();
-                                          if (activeArtifactId === page.id) onNavigateHome();
-                                        } catch (err) {
-                                          console.error('Failed to delete note', err);
-                                        }
-                                      }}
-                                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400 text-left cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                      <span>Delete Note</span>
-                                    </button>
-                                  </div>
-                                )}
+                                  onOpenArtifact={(id, pid) => onOpenArtifact(id, pid ?? null)}
+                                  onDeleted={async () => {
+                                    await loadTree();
+                                    if (activeArtifactId === page.id) onNavigateHome();
+                                  }}
+                                  />
+                                </span>
                               </div>
                             </div>
                           );
@@ -1118,84 +1108,32 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       >
                         <Pin className={`w-3 h-3 ${isPinned ? 'rotate-45' : ''}`} />
                       </button>
+                      {/* Phase 17: unified Page Action Menu (hover-revealed) */}
+                      <span className="opacity-0 group-hover/note:opacity-100 focus-within:opacity-100 transition-opacity">
+                        <PageActionMenu
+                          variant="row"
+                          align="right"
+                          triggerTestId={`btn-loose-page-menu-${note.id}`}
+                          artifactId={note.id}
+                          artifactTitle={note.title || 'Untitled note'}
+                          projectId={null}
+                          onLinkProjectRequested={() =>
+                            setAddToProjectTarget({
+                              id: note.id,
+                              title: note.title || 'Untitled Note',
+                            })
+                          }
+                          onChanged={async () => {
+                            await loadTree();
+                          }}
+                          onOpenArtifact={(id, pid) => onOpenArtifact(id, pid ?? null)}
+                          onDeleted={async () => {
+                            await loadTree();
+                            if (activeArtifactId === note.id) onNavigateHome();
+                          }}
+                        />
+                      </span>
 
-                      <button
-                        type="button"
-                        data-testid={`btn-loose-page-menu-${note.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId(openMenuId === `note-${note.id}` ? null : `note-${note.id}`);
-                        }}
-                        title="Note settings"
-                        className="opacity-0 group-hover/note:opacity-100 p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-opacity cursor-pointer"
-                      >
-                        <MoreHorizontal className="w-3 h-3" />
-                      </button>
-
-                      {/* Note 3-Dots Popup Menu */}
-                      {openMenuId === `note-${note.id}` && (
-                        <div className="absolute right-0 top-5 z-50 w-44 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-xl py-1 text-xs animate-in fade-in duration-100">
-                          <button
-                            type="button"
-                            data-testid={`btn-pin-loose-page-${note.id}`}
-                            onClick={(e) => handleTogglePin(note.id, 'note', isPinned, e)}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#22241F] text-left text-[#3A3B36] dark:text-[#D4D1C7] cursor-pointer"
-                          >
-                            <Pin className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
-                            <span>{isPinned ? 'Unpin Note' : 'Pin Note'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            data-testid={`btn-duplicate-loose-page-${note.id}`}
-                            onClick={(e) => handleDuplicateNoteAction(note.id, note.project_id || undefined, e)}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                          >
-                            <Copy className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                            <span>Duplicate</span>
-                          </button>
-                          <button
-                            type="button"
-                            data-testid={`btn-add-to-project-loose-page-${note.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenMenuId(null);
-                              setAddToProjectTarget({ id: note.id, title: note.title || 'Untitled Note' });
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                          >
-                            <FolderPlus className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                            <span>Add to Project...</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => startInlineRename(note.id, note.title || 'Untitled Note', 'artifact', e)}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
-                            <span>Rename</span>
-                          </button>
-                          <div className="h-px bg-[#E8E5DC] dark:bg-[#2C2E27] my-1" />
-                          <button
-                            type="button"
-                            data-testid={`btn-delete-loose-page-${note.id}`}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              setOpenMenuId(null);
-                              try {
-                                await deleteArtifact(note.id, note.project_id || undefined);
-                                await loadTree();
-                                if (activeArtifactId === note.id) onNavigateHome();
-                              } catch (err) {
-                                console.error('Failed to delete note', err);
-                              }
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400 text-left cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Delete Note</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   </div>
                 );

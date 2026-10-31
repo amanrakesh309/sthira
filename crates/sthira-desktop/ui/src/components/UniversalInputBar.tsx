@@ -28,6 +28,8 @@ import type {
   PlanProposedAction,
   RouterPlan,
   ProjectCardView,
+  WebSearchMode,
+  WebResearchResult,
 } from '../types/sthira';
 
 interface UniversalInputBarProps {
@@ -37,6 +39,21 @@ interface UniversalInputBarProps {
   onOpenFlow?: (mode: 'research' | 'plan' | 'capture', initialPrompt?: string) => void;
   onOpenSettings?: () => void;
   projects?: ProjectCardView[];
+  /**
+   * Phase 20: runs an autonomous research pipeline that streams directly into a new
+   * page in the full-width center workspace. When provided, `Research` mode submits
+   * through this instead of the legacy inline/flow path.
+   */
+  onStartResearch?: (
+    query: string,
+    mode: WebSearchMode,
+    projectId?: string | null
+  ) => Promise<WebResearchResult | null>;
+  /**
+   * Phase 20: creates a `Plan: <Goal>` draft and streams LLM tokens into the center
+   * workspace document editor.
+   */
+  onStartPlan?: (goal: string, projectId?: string | null) => Promise<string | null>;
 }
 
 export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
@@ -46,6 +63,8 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
   onOpenFlow,
   onOpenSettings,
   projects = [],
+  onStartResearch,
+  onStartPlan,
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [currentMode, setCurrentMode] = useState<OperationalMode>('capture');
@@ -198,6 +217,20 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         if (onOpenArtifact) {
           onOpenArtifact(newArt.id, null);
         }
+      } else if (modeToRun === 'research' && onStartResearch) {
+        // Phase 20: Research streams the autonomous pipeline straight into a new page in
+        // the full-width center workspace. Pressing Enter navigates immediately — there is
+        // no intermediate "[Research in Workspace]" confirmation step.
+        setStatusMsg('Researching...');
+        setInputVal('');
+        await onStartResearch(trimmed, 'auto', null);
+        if (onRefresh) onRefresh();
+      } else if (modeToRun === 'plan' && onStartPlan) {
+        // Phase 20: Plan creates a `Plan: <Goal>` draft and streams tokens into it.
+        setStatusMsg('Planning...');
+        setInputVal('');
+        await onStartPlan(trimmed, null);
+        if (onRefresh) onRefresh();
       } else if (modeToRun === 'plan' || modeToRun === 'research' || modeToRun === 'act') {
         const title = trimmed.replace(/^#*\s*/, '').trim();
         const cleanTitle = title.length > 60 ? `${title.slice(0, 60)}...` : title;

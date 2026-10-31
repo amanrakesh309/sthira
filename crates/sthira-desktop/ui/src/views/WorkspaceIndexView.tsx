@@ -19,6 +19,7 @@ import {
   getWorkspaceTree,
   listObjectTypes,
 } from '../api/ipc';
+import { PageActionMenu } from '../components/PageActionMenu';
 import type {
   WorkspaceIndexData,
   WorkspaceIndexItem,
@@ -580,6 +581,25 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
                         {formatDate(item.updated_at)}
                       </span>
 
+                      {/* Phase 17: Page Action Menu (quick Link / Duplicate / Delete from the dashboard) */}
+                      <PageActionMenu
+                        variant="row"
+                        align="right"
+                        artifactId={item.id}
+                        artifactTitle={item.title}
+                        projectId={item.project_id ?? null}
+                        onChanged={() => loadData()}
+                        onOpenArtifact={(id, pid) => onOpenArtifact(id, pid ?? null)}
+                        onProjectCreated={(newProjectId) => {
+                          loadData();
+                          onOpenProject(newProjectId);
+                        }}
+                        onDeleted={() => {
+                          loadData();
+                          onWorkspaceMutated?.();
+                        }}
+                      />
+
                       {/* Pin Button */}
                       <button
                         type="button"
@@ -765,6 +785,27 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
                         <span className="text-[11px] text-[#8C8A82] dark:text-[#7A786F] w-20 text-right">
                           {formatDate(item.updated_at)}
                         </span>
+
+                        {/* Phase 17: Page Action Menu for note rows in the unified list */}
+                        {!isProj && (
+                          <PageActionMenu
+                            variant="row"
+                            align="right"
+                            artifactId={item.id}
+                            artifactTitle={item.title}
+                            projectId={item.project_id ?? null}
+                            onChanged={() => loadData()}
+                            onOpenArtifact={(id, pid) => onOpenArtifact(id, pid ?? null)}
+                            onProjectCreated={(newProjectId) => {
+                              loadData();
+                              onOpenProject(newProjectId);
+                            }}
+                            onDeleted={() => {
+                              loadData();
+                              onWorkspaceMutated?.();
+                            }}
+                          />
+                        )}
 
                         {/* Pin Button */}
                         <button
