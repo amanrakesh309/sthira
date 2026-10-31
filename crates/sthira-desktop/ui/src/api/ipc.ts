@@ -35,6 +35,8 @@ import type {
   CreateScheduledTopicInput,
   WebSearchMode,
   ResearchStage,
+  ModelView,
+  WebSearchCapability,
 } from '../types/sthira';
 
 // Check if running inside Tauri runtime
@@ -571,6 +573,7 @@ export async function getProviderCatalog(): Promise<ProviderEntry[]> {
           supports_structured_output: true,
           is_enabled: true,
           is_default: true,
+          web_search_capability: 'engine_augmented_only',
         },
       ],
     },
@@ -591,6 +594,7 @@ export async function getProviderCatalog(): Promise<ProviderEntry[]> {
           supports_structured_output: true,
           is_enabled: true,
           is_default: false,
+          web_search_capability: 'agentic_tool_call',
         },
       ],
     },
@@ -611,10 +615,53 @@ export async function getProviderCatalog(): Promise<ProviderEntry[]> {
           supports_structured_output: true,
           is_enabled: true,
           is_default: false,
+          web_search_capability: 'agentic_tool_call',
         },
       ],
     },
   ];
+}
+
+export async function listAvailableModels(): Promise<ModelView[]> {
+  if (isTauri) {
+    return await invoke<ModelView[]>('cmd_list_available_models');
+  }
+  const catalog = await getProviderCatalog();
+  const models: ModelView[] = [];
+  for (const p of catalog) {
+    if (p.is_enabled) {
+      for (const m of p.models) {
+        if (m.is_enabled) {
+          models.push({
+            id: m.id,
+            provider_id: p.id,
+            provider_name: p.display_name,
+            provider_type: p.provider_type,
+            model_identifier: m.model_identifier,
+            display_name: m.display_name,
+            context_window: m.context_window,
+            supports_structured_output: m.supports_structured_output,
+            is_enabled: m.is_enabled,
+            is_default: m.is_default,
+            web_search_capability: m.web_search_capability || 'engine_augmented_only',
+          });
+        }
+      }
+    }
+  }
+  return models;
+}
+
+export async function updateModelSearchCapability(
+  modelId: string,
+  capability: WebSearchCapability
+): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_update_model_search_capability', {
+      modelId,
+      capability,
+    });
+  }
 }
 
 export async function saveProvider(entry: ProviderEntry, apiKey?: string): Promise<void> {
@@ -1959,5 +2006,48 @@ export async function runResearchIntoPage(
     stages: [],
     sources: [],
   };
+}
+
+export async function refineArtifact(
+  artifactId: string,
+  critique: string,
+  modelId?: string | null,
+  webSearch: boolean = false
+): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_refine_artifact', {
+      artifactId,
+      artifact_id: artifactId,
+      critique,
+      modelId: modelId || null,
+      model_id: modelId || null,
+      webSearch,
+      web_search: webSearch,
+    });
+  }
+
+  return `# Refined Note\n\n> Critique: ${critique}\n\nEnhanced synthesis in preview mode.`;
+}
+
+export async function deriveArtifact(
+  sourceArtifactId: string,
+  derivationType: string,
+  templateId?: string | null,
+  modelId?: string | null
+): Promise<string> {
+  if (isTauri) {
+    return await invoke<string>('cmd_derive_artifact', {
+      sourceArtifactId,
+      source_artifact_id: sourceArtifactId,
+      derivationType,
+      derivation_type: derivationType,
+      templateId: templateId || null,
+      template_id: templateId || null,
+      modelId: modelId || null,
+      model_id: modelId || null,
+    });
+  }
+
+  return 'derived-preview-art-' + Date.now();
 }
 

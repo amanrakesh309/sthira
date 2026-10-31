@@ -97,6 +97,7 @@ pub async fn discover_local_ollama_models(
             let clean_name = raw_tag.replace(":latest", "");
             let display_name = format!("{}{}", clean_name, param_suffix);
 
+            let cap = crate::llm::models::default_web_search_capability("ollama", &raw_tag);
             result.push(ProviderModelEntry {
                 id: format!("ollama:{}", raw_tag),
                 provider_id: "ollama".to_string(),
@@ -106,6 +107,7 @@ pub async fn discover_local_ollama_models(
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
+                web_search_capability: cap,
             });
         }
     }
@@ -164,6 +166,7 @@ pub async fn discover_provider_models(
             if let Some(items) = parsed.data {
                 for item in items {
                     let disp = item.display_name.unwrap_or_else(|| item.id.clone());
+                    let cap = crate::llm::models::default_web_search_capability("anthropic", &item.id);
                     result.push(ProviderModelEntry {
                         id: format!("{provider_id}:{}", item.id),
                         provider_id: provider_id.to_string(),
@@ -173,6 +176,7 @@ pub async fn discover_provider_models(
                         supports_structured_output: true,
                         is_enabled: true,
                         is_default: false,
+                        web_search_capability: cap,
                     });
                 }
             }
@@ -237,6 +241,7 @@ pub async fn discover_provider_models(
             for item in items {
                 let ctx = item.context_length.or(item.context_window).unwrap_or(128000);
                 let disp = item.name.unwrap_or_else(|| item.id.clone());
+                let cap = crate::llm::models::default_web_search_capability(provider_type, &item.id);
                 result.push(ProviderModelEntry {
                     id: format!("{provider_id}:{}", item.id),
                     provider_id: provider_id.to_string(),
@@ -246,6 +251,7 @@ pub async fn discover_provider_models(
                     supports_structured_output: true,
                     is_enabled: true,
                     is_default: false,
+                    web_search_capability: cap,
                 });
             }
             Ok(result)

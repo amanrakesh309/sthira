@@ -155,6 +155,10 @@ pub struct Artifact {
     pub deleted_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub derived_from_artifact_id: Option<String>,
+    #[serde(default)]
+    pub derivation_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -473,6 +477,8 @@ impl Engine {
             deleted_at: None,
             created_at: now_ms,
             updated_at: now_ms,
+            derived_from_artifact_id: None,
+            derivation_type: None,
         };
 
         // Write file to vault disk
@@ -499,7 +505,7 @@ impl Engine {
         let reader = self.db.reader()?;
         reader
             .query_row(
-                "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at
+                "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at, derived_from_artifact_id, derivation_type
                  FROM artifacts WHERE id = ?1;",
                 params![id],
                 |r| {
@@ -528,6 +534,8 @@ impl Engine {
                         deleted_at: r.get(11)?,
                         created_at: r.get(12)?,
                         updated_at: r.get(13)?,
+                        derived_from_artifact_id: r.get(14)?,
+                        derivation_type: r.get(15)?,
                     })
                 },
             )
@@ -537,6 +545,106 @@ impl Engine {
                 }
                 other => CoreError::Db(other),
             })
+    }
+
+    pub fn create_derived_artifact(
+        &self,
+        artifact_type: ArtifactType,
+        authorship: Authorship,
+        title: Option<&str>,
+        body: &str,
+        source_url: Option<&str>,
+        derived_from_artifact_id: Option<&str>,
+        derivation_type: Option<&str>,
+    ) -> Result<Artifact, CoreError> {
+        let now_ms = self.clock.now_ms();
+        let artifact_id = uuid::Uuid::new_v4().to_string();
+        let normalized_body = vault::normalize_content(body);
+        let content_hash = vault::compute_content_hash(&normalized_body);
+        let file_path = format!("{}.md", artifact_id);
+
+        let type_str = match artifact_type {
+            ArtifactType::Note => "note",
+            ArtifactType::Source => "source",
+            ArtifactType::Snippet => "snippet",
+        };
+        let auth_str = match authorship {
+            Authorship::User => "user",
+            Authorship::AiGenerated => "ai_generated",
+            Authorship::External => "external",
+        };
+
+        let is_unfinished = epistemic::is_mid_sentence(&normalized_body);
+        let draft_val = if is_unfinished { 1 } else { 0 };
+
+        let writer = self.db.writer();
+        writer.execute(
+            "INSERT INTO artifacts (id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, derived_from_artifact_id, derivation_type, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?7, ?9, ?10, ?11, ?12, ?12);",
+            params![
+                artifact_id,
+                type_str,
+                auth_str,
+                title,
+                normalized_body,
+                source_url,
+                content_hash,
+                file_path,
+                draft_val,
+                derived_from_artifact_id,
+                derivation_type,
+                now_ms,
+            ],
+        )?;
+
+        let rev_id = uuid::Uuid::new_v4().to_string();
+        writer.execute(
+            "INSERT INTO artifact_revisions (id, artifact_id, version, content_md, content_hash, actor, created_at)
+             VALUES (?1, ?2, 1, ?3, ?4, 'ai', ?5);",
+            params![rev_id, artifact_id, normalized_body, content_hash, now_ms],
+        )?;
+
+        let artifact = Artifact {
+            id: artifact_id.clone(),
+            artifact_type,
+            authorship,
+            title: title.map(|s| s.to_string()),
+            content_md: normalized_body.clone(),
+            source_url: source_url.map(|s| s.to_string()),
+            content_hash,
+            version: 1,
+            file_path: Some(file_path),
+            last_synced_hash: None,
+            is_unfinished_draft: is_unfinished,
+            deleted_at: None,
+            created_at: now_ms,
+            updated_at: now_ms,
+            derived_from_artifact_id: derived_from_artifact_id.map(|s| s.to_string()),
+            derivation_type: derivation_type.map(|s| s.to_string()),
+        };
+
+        // Write file to vault disk
+        let full_path = self.vault_dir.join(artifact.file_path.as_ref().unwrap());
+        let rendered = vault::render_file_with_frontmatter(&artifact);
+        let _ = std::fs::write(&full_path, rendered);
+
+        self.log_event_tx(
+            &writer,
+            None,
+            Some(&artifact_id),
+            Actor::Ai,
+            EventType::ArtifactCreated,
+            Materiality::Substantive,
+            serde_json::json!({
+                "title": title,
+                "derived_from": derived_from_artifact_id,
+                "derivation_type": derivation_type
+            }),
+            None,
+            now_ms,
+        )?;
+
+        Ok(artifact)
     }
 
     pub fn attach_artifact(

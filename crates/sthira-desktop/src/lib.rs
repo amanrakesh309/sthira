@@ -34,6 +34,8 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_synthesize_and_create_research,
         commands::cmd_answer_question,
         commands::cmd_get_provider_catalog,
+        commands::cmd_list_available_models,
+        commands::cmd_update_model_search_capability,
         commands::cmd_save_provider,
         commands::cmd_discover_ollama_models,
         commands::cmd_discover_provider_models,
@@ -88,6 +90,8 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_trigger_scheduled_topic_run,
         commands::cmd_toggle_scheduled_topic_active,
         commands::cmd_delete_scheduled_topic,
+        commands::cmd_refine_artifact,
+        commands::cmd_derive_artifact,
     ])
 }
 

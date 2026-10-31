@@ -514,3 +514,150 @@ async fn test_strict_relevance_filter_rejects_unrelated_vault_notes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// 10. Web search capability detection & default assignment
+// ---------------------------------------------------------------------------
+#[test]
+fn test_default_web_search_capability_mapping() {
+    use sthira_core::llm::models::{default_web_search_capability, WebSearchCapability};
+
+    // Small local Ollama models -> EngineAugmentedOnly
+    assert_eq!(
+        default_web_search_capability("ollama", "llama3.2:latest"),
+        WebSearchCapability::EngineAugmentedOnly
+    );
+    assert_eq!(
+        default_web_search_capability("ollama", "phi3:mini"),
+        WebSearchCapability::EngineAugmentedOnly
+    );
+
+    // Cloud frontier & tool-capable models -> AgenticToolCall
+    assert_eq!(
+        default_web_search_capability("openai_compatible", "gpt-oss:120b"),
+        WebSearchCapability::AgenticToolCall
+    );
+    assert_eq!(
+        default_web_search_capability("openai_compatible", "gemma4:31b-cloud"),
+        WebSearchCapability::AgenticToolCall
+    );
+    assert_eq!(
+        default_web_search_capability("anthropic", "claude-3-7-sonnet"),
+        WebSearchCapability::AgenticToolCall
+    );
+    assert_eq!(
+        default_web_search_capability("openrouter", "meta-llama/llama-3.3-70b-instruct"),
+        WebSearchCapability::AgenticToolCall
+    );
+
+    // Native search providers -> Native
+    assert_eq!(
+        default_web_search_capability("perplexity", "sonar-pro"),
+        WebSearchCapability::Native
+    );
+
+    // Non-generative / embeddings / offline -> Unsupported
+    assert_eq!(
+        default_web_search_capability("ollama", "bge-m3:latest"),
+        WebSearchCapability::Unsupported
+    );
+    assert_eq!(
+        default_web_search_capability("openai", "text-embedding-3-small"),
+        WebSearchCapability::Unsupported
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11. Research engine properly routes based on WebSearchCapability
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn test_research_engine_inspects_capability_and_injects_scraped_chunks() {
+    use sthira_core::engines::research_engine::execute_research_with_capability;
+    use sthira_core::llm::models::WebSearchCapability;
+
+    let (_tmp, engine) = setup();
+    let provider = MockSearchProvider::new();
+
+    let stages_recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stages_clone = stages_recorded.clone();
+    let recorder = move |stage: ResearchStage| {
+        stages_clone.lock().unwrap().push(stage);
+    };
+
+    // Case 1: EngineAugmentedOnly
+    let result = execute_research_with_capability(
+        &engine,
+        "Distributed KV storage benchmarks",
+        WebSearchMode::AlwaysSearch,
+        Some(&provider),
+        "SearXNG",
+        2,
+        Some(WebSearchCapability::EngineAugmentedOnly),
+        Some(&recorder),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.search_status, "web_search_success");
+    assert_eq!(result.external_sources_count, 2);
+    assert!(stages_recorded.lock().unwrap().iter().any(|s| s.message.contains("Querying and injecting scraped web context via SearXNG")));
+
+    // Case 2: Unsupported model disables web search even if requested
+    stages_recorded.lock().unwrap().clear();
+    let unsupp_result = execute_research_with_capability(
+        &engine,
+        "Distributed KV storage benchmarks",
+        WebSearchMode::AlwaysSearch,
+        Some(&provider),
+        "SearXNG",
+        2,
+        Some(WebSearchCapability::Unsupported),
+        Some(&recorder),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(unsupp_result.search_status, "unsupported_model");
+    assert_eq!(unsupp_result.external_sources_count, 0);
+    assert_eq!(unsupp_result.mode_used, WebSearchMode::LocalVaultOnly);
+    assert!(stages_recorded.lock().unwrap().iter().any(|s| s.message.contains("Selected model does not support web search grounding")));
+}
+
+// ---------------------------------------------------------------------------
+// 12. Model capability persistence & manual update
+// ---------------------------------------------------------------------------
+#[test]
+fn test_update_model_search_capability_updates_db() {
+    use sthira_core::db::providers_repo;
+    use sthira_core::llm::models::WebSearchCapability;
+    use sthira_core::models::router::ProviderModelEntry;
+
+    let (_tmp, engine) = setup();
+    let writer = engine.db().writer();
+
+    let model = ProviderModelEntry {
+        id: "ollama:llama3.2".to_string(),
+        provider_id: "ollama".to_string(),
+        model_identifier: "llama3.2:latest".to_string(),
+        display_name: "Llama 3.2 (3B)".to_string(),
+        context_window: 131072,
+        supports_structured_output: true,
+        is_enabled: true,
+        is_default: true,
+        web_search_capability: WebSearchCapability::EngineAugmentedOnly,
+    };
+    providers_repo::upsert_model(&writer, &model, 1000).unwrap();
+
+    let reader = engine.db().reader().unwrap();
+    let (fetched, _, _) = providers_repo::get_model_entry(&reader, "ollama:llama3.2").unwrap().unwrap();
+    assert_eq!(fetched.web_search_capability, WebSearchCapability::EngineAugmentedOnly);
+    drop(reader);
+
+    // Update to AgenticToolCall
+    providers_repo::update_model_search_capability(&writer, "ollama:llama3.2", WebSearchCapability::AgenticToolCall).unwrap();
+
+    let reader2 = engine.db().reader().unwrap();
+    let (updated, _, _) = providers_repo::get_model_entry(&reader2, "ollama:llama3.2").unwrap().unwrap();
+    assert_eq!(updated.web_search_capability, WebSearchCapability::AgenticToolCall);
+}
+
+

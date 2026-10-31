@@ -936,4 +936,122 @@
   - `npx vitest run`: 16/16 test files passed, 76/76 tests PASSED.
   - `npm run build`: 0 TypeScript errors, 0 Vite errors.
 
+---
+
+## Phase 23: Explicit Web Search Capability Detection & Badging
+- **Status:** PASSED (Verification Gates Passed: Vitest 17/17 files, 80/80 tests; Cargo 108/108 tests; TypeScript/Vite 0 errors)
+
+### Step 1: Model Capabilities Schema (`crates/sthira-core`)
+- Created `WebSearchCapability` enum in `crates/sthira-core/src/llm/models.rs`:
+  - `Native`: Provider has built-in web grounding (e.g., Perplexity Sonar).
+  - `AgenticToolCall`: Supports function calling for SearXNG / Brave tools (e.g. Claude 3.7, GPT-OSS 120b, Gemma 4 31b).
+  - `EngineAugmentedOnly`: Scraped text injected into context by Sthira Rust backend (e.g. local Ollama Llama 3.2, Phi-3).
+  - `Unsupported`: Offline / embedding / non-generative models where search is forbidden (e.g. BGE-M3, nomic-embed).
+- Added `web_search_capability` to `ProviderModelEntry` and default capability detection heuristics in `default_web_search_capability`.
+- Database schema migration (PRAGMA user_version = 9): added `web_search_capability` column to `provider_models` and updated `v_active_models`.
+- Updated `providers_repo` to persist and load `web_search_capability` and added `update_model_search_capability`.
+- Updated `research_engine.rs` to inspect model capability before execution:
+  - `EngineAugmentedOnly`: Rust backend runs search & scrape first, injecting top markdown chunks directly into the prompt.
+  - `AgenticToolCall`: supplies active web search tool definition.
+  - `Unsupported`: strictly synthesizes from local context with `search_status = "unsupported_model"`.
+
+### Step 2: Desktop IPC Surface (`crates/sthira-desktop`)
+- Added `ModelView` struct exposing `web_search_capability`.
+- Implemented `handle_list_available_models` / `cmd_list_available_models` returning models with capability badging metadata.
+- Implemented `handle_update_model_search_capability` / `cmd_update_model_search_capability` allowing manual adjustment in Settings.
+- Registered commands in Tauri IPC handler table in `lib.rs`.
+
+### Step 3: Desktop UI Badging & Tooltips (`crates/sthira-desktop/ui`)
+- Created `ModelSelector.tsx` and `WebSearchCapabilityBadge`:
+  - `Native`: `[🌐 Native Search]` in soft cyan (`text-cyan-700 bg-cyan-50 border-cyan-200`).
+  - `AgenticToolCall`: `[🌐 Web Search Ready]` in soft emerald (`text-emerald-700 bg-emerald-50 border-emerald-200`).
+  - `EngineAugmentedOnly`: `[📄 Web Context Injected]` in muted sand (`text-[#7D7A70] bg-[#F4F1EA] border-[#E2DED4]`).
+  - `Unsupported`: `[🚫 Offline Only]` in muted stone (`text-stone-500 bg-stone-100 border-stone-200`).
+- Integrated into `ExplorePlanView.tsx`:
+  - Replaced native selects with `ModelSelector` for Research and Plan tabs.
+  - Next to `[ 🌐 Web Search ]` toggle: when model is `EngineAugmentedOnly`, renders quiet hint icon with tooltip: *"Sthira will automatically query SearXNG/Brave and inject scraped web pages into this model's prompt."*
+  - When model is `Unsupported`: disables web search toggle with tooltip and displays `(Offline only)` hint.
+- Integrated into `UniversalInputBar.tsx`:
+  - Added capability badges to the active model chip and provider dropdown options.
+  - Added `[ 🌐 Web Search ]` toggle with quiet hint for `EngineAugmentedOnly` and disabled offline state for `Unsupported`.
+- Integrated into `ModelSettingsModal.tsx`:
+  - Added **Web Search Support** column displaying capability pill and interactive dropdown to manually switch any model's tier.
+
+### Step 4: Verification & Automated Tests
+- **Backend Tests:**
+  - `crates/sthira-core/tests/research_engine_test.rs`: `test_default_web_search_capability_mapping`, `test_research_engine_inspects_capability_and_injects_scraped_chunks`, `test_update_model_search_capability_updates_db` (12/12 PASSED).
+  - `crates/sthira-desktop/tests/model_capabilities_test.rs`: `test_list_available_models_and_update_capability` (1/1 PASSED).
+  - `cargo test --workspace`: 108/108 PASSED (0 failures).
+- **Frontend Vitest Suite:**
+  - `crates/sthira-desktop/ui/src/test/model_selector_capabilities.test.tsx`: 5/5 PASSED.
+  - All 17 Vitest test suites: 80/80 tests PASSED (0 failures, 0 regressions).
+  - `npm run build`: 0 TypeScript errors, 0 Vite errors.
+
+---
+
+## Phase 24: Targeted Re-Research & Note Derivation (Chained Synthesis)
+- **Status:** PASSED (Verification Gates Passed: Vitest 18/18 files, 84/84 tests; Cargo 110/110 tests; TypeScript/Vite 0 errors)
+
+### Step 1: Database Lineage Schema (`crates/sthira-core`)
+- Database migration (PRAGMA user_version = 10):
+  - Added lineage tracking columns to `artifacts`:
+    - `derived_from_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL`
+    - `derivation_type TEXT` (`'refine'`, `'plan_from_research'`, `'extract_ideas'`, `'extract_tasks'`)
+  - Added index `idx_artifacts_lineage` on `artifacts(derived_from_artifact_id)`.
+- Updated `crates/sthira-core/src/db/schema.sql` and `crates/sthira-core/src/db/migrations.rs`.
+- Extended `Artifact` struct with `derived_from_artifact_id` and `derivation_type`.
+- Added `create_derived_artifact` method on `Engine`.
+
+### Step 2: Refinement & Derivation Engine (`crates/sthira-core`)
+- In `crates/sthira-core/src/engines/research_engine.rs`:
+  - `refine_artifact(artifact_id, critique_prompt, model_override, enable_web_search) -> Result<String, String>`:
+    - Fetches current artifact `content_md`.
+    - Gathers optional live web search evidence if `enable_web_search` is true.
+    - Constructs contextual prompt elevating the artifact against critique while preserving verified facts.
+    - Captures a snapshot `ChangeSet` (`restore_artifact` operation) before updating to allow 1-click undo.
+    - Updates artifact in SQLite and disk vault, logs `ArtifactChanged` and `ChangeSetApplied`.
+  - `derive_artifact(source_artifact_id, target_derivation_type, target_template_id, model_override) -> Result<String, String>`:
+    - Uses source note as authoritative context.
+    - Synthesizes milestone plans (`plan_from_research`), discrete ideas (`extract_ideas`), or checklist action items (`extract_tasks`).
+    - Creates a new artifact in SQLite with `derived_from_artifact_id` referencing the source note and sets `derivation_type`.
+    - Preserves project attachment if source artifact belonged to an active project.
+
+### Step 3: Desktop IPC Commands (`crates/sthira-desktop`)
+- Added `derived_from_title` to `ArtifactContext` and populated parent artifact title in `handle_get_artifact_context`.
+- Exposed and registered Tauri commands in `commands.rs` and `lib.rs`:
+  - `cmd_refine_artifact` / `handle_refine_artifact`
+  - `cmd_derive_artifact` / `handle_derive_artifact`
+
+### Step 4: UI Actions in `FocusView.tsx` (`crates/sthira-desktop/ui`)
+- Toolbar Actions:
+  - Added `[ 🔄 Refine ]` button (`data-testid="btn-refine-artifact"`) opening `RefineArtifactModal`.
+  - Added `[ ⚡ Derive ▾ ]` dropdown menu (`data-testid="btn-derive-menu"`):
+    - `📋 Derive Execution Plan` (`data-testid="btn-derive-plan"`)
+    - `💡 Extract Discrete Ideas` (`data-testid="btn-derive-ideas"`)
+    - `☑️ Extract Action Checklist` (`data-testid="btn-derive-tasks"`)
+    - Clicking any option generates the derived note and navigates immediately.
+- `RefineArtifactModal.tsx`:
+  - Critique textarea with prompt placeholder.
+  - Model selector dropdown (`ModelSelector`) for switching synthesis model.
+  - Toggle: `[ 🌐 Search Web for New Evidence ]`.
+  - Submit button: `[ 🔄 Run Refinement ]`.
+- Lineage Header Chip:
+  - If opened note has `derived_from_artifact_id`, renders badge directly above the title:
+    `🔗 Derived from: [Parent Artifact Title]` (`data-testid="badge-lineage-derived-from"`).
+  - Clicking badge navigates directly to the parent note.
+
+### Step 5: Verification & Automated Tests
+- **Backend Tests (`crates/sthira-desktop/tests/chained_synthesis_test.rs`):**
+  - `test_refine_artifact_updates_content_and_creates_reversible_changeset` (PASSED).
+  - `test_derive_artifact_creates_new_note_with_lineage_foreign_key` (PASSED).
+  - All workspace tests (`cargo test --workspace`): 110/110 PASSED.
+- **Frontend Vitest Suite (`crates/sthira-desktop/ui/src/test/chained_synthesis.test.tsx`):**
+  - Test A: Clicking `[Refine]` opens modal, allows critique input, web search toggle, and dispatches refinement (PASSED).
+  - Test B: Clicking Derive menu and selecting execution plan triggers `deriveArtifact` and navigates to new note (PASSED).
+  - Test C: Derived artifact renders parent lineage badge above document title and navigates on click (PASSED).
+  - All 18 Vitest suites: 84/84 tests PASSED (0 errors, 0 regressions).
+- **TypeScript & Vite Build (`crates/sthira-desktop/ui`):**
+  - `npm run build`: 0 errors.
+
+
 

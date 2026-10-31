@@ -168,6 +168,8 @@ pub struct ArtifactContext {
     pub pending_proposals: Vec<ProposalView>,
     pub project_id: Option<String>,
     pub is_unfinished_draft: bool,
+    #[serde(default)]
+    pub derived_from_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -655,12 +657,27 @@ pub fn handle_get_artifact_context(
         .filter_map(|r| r.ok())
         .collect();
 
+    let derived_from_title: Option<String> = if let Some(ref parent_id) = art.derived_from_artifact_id {
+        reader
+            .query_row(
+                "SELECT title FROM artifacts WHERE id = ?1;",
+                params![parent_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten()
+            .or_else(|| Some("Untitled Note".to_string()))
+    } else {
+        None
+    };
+
     Ok(ArtifactContext {
         is_unfinished_draft: art.is_unfinished_draft,
         artifact: art,
         epistemic_nodes: nodes,
         pending_proposals: proposals,
         project_id,
+        derived_from_title,
     })
 }
 
@@ -1495,8 +1512,76 @@ use sthira_core::{
     db::providers_repo,
     engines::router_engine::RouteOutcome,
     llm::autodiscover::{discover_local_ollama_models, discover_provider_models, sync_discovered_models},
+    llm::models::WebSearchCapability,
     models::router::{PlanProposedAction, ProviderEntry, ProviderModelEntry},
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelView {
+    pub id: String,
+    pub provider_id: String,
+    pub provider_name: String,
+    pub provider_type: String,
+    pub model_identifier: String,
+    pub display_name: String,
+    pub context_window: u32,
+    pub supports_structured_output: bool,
+    pub is_enabled: bool,
+    pub is_default: bool,
+    pub web_search_capability: WebSearchCapability,
+}
+
+pub fn handle_list_available_models(engine: &Engine) -> Result<Vec<ModelView>, String> {
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+    let providers = providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
+    let mut views = Vec::new();
+    for p in providers {
+        if p.is_enabled {
+            for m in p.models {
+                if m.is_enabled {
+                    views.push(ModelView {
+                        id: m.id,
+                        provider_id: p.id.clone(),
+                        provider_name: p.display_name.clone(),
+                        provider_type: p.provider_type.clone(),
+                        model_identifier: m.model_identifier,
+                        display_name: m.display_name,
+                        context_window: m.context_window,
+                        supports_structured_output: m.supports_structured_output,
+                        is_enabled: m.is_enabled,
+                        is_default: m.is_default,
+                        web_search_capability: m.web_search_capability,
+                    });
+                }
+            }
+        }
+    }
+    Ok(views)
+}
+
+#[tauri::command]
+pub fn cmd_list_available_models(state: State<'_, AppState>) -> Result<Vec<ModelView>, String> {
+    handle_list_available_models(&state.engine)
+}
+
+pub fn handle_update_model_search_capability(
+    engine: &Engine,
+    model_id: String,
+    capability: WebSearchCapability,
+) -> Result<(), String> {
+    let writer = engine.db().writer();
+    providers_repo::update_model_search_capability(&writer, &model_id, capability)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_update_model_search_capability(
+    model_id: String,
+    capability: WebSearchCapability,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    handle_update_model_search_capability(&state.engine, model_id, capability)
+}
 
 pub fn handle_get_provider_catalog(engine: &Engine) -> Result<Vec<ProviderEntry>, String> {
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
@@ -4285,4 +4370,63 @@ pub fn cmd_delete_scheduled_topic(
 ) -> Result<(), String> {
     handle_delete_scheduled_topic(&state.engine, topic_id)
 }
+
+pub async fn handle_refine_artifact(
+    engine: &Engine,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+) -> Result<String, String> {
+    engine
+        .refine_artifact(&artifact_id, &critique, model_id.as_deref(), web_search)
+        .await
+}
+
+#[tauri::command]
+pub async fn cmd_refine_artifact(
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_refine_artifact(&state.engine, artifact_id, critique, model_id, web_search).await
+}
+
+pub async fn handle_derive_artifact(
+    engine: &Engine,
+    source_artifact_id: String,
+    derivation_type: String,
+    template_id: Option<String>,
+    model_id: Option<String>,
+) -> Result<String, String> {
+    engine
+        .derive_artifact(
+            &source_artifact_id,
+            &derivation_type,
+            template_id.as_deref(),
+            model_id.as_deref(),
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn cmd_derive_artifact(
+    source_artifact_id: String,
+    derivation_type: String,
+    template_id: Option<String>,
+    model_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    handle_derive_artifact(
+        &state.engine,
+        source_artifact_id,
+        derivation_type,
+        template_id,
+        model_id,
+    )
+    .await
+}
+
 

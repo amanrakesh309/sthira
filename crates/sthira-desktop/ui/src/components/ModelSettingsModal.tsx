@@ -29,13 +29,21 @@ import {
   deleteProvider,
   setDefaultModel,
   toggleModel,
+  updateModelSearchCapability,
   clearVaultData,
   seedDemoWorkspace,
   getSearchProviders,
   saveSearchProvider,
   testSearchProvider,
 } from '../api/ipc';
-import type { ProviderEntry, ProviderModelEntry, SearchProviderEntry, WebSearchResultItem } from '../types/sthira';
+import type {
+  ProviderEntry,
+  ProviderModelEntry,
+  SearchProviderEntry,
+  WebSearchResultItem,
+  WebSearchCapability,
+} from '../types/sthira';
+import { WebSearchCapabilityBadge } from './ModelSelector';
 
 interface ModelSettingsModalProps {
   isOpen: boolean;
@@ -499,6 +507,24 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
       setErrorNotice(`Failed to toggle model: ${err?.message || err}`);
+    }
+  };
+
+  const handleUpdateCapability = async (modelId: string, capability: WebSearchCapability) => {
+    try {
+      await updateModelSearchCapability(modelId, capability);
+      setProviders((prev) =>
+        prev.map((prov) => ({
+          ...prov,
+          models: prov.models.map((m) =>
+            m.id === modelId ? { ...m, web_search_capability: capability } : m
+          ),
+        }))
+      );
+      if (onCatalogChanged) onCatalogChanged();
+      setNotice(`Updated web search support to ${capability}`);
+    } catch (err: any) {
+      setErrorNotice(`Failed to update capability: ${err?.message || err}`);
     }
   };
 
@@ -1006,6 +1032,9 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                     <div className="pt-2 border-t border-[#ECE9E0] space-y-2">
                       <div className="flex items-center justify-between text-[11px] font-bold text-[#3A3B36] uppercase tracking-wider">
                         <span>Available Models ({provider.models.length})</span>
+                        <span className="text-[10px] text-[#8C8A82] font-normal hidden sm:inline">
+                          Model • Web Search Support • Status
+                        </span>
                       </div>
 
                       {provider.models.length === 0 ? (
@@ -1057,7 +1086,35 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-2.5 shrink-0">
+                                {/* Web Search Support Column & Dropdown */}
+                                <div
+                                  className="flex items-center gap-1.5"
+                                  title="Web search execution capability for this model"
+                                >
+                                  <span className="text-[10px] text-[#6E6D66] font-medium hidden md:inline">
+                                    Search:
+                                  </span>
+                                  <select
+                                    value={m.web_search_capability || 'engine_augmented_only'}
+                                    onChange={(e) =>
+                                      handleUpdateCapability(
+                                        m.id,
+                                        e.target.value as WebSearchCapability
+                                      )
+                                    }
+                                    className="text-[10px] py-1 px-1.5 rounded-md border border-[#E8E5DC] bg-[#FAF8F5] text-[#1E201C] cursor-pointer outline-none font-medium"
+                                    data-testid={`select-capability-${m.id}`}
+                                    aria-label={`Web Search Support for ${m.display_name}`}
+                                  >
+                                    <option value="agentic_tool_call">Tool Calling</option>
+                                    <option value="native">Native Grounding</option>
+                                    <option value="engine_augmented_only">Web Scrape Injected</option>
+                                    <option value="unsupported">Offline Only</option>
+                                  </select>
+                                  <WebSearchCapabilityBadge capability={m.web_search_capability} />
+                                </div>
+
                                 <button
                                   type="button"
                                   onClick={() => handleToggleModelEnabled(m.id, m.is_enabled)}

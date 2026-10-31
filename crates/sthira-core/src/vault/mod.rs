@@ -168,7 +168,7 @@ pub fn reconcile_vault(
 
             let db_art: Option<Artifact> = writer
                 .query_row(
-                    "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at
+                    "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at, derived_from_artifact_id, derivation_type
                      FROM artifacts WHERE id = ?1;",
                     params![art_id],
                     |r| {
@@ -197,6 +197,8 @@ pub fn reconcile_vault(
                             deleted_at: r.get(11)?,
                             created_at: r.get(12)?,
                             updated_at: r.get(13)?,
+                            derived_from_artifact_id: r.get(14)?,
+                            derivation_type: r.get(15)?,
                         })
                     },
                 )
@@ -377,6 +379,8 @@ pub fn reconcile_vault(
                 deleted_at: None,
                 created_at: now_ms,
                 updated_at: now_ms,
+                derived_from_artifact_id: None,
+                derivation_type: None,
             };
 
             let rendered = render_file_with_frontmatter(&artifact);
@@ -436,7 +440,7 @@ pub fn reconcile_vault(
     // 2. Export DB artifacts not yet on disk or modified in DB
     let writer = db.writer();
     let mut stmt = writer.prepare(
-        "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at
+        "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at, derived_from_artifact_id, derivation_type
          FROM artifacts WHERE deleted_at IS NULL;",
     )?;
 
@@ -467,6 +471,8 @@ pub fn reconcile_vault(
                 deleted_at: r.get(11)?,
                 created_at: r.get(12)?,
                 updated_at: r.get(13)?,
+                derived_from_artifact_id: r.get(14)?,
+                derivation_type: r.get(15)?,
             })
         })?
         .filter_map(|r| r.ok())

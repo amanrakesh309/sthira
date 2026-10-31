@@ -11,7 +11,10 @@ import {
   Layers,
   HelpCircle,
   X,
+  Globe,
+  Info,
 } from 'lucide-react';
+import { WebSearchCapabilityBadge } from './ModelSelector';
 import {
   getProviderCatalog,
   executePlanAction,
@@ -73,6 +76,19 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+
+  const modelSearchCapability = selectedModel?.web_search_capability || 'agentic_tool_call';
+  const isUnsupported = modelSearchCapability === 'unsupported';
+  const isEngineAugmented = modelSearchCapability === 'engine_augmented_only';
+
+  useEffect(() => {
+    if (isUnsupported) {
+      setWebSearchEnabled(false);
+    } else {
+      setWebSearchEnabled(true);
+    }
+  }, [isUnsupported]);
 
   // Results state
   const [structuredPreview, setStructuredPreview] = useState<StructuredPlanPreview | null>(null);
@@ -223,7 +239,11 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         // no intermediate "[Research in Workspace]" confirmation step.
         setStatusMsg('Researching...');
         setInputVal('');
-        await onStartResearch(trimmed, 'auto', null);
+        await onStartResearch(
+          trimmed,
+          webSearchEnabled && !isUnsupported ? 'auto' : 'local_vault_only',
+          null
+        );
         if (onRefresh) onRefresh();
       } else if (modeToRun === 'plan' && onStartPlan) {
         // Phase 20: Plan creates a `Plan: <Goal>` draft and streams tokens into it.
@@ -446,6 +466,57 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
 
         {/* Right: Model Selection Chip & Dynamic Dropdown */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Web Search Toggle & Badges */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              data-testid="toggle-web-search"
+              disabled={isUnsupported}
+              onClick={() => {
+                if (!isUnsupported) {
+                  setWebSearchEnabled((prev) => !prev);
+                }
+              }}
+              title={
+                isUnsupported
+                  ? 'Web search is disabled because the selected model is offline/unsupported.'
+                  : webSearchEnabled
+                  ? 'Web search is enabled'
+                  : 'Web search is disabled'
+              }
+              className={`px-2.5 py-1 rounded-xl text-xs font-medium border flex items-center gap-1.5 transition-colors ${
+                isUnsupported
+                  ? 'opacity-40 cursor-not-allowed bg-stone-100 dark:bg-stone-800 border-stone-200 text-stone-400'
+                  : webSearchEnabled
+                  ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] border-transparent font-semibold shadow-2xs cursor-pointer'
+                  : 'bg-[#EFECE4] dark:bg-[#22241F] text-[#3A3B36] dark:text-[#D4D1C7] border-[#E8E5DC] dark:border-[#2C2E27] cursor-pointer'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Web Search</span>
+            </button>
+
+            {isEngineAugmented && (
+              <span
+                data-testid="web-search-engine-augmented-hint"
+                title="Sthira will automatically query SearXNG/Brave and inject scraped web pages into this model's prompt."
+                className="inline-flex items-center text-[#8C8A82] dark:text-[#A8A59B] hover:text-[#282C25] dark:hover:text-[#EDEAE2] cursor-help p-0.5"
+              >
+                <Info className="w-3.5 h-3.5" />
+              </span>
+            )}
+
+            {isUnsupported && (
+              <span
+                data-testid="web-search-unsupported-hint"
+                title="Web search is disabled because the selected model is offline/unsupported."
+                className="text-[11px] text-stone-500 italic pl-0.5"
+              >
+                (Offline)
+              </span>
+            )}
+          </div>
+
           <span className="text-xs text-[#6E6D66] dark:text-[#9E9C93] font-medium whitespace-nowrap">
             Model:
           </span>
@@ -457,6 +528,12 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
               title="Switch Compute Model & Provider"
             >
               <span>{modelChipLabel}</span>
+              {selectedModel && (
+                <WebSearchCapabilityBadge
+                  capability={selectedModel.web_search_capability}
+                  className="hidden sm:inline-flex"
+                />
+              )}
               <ChevronDown className="w-3 h-3 text-[#6E6D66] dark:text-[#9E9C93]" />
             </button>
 
@@ -520,7 +597,7 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
                                     : 'hover:bg-[#EFECE4] dark:hover:bg-[#252820] text-[#1E201C] dark:text-[#EDEAE2]'
                                 }`}
                               >
-                                <div className="truncate">
+                                <div className="truncate pr-2">
                                   <div>{m.display_name}</div>
                                   <div
                                     className={`text-[10px] truncate font-mono ${
@@ -530,7 +607,13 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
                                     {m.model_identifier}
                                   </div>
                                 </div>
-                                {isSelected && <Check className="w-3.5 h-3.5 shrink-0 ml-1" />}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <WebSearchCapabilityBadge
+                                    capability={m.web_search_capability}
+                                    className={isSelected ? '!bg-white/10 !border-white/20 !text-white' : ''}
+                                  />
+                                  {isSelected && <Check className="w-3.5 h-3.5 shrink-0 ml-1" />}
+                                </div>
                               </button>
                             );
                           })

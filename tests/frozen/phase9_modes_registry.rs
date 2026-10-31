@@ -63,6 +63,7 @@ async fn test_9_1_provider_grouping_and_seed_defaults() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
+                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
         ],
     };
@@ -98,6 +99,7 @@ async fn test_9_2_ollama_autodiscover_and_sync() {
             supports_structured_output: true,
             is_enabled: true,
             is_default: false,
+            web_search_capability: sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
         },
         ProviderModelEntry {
             id: "ollama-phi3-mini".to_string(),
@@ -108,6 +110,7 @@ async fn test_9_2_ollama_autodiscover_and_sync() {
             supports_structured_output: true,
             is_enabled: true,
             is_default: false,
+            web_search_capability: sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
         },
     ];
 
@@ -356,6 +359,7 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
+                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
         ],
     };
@@ -379,6 +383,7 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
+                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
         ],
     };

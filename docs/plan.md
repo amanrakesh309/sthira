@@ -1278,17 +1278,318 @@ pub enum ProgressiveStreamChunk {
 
 ---
 
+## Phase 12: Dynamic Slash Menu Custom Objects & Guaranteed Generative UI Auto-Hydration
+
+**Status:** PASSED (Verified via `adaptive_stream_test.rs`, `custom_objects_and_generative_ui.test.tsx`, and full workspace suites)
+
+### 12.1 Product Requirements Implemented
+* **Dynamic Custom Objects in the `/` Slash Menu (`SlashCommandMenu.tsx`):**
+  - Dynamically populates custom commands under a dedicated `"Custom & Typed Objects"` category directly from `ObjectType` records via `cmd_list_object_types`.
+  - Every system (`/idea`, `/task`, `/decision`, `/source`) and user-created type (e.g. `/experiment`, `/meeting`) is represented with its assigned icon, color palette, and display badge.
+* **Inline Quick Object Creator Card (`QuickObjectCreatorCard.tsx`):**
+  - Selecting an object type from the `/` menu opens an inline Quick Object Creator popover at the cursor position in `FocusView.tsx`.
+  - Dynamically renders typed property input fields for `select`, `date`, `checkbox`, `number`, and `text` schemas via `PropertyFieldRenderer.tsx`.
+  - Keyboard shortcut `Cmd/Ctrl + Enter` (or `[Create & Insert]`) executes:
+    1. Invokes `cmd_instantiate_object_from_template` / `cmd_save_object_instance` creating the backing artifact and saving typed properties to SQLite.
+    2. Inserts an embedded object directive into the document markdown:
+       ` ```sthira-object\n{"artifact_id":"...","object_type_id":"...","title":"...","properties":{...}}\n``` `
+    3. Dispatches window event `sthira:refresh_objects`, automatically refreshing `LeftSidebar` counts.
+* **Interactive Embedded Object Cards (`EmbeddedObjectCard.tsx`):**
+  - Embedded inside markdown documents in `FocusView.tsx` (Rich Preview / Live Edit).
+  - Renders as a warm stone card displaying type badge, title, and live-editable property pills (checkboxes, status dropdowns, date pickers).
+  - Property toggles and field changes persist directly to SQLite via `cmd_save_object_instance` in real time with 0 friction.
+* **Guaranteed Generative UI in `Plan` and `Research` Modes:**
+  - **Explicit Structured Widget Grammar in System Prompts (`crates/sthira-core`):**
+    - `Plan` mode explicitly instructs LLMs to emit ` ```widget:plan ` and ` ```widget:decision ` JSON blocks alongside rich prose.
+    - `Research` mode explicitly instructs LLMs to emit ` ```widget:comparison ` and ` ```widget:decision ` JSON blocks alongside grounded citations.
+  - **Deterministic Markdown-to-Widget Auto-Hydration:**
+    - Dual-engine fallback for small local models (`llama3.2`) in `streaming_engine.rs` AND `AdaptiveResponseRenderer.tsx`:
+      - **Auto-Plan Hydration:** Scans for `## Phase` / `### Phase` / `## Step` headings with `- [ ]` or bullet subtasks and extracts them into `PlanPhase` chunks, guaranteeing `<MilestonePlanDagWidget />` mounts.
+      - **Auto-Comparison Hydration:** Scans for Markdown tables (`| ... | ... |`) and extracts them into `ComparisonRow` chunks, guaranteeing `<EvidenceComparisonMatrixWidget />` mounts.
+      - **Auto-Decision Hydration:** Scans for `## Decisions` / `## Trade-offs` / `Decision:` sections with bullet choices and extracts them into `DecisionPoint` chunks, guaranteeing `<InteractiveDecisionSelectorWidget />` mounts.
+      - **Smart Commentary Deduplication:** Strips hydrated sections from plain commentary in widget view to eliminate duplicate text.
+
+---
+
+## Phase 13: Domain-Adaptive LLM Output, Normalization & Rich Markdown Typography
+
+**Status:** PASSED (Verified via `adaptive_stream_test.rs` and `custom_objects_and_generative_ui.test.tsx`)
+
+### 13.1 Product Requirements Implemented
+* **Domain Adaptation Across Prompts (`crates/sthira-core`):**
+  - Removed rigid software-architecture metaphors from global system prompts. Prompts dynamically adapt terminology to the domain (fitness, business, engineering, lifestyle, writing) while maintaining rigorous structural breakdown.
+  - Enforced strict GitHub Flavored Markdown (pipes for tables, standard headings `#`/`##`, unicode math symbols `≥`/`≈`, no orphaned bullets).
+* **Enhanced Backend Auto-Hydration Rules:**
+  - `hydrate_markdown_phases`: Now matches unadorned `Phase \d+:`, `Step \d+:`, `Milestone \d+:`, and numbered steps (`1. `).
+  - `hydrate_markdown_tables`: Parses tab-separated rows (`\t`) into `ComparisonRow` records.
+  - `hydrate_markdown_decisions`: Case-insensitive matching and sub-item trade-off parsing (`**The Trade-off:** ...`).
+* **Frontend Rich Typography & Resilient Normalization (`FormattedMarkdownView.tsx`):**
+  - Normalizes orphaned bullet markers (`•\nText` -> `• Text`).
+  - Normalizes LaTeX math expressions (`$\ge 80g$` -> `≥ 80g`, `$\approx 1,700$` -> `≈ 1,700`, `$\le$` -> `≤`).
+  - Converts tab-delimited tables into structured HTML tables with header rows.
+  - Inline styling for `**bold**`, `*italic*`, `` `code` ``, `[links](url)`.
+  - Block rendering for headings, lists, blockquotes, horizontal rules, and embedded object cards (`sthira-object`).
+  - Completely replaced raw monospace preformatted text dumps in `AdaptiveResponseRenderer.tsx` and `FocusView.tsx`.
+
+---
+
+## Phase 14: Component-Decorated Markdown Hydration & Clean Binary Workspace Toggle
+
+**Status:** PASSED (Verified via `rich_document_renderer.test.tsx` and desktop test harness)
+
+### 14.1 Product Requirements Implemented
+* **Clean Binary Mode Toggle in `FocusView.tsx`:**
+  - Replaced legacy 3-way toggle with a sleek segmented control in the top-right toolbar:
+    - `[ ✏️ Edit ]` (Clean, distraction-free Markdown editor with slash menu `/` and full-height canvas `min-h-[calc(100vh-140px)]`).
+    - `[ 👁️ Preview ]` (Component-Decorated Rich Workspace).
+    - Global keyboard shortcut `Cmd/Ctrl + E` to toggle between Edit and Preview instantly.
+* **Inline Component-Decorated Markdown Hydration (`RichDocumentRenderer.tsx`):**
+  - Markdown AST renderer using `react-markdown` and `remark-gfm` with custom component overrides:
+    - **Interactive Comparison Table (`table` override):** Standard markdown tables render as an interactive Warm Stone matrix featuring:
+      - Sand header (`#EFECE4`, dark: `#252320`), clean cell borders (`#E8E5DC`), and alternating subtle zebra row fills.
+      - Real-time row search/filter input.
+      - `[📋 Copy Table]` button with clipboard integration and temporary `[✓ Copied!]` feedback.
+    - **Interactive Milestone Checklist (`ul`/`li` override):** Checkboxes (`- [ ]`/`- [x]`) render as accessible, styled interactive checkboxes. Clicking a checkbox flips the item in the underlying document content and auto-saves via `cmd_save_artifact`.
+    - **Interactive Epistemic Decision Callout (`blockquote` override):** Blockquotes containing `Decision:` or `trade-off` elevate into styled callouts with solid Sage border (`border-emerald-500/40`), soft background (`#EBF2EA`), `[Recorded]` epistemic badge, and an inline `[Add to Decisions]` action chip.
+    - **Embedded Custom Object Directives (`code` override):** Fenced blocks with language `sthira-object` render `<EmbeddedObjectCard />` showing the object type icon, title, and editable property pills synced to SQLite.
+    - **Visual Diagrams (Mermaid):** Fenced blocks with language `mermaid` dynamically execute Mermaid diagrams with colors tailored to Warm Stone `#1E201C` ink and `#FAF8F3` paper.
+
+---
+
+## Phase 15: Workspace Organization Refactor (Index Dashboard, Sidebar 7-Item Cap, Home Screen Declutter & Pinning)
+
+**Status:** PASSED (Verified via `workspace_organization_test.rs` and `workspace_organization.test.tsx`)
+
+### 15.1 Product Requirements Implemented
+* **SQLite Database Schema & Migration (PRAGMA user_version = 5):**
+  - Added `is_pinned INTEGER NOT NULL DEFAULT 0` and `last_accessed_at INTEGER NOT NULL DEFAULT 0` to `projects` and `artifacts` tables.
+* **Backend IPC Surface (`crates/sthira-desktop/src/commands.rs`):**
+  - `cmd_get_sidebar_items`: Returns top 7 Projects, Notes, and Custom Objects with strict 7-item caps (max 5 pinned + most recent unpinned by `last_accessed_at`).
+  - `cmd_toggle_pin`: Toggles `is_pinned` flag on any project, note, or custom object artifact.
+  - `cmd_record_access`: Updates `last_accessed_at` timestamp.
+  - `cmd_get_workspace_index`: Multi-entity query engine supporting tabs (`all`, `projects`, `notes`, `objects`, `standalone`) and live substring search across title, content, purpose, and object type names.
+* **Left Sidebar Restructure (`LeftSidebar.tsx`):**
+  - Top navigation button: `📁 All Files` (formerly `Workspace Index`).
+  - Ordered sections: Projects $\rightarrow$ Notes & Pages $\rightarrow$ Custom Objects.
+  - Enforced 7-item caps per section, quiet hover pin/unpin toggles with `📌` indicators, and section header `View all →` buttons routing directly to the focused tab in `WorkspaceIndexView`.
+* **Workspace Index View (`WorkspaceIndexView.tsx`):**
+  - Master dashboard styled with Warm Stone palette (`#FAF8F3`, `#FFFFFF`, `#E8E5DC`).
+  - Top breadcrumbs, live text filter search input, and interactive tab switcher:
+    `[ All Items ]  [ Projects ]  [ Notes & Pages ]  [ Custom Objects ]`.
+* **Decluttered Home Screen (`HomeView.tsx`):**
+  - Completely removed "Unfiled Thoughts" and "Unaffiliated Notes" sections from the main Home canvas.
+  - Unified top navigation bar with brand icon, Command Palette `⌘K` trigger, Model Settings chip, and Settings button.
+  - Capped "Your projects" to max 3 active threads with `View all →` link to `WorkspaceIndexView`.
+  - Capped "Pick up where you left off" to max 3 recent documents/canvases.
+
+---
+
+## Phase 16 & 16.1: Object Type & Template Management System ("All Files" Tab Consolidation)
+
+**Status:** PASSED (Verified via `object_type_templates_test.rs`, `object_type_manager.test.tsx`, and `workspace_organization.test.tsx`)
+
+### 16.1 Product Requirements Implemented
+* **Database & Core Models (PRAGMA user_version = 6):**
+  - `object_types` extended with `description TEXT NOT NULL DEFAULT ''` and `default_template_md TEXT NOT NULL DEFAULT ''`.
+  - Added `object_templates` table: `id TEXT PRIMARY KEY`, `object_type_id TEXT NOT NULL REFERENCES object_types(id) ON DELETE CASCADE`, `name TEXT NOT NULL`, `icon TEXT NOT NULL DEFAULT '📄'`, `is_default INTEGER NOT NULL DEFAULT 0`, `properties_preset_json JSON NOT NULL DEFAULT '{}'`, `body_template_md TEXT NOT NULL DEFAULT ''`, `created_at INTEGER NOT NULL`, plus `idx_object_templates_type`.
+  - Built-in types ship seeded canonical templates (`idea`, `todo`, `decision`, `source`).
+* **Backend IPC Commands (`crates/sthira-desktop/src/commands.rs`):**
+  - `cmd_update_object_type(type_def: ObjectType) -> Result<(), String>`
+  - `cmd_delete_object_type(type_id: String) -> Result<(), String>` (system types protected)
+  - `cmd_get_type_templates(type_id: String) -> Result<Vec<ObjectTemplate>, String>`
+  - `cmd_save_object_template(template: ObjectTemplate) -> Result<String, String>`
+  - `cmd_instantiate_object_from_template(type_id, template_id, title, project_id) -> Result<String, String>`
+  - `cmd_get_object_instance(artifact_id) -> Result<Option<ObjectInstance>, String>`
+* **Desktop UI Components (`crates/sthira-desktop/ui`):**
+  - **Object Type & Template Manager Modal (`ObjectTypeManagerModal.tsx`):** Manage custom types, properties (`text`, `number`, `checkbox`, `select`, `date`, `url`), options, colors, icons, and reusable Markdown templates.
+  - **Interactive Property Header (`DocumentPropertyHeader.tsx`):** Rendered in `FocusView.tsx` directly below page title for typed objects, with inline editable property chips auto-saving to SQLite.
+  - **Template Selector on Creation (`TemplateSelectorPopover.tsx`):** `/` slash commands prompt template selection when multiple templates exist (`[Default]`, `[Blank]`, or named presets).
+* **Phase 16.1 Tab Consolidation:**
+  - Renamed "Workspace Index" to **"All Files"** across UI copy.
+  - Consolidated "Notes & Pages" with a 3-way Scope Filter: `[ All (n) ] [ In Projects (n) ] [ Standalone (n) ]`.
+  - Added Sort Mechanism: `Last Modified`, `Date Created`, `Title (A–Z)`, `Title (Z–A)`.
+  - Preserved inline `[Standalone ▾] -> [Attach to Project ▾]` dropdown directly on unaffiliated table rows.
+
+---
+
+## Phase 17: Page Action Menu (`...`) — Project Association, Duplication, Conversion & Lifecycle
+
+**Status:** PASSED (Verified via `page_actions_test.rs` and `page_action_menu.test.tsx`)
+
+### 17.1 Product Requirements Implemented
+* **Core Engine Single-Transaction Relocation:**
+  - Added `Engine::move_artifact_to_project(artifact_id, from_project_id, to_project_id)` maintaining strict append-only audit rows (`artifact_attached`, `artifact_detached`) for resume briefs and history.
+* **Backend IPC Surface (`crates/sthira-desktop/src/commands.rs`):**
+  - `cmd_link_artifact_to_project(artifact_id, project_id)` — join-table insert; zero content duplication.
+  - `cmd_move_artifact_to_project(artifact_id, from_project_id?, to_project_id)` — single-transaction reassignment.
+  - `cmd_create_project_with_artifact(project_name, artifact_id)` — creates project with `origin_artifact_id` set and attaches note.
+  - `cmd_duplicate_artifact(artifact_id, new_title?, target_project_id?) -> Result<String, String>` — deep-copies artifact, initializes initial revision, and links to target project.
+  - `cmd_convert_artifact_to_object(artifact_id, object_type_id, initial_properties?)` — writes `object_instances` record preserving markdown body byte-for-byte.
+  - `cmd_detach_artifact_from_project(artifact_id, project_id)` — soft-detaches note preserving historical provenance.
+* **Page Action Menu Component (`PageActionMenu.tsx`):**
+  - Unified `•••` action menu across FocusView toolbar, Left Sidebar rows, and All Files table.
+  - Provides: Link to Project, Move to Project, Create Project with this Note, Detach from Project, Duplicate Note, Convert to Object Type, Copy Markdown, Copy Note Link (`sthira://artifact/{id}`), and Safe Delete Page.
+
+---
+
+## Phase 18 & 18.1: Continuous & Scheduled Topics with Wall-Clock Scheduling
+
+**Status:** PASSED (Verified via `scheduled_topics_test.rs` and `scheduled_topics.test.tsx`)
+
+### 18.1 Product Requirements Implemented
+* **SQLite Schema & Models (PRAGMA user_version = 7 & 8):**
+  - `scheduled_topics`: `id`, `title`, `prompt_query`, `topic_type` (`research` | `plan`), `project_id`, `cadence` (`daily` | `weekly` | `manual`), `schedule_time_minutes` (`0..=1439` minutes UTC), `schedule_weekday` (`0..=6`), `model_id`, `search_provider_id`, `is_active`, `last_run_at`, `created_at`.
+  - `scheduled_topic_runs`: `id`, `topic_id`, `artifact_id`, `sources_scraped_count`, `executed_at`.
+* **Autonomous Execution Engine & Continuity Boundaries (`engines/scheduled_runner.rs`):**
+  - **Research Topics:** Constructs an **anti-duplication boundary** (`build_continuity_boundary`) from the findings of prior run digests, injects it into the prompt to prevent redundant reporting, runs multi-query web search, and writes `Digest: {Title} — {YYYY-MM-DD}` (`Authorship::External`).
+  - **Plan Topics:** Evaluates linked project's recorded milestones and open dependencies, synthesizes progress/blockers, and writes `Plan Review: {Title} — {YYYY-MM-DD}` (`Authorship::AiGenerated`).
+  - Deleting a topic cascades run metadata but **strictly preserves generated digest artifacts**.
+* **Wall-Clock Scheduling Engine (`scheduler.rs`):**
+  - Runs a background loop evaluating due topics once on startup and every 30 minutes.
+  - Wall-clock evaluation: fires at the configured UTC minute (e.g. `06:00`), respecting the `created_at` floor and anchoring weekly topics to configured weekdays.
+  - Sequential execution prevents search rate limits; emits `sthira://scheduled-topic-ready` upon completion.
+* **IPC Commands:**
+  - `cmd_list_scheduled_topics(topic_type?) -> Result<Vec<ScheduledTopicView>, String>`
+  - `cmd_create_scheduled_topic(input: CreateScheduledTopicInput) -> Result<String, String>`
+  - `cmd_trigger_scheduled_topic_run(topic_id) -> Result<String, String>`
+  - `cmd_toggle_scheduled_topic_active(topic_id, is_active) -> Result<(), String>`
+  - `cmd_delete_scheduled_topic(topic_id) -> Result<(), String>`
+
+---
+
+## Phase 19: Autonomous Research in the Center Workspace
+
+**Status:** PASSED (Verified via `research_engine_test.rs` and `research_center_workspace.test.tsx`)
+
+### 19.1 Product Requirements Implemented
+* **Center-Workspace Streaming Pipeline:**
+  - Research queries no longer run in isolated drawers or sidebars. Submitting a research query immediately navigates to `FocusView` in the center workspace.
+  - `cmd_create_research_page(query, project_id) -> String` creates a draft artifact titled `Research: <Query>` (`Authorship::External`, `is_unfinished_draft = 1`) and returns immediately.
+  - `cmd_run_research_into_page(artifact_id, query, web_search_mode, on_progress: Channel<ResearchStage>)` streams live stage updates (`searching` $\rightarrow$ `scraped` $\rightarrow$ `synthesizing` $\rightarrow$ `done`) over a Tauri Channel directly into the center document canvas.
+* **Autonomous Query-Based Search (Zero URL Requirement):**
+  - Users input natural inquiries; the research engine autonomously generates targeted search queries, queries the active provider, scrapes pages, and verifies quotes.
+  - Multi-source citation index: produces `[Source N]` reference markers linked to a structured `## Sources` appendix with favicons, domains, and clean URLs.
+  - Temporal grounding instruction: injects current UTC date to ground benchmarks and model versions.
+* **Strict Epistemic Fallback & Relevance:**
+  - When web search fails or returns 0 results, gracefully degrades to local vault synthesis and flags the warning explicitly rather than fabricating successful search banners.
+  - Vault keyword relevance scoring filters out unrelated documents.
+
+---
+
+## Phase 20: Right-Rail Elimination — Center-Workspace Streaming & Scheduled Feeds View
+
+**Status:** PASSED (Verified via `research_center_workspace.test.tsx` and full Vitest suite)
+
+### 20.1 Product Requirements Implemented
+* **Permanent Elimination of Right Mode Rail:**
+  - Completely deleted `RightModeRail.tsx`, `ResearchPanel.tsx`, and `PlanPanel.tsx`.
+  - The center document container expands to `flex-1 h-full min-w-0 bg-[#FAF8F3]` with zero right-hand margins, maximizing reading and writing real estate.
+* **Unified Center Streaming for Plan & Research:**
+  - `DocumentRunState` tracks active generators (`kind: 'research' | 'plan'`, `message`, `streamedMarkdown`).
+  - `UniversalInputBar` pressing Enter in `Research` or `Plan` mode navigates immediately to `FocusView` and streams tokens directly into the live document canvas.
+* **Dedicated Scheduled Feeds Dashboard:**
+  - Created `ScheduledTopicsView.tsx` accessible directly from the Left Sidebar under `⏱️ Scheduled Feeds`.
+  - Manages active recurring research and plan trackers in a full-width dashboard.
+
+---
+
+## Phase 21: Unified "Explore & Plan" Hub (`ExplorePlanView`)
+
+**Status:** PASSED (Verified via `explore_plan_view.test.tsx`, 16 Vitest suites, and cargo test)
+
+### 21.1 Product Requirements Implemented
+* **Consolidated Left Sidebar Navigation:**
+  - Added `🧭 Explore & Plan` (`data-testid="nav-explore-plan"`) to the Left Sidebar, replacing the single-purpose Scheduled Feeds entry.
+* **4-Tab Master Hub (`ExplorePlanView.tsx`):**
+  1. **`[ 🔍 Research ]`:** Full-width inquiry card with Web Search mode selector (`Auto` / `Always Search Web` / `Local Vault Only`), model selector pill, project selector, and recent research history.
+  2. **`[ 📋 Plan ]`:** Full-width planning input card with goal prompt, model selector, project attachment, and recent plans history.
+  3. **`[ ⏱️ Trackers ]`:** Comprehensive management of recurring autonomous topics with active count badge, Research/Plan sections, `[ 🔄 Run Now ]`, `[ ⏸️ Pause ]`, `[ 🗑️ Delete ]`, and `[ + New Tracker ]` modal.
+  4. **`[ 📚 All Digests ]`:** Filterable directory of all past generated Research digests and Plan reviews with search bar, type filter pills (`All`, `Research`, `Plan`), project chips, and `•••` action menus.
+
+---
+
+## Phase 22: UX Polish & Functional Grounding
+
+**Status:** PASSED (Verified via `research_engine_test.rs` and `focus_slash_layout.test.tsx`)
+
+### 22.1 Product Requirements Implemented
+* **Hide Epistemic Margin by Default (`FocusView.tsx`):**
+  - Default state set to collapsed (`const [showMargin, setShowMargin] = useState(false)`).
+  - Canvas expands to full width (`flex-1 max-w-5xl mx-auto`).
+  - Top toolbar `[ 📖 Margin ]` button smoothly toggles margin on demand.
+* **Smart LLM Title Generation (`generate_smart_title`):**
+  - Prevents raw conversational prompts from becoming artifact titles (e.g. avoids `"Research: find me ways i can earn money..."`).
+  - Runs a fast, bounded prompt against the active model to produce concise 3-to-6 word titles in Title Case, with deterministic fallback.
+* **No Fake "Web Search Complete" & Strict Relevance Filter:**
+  - If search provider fails or returns 0 results, marks `search_status = "web_search_failed"` and renders an amber warning badge (`⚠️ Web search returned no results; synthesized using local context`) instead of a green search banner.
+  - Multi-word keyword relevance scoring prevents irrelevant vault documents from being cited.
+* **Toolbar Alignment & Button Polish:**
+  - Standardized Page Action Menu in `FocusView` toolbar to a single Lucide `MoreHorizontal` button, eliminating duplicate dot rendering.
+
+---
+
+## Phase 23: Explicit Web Search Capability Detection & Badging
+
+**Status:** PASSED (Verified via `model_capabilities_test.rs`, `research_engine_test.rs`, and `model_selector_capabilities.test.tsx`)
+
+### 23.1 Product Requirements Implemented
+* **Model Capabilities Schema & Detection (`crates/sthira-core`):**
+  - Enum `WebSearchCapability`:
+    - `Native`: Built-in web grounding (e.g. Perplexity Sonar).
+    - `AgenticToolCall`: Supports tool calling for SearXNG / Brave (e.g. Claude 3.7, GPT-OSS 120b, Gemma 4 31b).
+    - `EngineAugmentedOnly`: Scraped text injected into prompt context by Sthira Rust backend (e.g. Ollama Llama 3.2, Phi-3).
+    - `Unsupported`: Offline / embedding models where search is forbidden (e.g. BGE-M3, nomic-embed).
+  - Schema migration (PRAGMA user_version = 9): added `web_search_capability` column to `provider_models` and updated `v_active_models` view.
+* **Backend IPC Surface (`crates/sthira-desktop`):**
+  - `cmd_list_available_models`: Returns models with capability badging metadata.
+  - `cmd_update_model_search_capability`: Allows manual capability tier adjustment in Model Settings.
+* **Desktop UI Badging (`ModelSelector.tsx` & `WebSearchCapabilityBadge`):**
+  - Soft cyan `[🌐 Native Search]`, emerald `[🌐 Web Search Ready]`, muted sand `[📄 Web Context Injected]`, and stone `[🚫 Offline Only]` badges.
+  - Integrated into `ExplorePlanView`, `UniversalInputBar`, and `ModelSettingsModal`.
+  - Automatically adapts execution: when `EngineAugmentedOnly`, backend injects scraped chunks; when `Unsupported`, disables search toggles with clear tooltip explanations.
+
+---
+
+## Phase 24: Targeted Re-Research & Note Derivation (Chained Synthesis)
+
+**Status:** PASSED (Verified via `chained_synthesis_test.rs` and `chained_synthesis.test.tsx`)
+
+### 24.1 Product Requirements Implemented
+* **Database Lineage Schema (PRAGMA user_version = 10):**
+  - Added lineage tracking columns to `artifacts`:
+    - `derived_from_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL`
+    - `derivation_type TEXT` (`'refine'`, `'plan_from_research'`, `'extract_ideas'`, `'extract_tasks'`)
+  - Added index `idx_artifacts_lineage` on `artifacts(derived_from_artifact_id)`.
+  - Extended `Artifact` model and added `create_derived_artifact` engine method.
+* **Refinement & Derivation Engine (`engines/research_engine.rs`):**
+  - **`refine_artifact`:** Iteratively refines an existing note against a user critique prompt and optional live web search. Captures a snapshot `ChangeSet` (`restore_artifact`) before updating, enabling **1-click undo**.
+  - **`derive_artifact`:** Takes a source note as authoritative context and synthesizes a new structured artifact (`plan_from_research`, `extract_ideas`, or `extract_tasks`). Sets `derived_from_artifact_id` and inherits active project associations.
+* **Backend IPC Surface (`crates/sthira-desktop/src/commands.rs`):**
+  - `cmd_refine_artifact(artifact_id, critique_prompt, model_override, enable_web_search) -> Result<String, String>`
+  - `cmd_derive_artifact(source_artifact_id, target_derivation_type, target_template_id, model_override) -> Result<String, String>`
+  - Extended `ArtifactContext` with `derived_from_title` to supply parent title to the frontend.
+* **Desktop UI in `FocusView.tsx`:**
+  - **`[ 🔄 Refine ]` Button & Modal (`RefineArtifactModal.tsx`):** Critique textarea, model switcher, and web search toggle with instant synthesis.
+  - **`[ ⚡ Derive ▾ ]` Dropdown Menu:**
+    - `📋 Derive Execution Plan`
+    - `💡 Extract Discrete Ideas`
+    - `☑️ Extract Action Checklist`
+    - Instant generation and immediate navigation to the derived artifact.
+  - **Lineage Header Chip:** Derived notes render a prominent header chip: `🔗 Derived from: [Parent Artifact Title]`. Clicking the chip navigates directly to the parent document.
+
+---
+
 ## Comprehensive Testing & Verification Playbook
 
-Sthira is protected by comprehensive test suites across both Rust (68 tests) and React/TypeScript (29 tests), totaling **97 automated tests**.
+Sthira is protected by comprehensive test suites across both Rust (110 tests) and React/TypeScript (84 tests across 18 Vitest suites), totaling **194 automated tests**.
 
 ### 1. Automated Test Execution Commands
 
 ```bash
-# 1. Run All Rust Workspace Tests (68 tests)
+# 1. Run All Rust Workspace Tests (110 tests)
 cargo test --workspace
 
-# 2. Run All Desktop UI Tests (29 tests across 6 Vitest suites)
+# 2. Run All Desktop UI Tests (84 tests across 18 Vitest suites)
 cd crates/sthira-desktop/ui && npm test && cd ../../..
 
 # 3. Run Quality Gates (Phases 1 through 7)
@@ -1310,7 +1611,7 @@ cd crates/sthira-desktop/ui && npm run build && cd ../../..
 
 ### 2. Interactive Manual Testing Workflows
 
-Follow these 12 interactive scenarios to verify the entire system end-to-end:
+Follow these 20 interactive scenarios to verify the entire system end-to-end:
 
 #### Scenario 1: Frictionless Thought Capture & Real-Time Auto-Save
 1. Launch the desktop app: `cargo run -p sthira-desktop` or `npm run dev --prefix crates/sthira-desktop/ui`.
@@ -1361,16 +1662,15 @@ Follow these 12 interactive scenarios to verify the entire system end-to-end:
 
 #### Scenario 7: Pluggable Web Search & 1-Click Vault Import in Research Mode
 1. In `HomeView`, click the mode selector and pick `Research`.
-2. In the Right Mode Rail (or settings), ensure `[🌐 Include Web Search]` is toggled on.
-3. Enter query: `"What are the key trade-offs in speculative decoding?"`
-4. **Expected:** Sthira queries the active search provider, scrapes top source documents, extracts verified quotes, and renders findings with favicon, domain, and title chips.
-5. Click `[Import to Vault]` on any web finding.  
+2. Enter query: `"What are the key trade-offs in speculative decoding?"`
+3. **Expected:** Sthira queries the active search provider, scrapes top source documents, extracts verified quotes, and renders findings with favicon, domain, and title chips directly in `FocusView`.
+4. Click `[Import to Vault]` on any web finding.  
    **Expected:** Creates a durable source artifact (`authorship = 'external'`) stored in the SQLite database and vault.
 
 #### Scenario 8: Hierarchical Milestone Planning with `<MilestonePlanDagWidget>`
 1. On `HomeView`, select `Plan` mode.
 2. Enter prompt: `"Architect a distributed WAL with snapshot isolation"`.
-3. **Expected:** Progressively streams hierarchical phases into `<MilestonePlanDagWidget>` with interactive checkboxes and prerequisite links.
+3. **Expected:** Progressively streams hierarchical phases into `<MilestonePlanDagWidget>` with interactive checkboxes and prerequisite links directly in the center workspace.
 4. Click `[Create as Project]` on the widget card.  
    **Expected:** Immediately creates a project with the decomposed phases populated as milestones, backed by a reversible ChangeSet.
 
@@ -1414,7 +1714,7 @@ Follow these 12 interactive scenarios to verify the entire system end-to-end:
 3. Select `/decision`: Inserts a `Decision: ` block and registers a decision node in the epistemic margin.
 4. Select `/h1`: Inserts `# ` at the cursor.
 5. In `UniversalInputBar` or via `/plan`, submit `"create a plan for creating a trip planner app"`.
-6. **Expected:** Invokes the active configured model provider (`llama3.2:latest`, `gpt-oss:120b-cloud`, or OpenAI compatible) via live HTTP streaming. Emits real multi-paragraph generated execution phases without hardcoded `"Initial hypothesis on"` or `"Key invariants"` stubs.
+6. **Expected:** Invokes the active configured model provider via live HTTP streaming. Emits real multi-paragraph generated execution phases.
 7. Click `[Rich Preview]` in `FocusView`:
    - Headings render with visual typography styling.
    - Interactive checklists (`- [ ] `) are clickable; clicking toggles `- [ ] ` $\rightarrow$ `- [x] ` and triggers debounced auto-save.
@@ -1431,9 +1731,43 @@ Follow these 12 interactive scenarios to verify the entire system end-to-end:
    - Click `[Light]`: Forces light mode.
    - Click `[Dark]`: Forces dark mode.
    - Click `[System]`: Adapts dynamically to OS `prefers-color-scheme`.
-5. Observe styling consistency across all elements:
-   - Focus View canvas editor and docked Epistemic Margin.
-   - Slash Command Menu popover (`/h1`, `/decision`, `/todo`).
-   - Adaptive streaming widget cards and plain markdown fallback.
-   - Search Modal (`Cmd+K`), Account Modal, and Project Deletion Impact Modal.
-   - Canvas View spatial cards and Left Sidebar navigation.
+5. Observe styling consistency across all elements.
+
+#### Scenario 16: Explore & Plan Hub & Autonomous Center-Workspace Research
+1. Click `🧭 Explore & Plan` in the Left Sidebar.
+2. In the `[ 🔍 Research ]` tab, enter: `"Latest advances in speculative decoding"`.
+3. Observe the model selector with its web search capability badge.
+4. Click `[ 🔍 Start Research ]`.
+5. **Expected:** The app transitions immediately into `FocusView` in the center workspace. A live progress banner displays stages (`searching` $\rightarrow$ `scraped` $\rightarrow$ `synthesizing`), and findings stream directly into the document with numbered citations `[Source 1]` and a `## Sources` index.
+
+#### Scenario 17: Wall-Clock Scheduled Continuous Topic Trackers & Anti-Duplication Boundary
+1. In `Explore & Plan`, open the `[ ⏱️ Trackers ]` tab.
+2. Click `[ + New Tracker ]`.
+3. Enter title `"Rust 2026 Ecosystem Updates"`, query `"New Rust RFCs and crate developments"`, select `Daily`, set time to `06:00 (UTC)`.
+4. Click `Save`.
+5. Click `[ 🔄 Run Now ]` on the tracker card.
+6. **Expected:** Sthira executes the autonomous background research loop, queries the search provider, synthesizes a daily digest note, and links it under previous runs. Running a second time asserts that findings from the first run form an anti-duplication continuity boundary.
+
+#### Scenario 18: Object Types & Template Management System
+1. In Left Sidebar, click the gear icon next to `CUSTOM OBJECTS` to open the Object Type Manager.
+2. Select `💡 Idea`. Observe properties and templates.
+3. Open `FocusView`, type `/idea`.
+4. **Expected:** If multiple templates exist, the Template Selector popover appears. Select a template: the Quick Object Creator pre-fills with the template structure and default properties.
+5. In `FocusView`, observe the `DocumentPropertyHeader` below the title, allowing immediate editing of properties.
+
+#### Scenario 19: Explicit Web Search Capability Badging & Adaptive Context Injection
+1. Open Model Settings (`⚙️ -> Compute Providers`).
+2. Observe the **Web Search Support** column: models display badges `[🌐 Native Search]`, `[🌐 Web Search Ready]`, `[📄 Web Context Injected]`, or `[🚫 Offline Only]`.
+3. In `Explore & Plan` or `UniversalInputBar`, select a local model (`EngineAugmentedOnly`).
+4. **Expected:** Next to the web search toggle, a quiet hint explains that Sthira will automatically scrape search results and inject chunks into the prompt. Select an `Unsupported` model: the web search toggle is disabled with an offline explanation.
+
+#### Scenario 20: Targeted Re-Research & Note Derivation (Chained Synthesis & Lineage FKs)
+1. Open any completed Research note in `FocusView`.
+2. Click `[ 🔄 Refine ]`:
+   - Enter critique: `"Focus specifically on memory-constrained mobile devices."`
+   - Select model and toggle web search.
+   - Click `Run Refinement`.
+   - **Expected:** Content updates to address critique while preserving verified facts, and a snapshot ChangeSet is recorded for 1-click undo.
+3. Click `[ ⚡ Derive ▾ ]` and select `📋 Derive Execution Plan`:
+   - **Expected:** Sthira generates a new Execution Plan note referencing the research note, sets `derived_from_artifact_id`, and navigates to the new note.
+   - A header chip `🔗 Derived from: [Research Note Title]` appears above the title. Clicking it returns to the source note.

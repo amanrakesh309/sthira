@@ -293,6 +293,8 @@ impl Engine {
                     deleted_at: None,
                     created_at: 0,
                     updated_at: 0,
+                    derived_from_artifact_id: None,
+                    derivation_type: None,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -650,7 +652,7 @@ impl Engine {
 
         // Loose captures: artifacts not attached to any project
         let mut loose_stmt = reader.prepare(
-            "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at
+            "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at, derived_from_artifact_id, derivation_type
              FROM artifacts
              WHERE deleted_at IS NULL
                AND id NOT IN (SELECT artifact_id FROM project_artifacts WHERE detached_at IS NULL)
@@ -684,6 +686,8 @@ impl Engine {
                     deleted_at: r.get(11)?,
                     created_at: r.get(12)?,
                     updated_at: r.get(13)?,
+                    derived_from_artifact_id: r.get(14)?,
+                    derivation_type: r.get(15)?,
                 })
             })?
             .filter_map(|r| r.ok())

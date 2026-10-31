@@ -6,7 +6,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     if user_version == 0 {
         let schema_sql = include_str!("schema.sql");
         conn.execute_batch(schema_sql)?;
-        conn.execute_batch("PRAGMA user_version = 8;")?;
+        conn.execute_batch("PRAGMA user_version = 10;")?;
     } else {
         if user_version < 2 {
             conn.execute_batch(
@@ -151,6 +151,36 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
                  ALTER TABLE scheduled_topics ADD COLUMN schedule_weekday INTEGER
                      CHECK(schedule_weekday IS NULL OR (schedule_weekday >= 0 AND schedule_weekday <= 6));
                  PRAGMA user_version = 8;",
+            )?;
+        }
+        if user_version < 9 {
+            conn.execute_batch(
+                "ALTER TABLE provider_models ADD COLUMN web_search_capability TEXT NOT NULL DEFAULT 'engine_augmented_only';
+                 DROP VIEW IF EXISTS v_active_models;
+                 CREATE VIEW IF NOT EXISTS v_active_models AS
+                 SELECT 
+                     pm.id,
+                     pm.provider_id,
+                     p.display_name AS provider_name,
+                     p.provider_type,
+                     pm.model_identifier,
+                     pm.display_name AS model_display_name,
+                     pm.context_window,
+                     pm.is_default,
+                     pm.web_search_capability
+                 FROM provider_models pm
+                 JOIN providers p ON pm.provider_id = p.id
+                 WHERE pm.is_enabled = 1 AND p.is_enabled = 1
+                 GROUP BY pm.provider_id, pm.model_identifier;
+                 PRAGMA user_version = 9;",
+            )?;
+        }
+        if user_version < 10 {
+            conn.execute_batch(
+                "ALTER TABLE artifacts ADD COLUMN derived_from_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL;
+                 ALTER TABLE artifacts ADD COLUMN derivation_type TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_artifacts_lineage ON artifacts(derived_from_artifact_id);
+                 PRAGMA user_version = 10;",
             )?;
         }
     }

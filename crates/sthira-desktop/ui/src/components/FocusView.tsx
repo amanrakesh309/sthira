@@ -22,7 +22,11 @@ import {
   Globe,
   ShieldCheck,
   AlertTriangle,
+  RefreshCw,
+  Zap,
+  ChevronDown,
 } from 'lucide-react';
+import { RefineArtifactModal } from './RefineArtifactModal';
 import { ContextualResumePane } from './ContextualResumePane';
 import { ProjectHistoryDrawer } from './ProjectHistoryDrawer';
 import { AmbientProposalPill } from './AmbientProposalPill';
@@ -51,6 +55,7 @@ import {
   instantiateObjectFromTemplate,
   getObjectInstance,
   createTypedObject,
+  deriveArtifact,
 } from '../api/ipc';
 import type {
   Artifact,
@@ -59,6 +64,7 @@ import type {
   ProjectHistory as IProjectHistory,
   ObjectType,
   ObjectInstance,
+  DerivationType,
 } from '../types/sthira';
 
 interface FocusViewProps {
@@ -126,6 +132,43 @@ export const FocusView: React.FC<FocusViewProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Chained Synthesis: Refine & Derive State
+  const [isRefineModalOpen, setIsRefineModalOpen] = useState(false);
+  const [isDeriveMenuOpen, setIsDeriveMenuOpen] = useState(false);
+  const [isDeriving, setIsDeriving] = useState(false);
+  const deriveMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (deriveMenuRef.current && !deriveMenuRef.current.contains(e.target as Node)) {
+        setIsDeriveMenuOpen(false);
+      }
+    };
+    if (isDeriveMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isDeriveMenuOpen]);
+
+  const handleDerive = async (derivationType: DerivationType) => {
+    const currentArtId = context?.artifact?.id || artifactId;
+    if (!currentArtId || isDeriving) return;
+    setIsDeriveMenuOpen(false);
+    setIsDeriving(true);
+    try {
+      const newArtId = await deriveArtifact(currentArtId, derivationType, null, activeModelId);
+      if (newArtId && onOpenArtifact) {
+        onOpenArtifact(newArtId, projectId || null);
+      }
+    } catch (err) {
+      console.error('Derivation failed:', err);
+    } finally {
+      setIsDeriving(false);
+    }
+  };
 
   // Object Types & Inline Quick Creator State
   const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
@@ -1073,6 +1116,34 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
             )}
 
+            {/* Lineage Header Chip */}
+            {context?.artifact?.derived_from_artifact_id && (
+              <div className="mb-2">
+                <button
+                  type="button"
+                  data-testid="badge-lineage-derived-from"
+                  onClick={() => {
+                    if (context.artifact.derived_from_artifact_id && onOpenArtifact) {
+                      onOpenArtifact(context.artifact.derived_from_artifact_id, projectId || null);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[#F4F1EA] dark:bg-[#23261F] text-[#484B42] dark:text-[#C5C2B8] border border-[#E8E5DC] dark:border-[#2D3027] hover:bg-[#EAE6DD] dark:hover:bg-[#2E3129] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer group"
+                  title={`Navigate to parent artifact: ${context.derived_from_title || context.artifact.derived_from_artifact_id}`}
+                >
+                  <span className="text-xs">🔗</span>
+                  <span className="font-semibold text-[#282C25] dark:text-[#EDEAE2]">Derived from:</span>
+                  <span className="underline decoration-stone-300 dark:decoration-stone-600 underline-offset-2 group-hover:decoration-stone-500">
+                    {context.derived_from_title || 'Parent Note'}
+                  </span>
+                  {context.artifact.derivation_type && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-stone-200/80 dark:bg-stone-800 text-stone-600 dark:text-stone-300 font-mono">
+                      {context.artifact.derivation_type}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+
             {/* Document Title Header */}
             <div className="pb-3 mb-4 border-b border-[#ECE9E0] dark:border-[#262822]">
               <input
@@ -1203,6 +1274,101 @@ export const FocusView: React.FC<FocusViewProps> = ({
                     <Eye className="w-3.5 h-3.5" />
                     <span>👁️ Preview</span>
                   </button>
+                </div>
+
+                {/* Chained Synthesis: Refine & Derive Toolbar Actions */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="btn-refine-artifact"
+                    onClick={() => setIsRefineModalOpen(true)}
+                    disabled={!context?.artifact?.id && !artifactId}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2D3027] text-[#3C3F35] dark:text-[#EDEAE2] hover:bg-[#F4F1EA] dark:hover:bg-[#252821] hover:text-[#1E201C] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                    title="Iteratively refine or re-research note with custom critique"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Refine</span>
+                  </button>
+
+                  <div className="relative" ref={deriveMenuRef}>
+                    <button
+                      type="button"
+                      data-testid="btn-derive-menu"
+                      onClick={() => setIsDeriveMenuOpen((v) => !v)}
+                      disabled={(!context?.artifact?.id && !artifactId) || isDeriving}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2D3027] text-[#3C3F35] dark:text-[#EDEAE2] hover:bg-[#F4F1EA] dark:hover:bg-[#252821] hover:text-[#1E201C] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                      title="Derive execution plan, discrete ideas, or task checklist"
+                    >
+                      {isDeriving ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                      ) : (
+                        <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      )}
+                      <span>Derive</span>
+                      <ChevronDown className="w-3 h-3 text-[#7D7A70] dark:text-[#9E9C93]" />
+                    </button>
+
+                    {isDeriveMenuOpen && (
+                      <div
+                        data-testid="derive-dropdown-menu"
+                        className="absolute right-0 top-full mt-1.5 w-60 bg-[#FAF8F5] dark:bg-[#1C1E18] border border-[#E8E5DC] dark:border-[#2D3027] rounded-xl shadow-lg py-1.5 z-40 animate-in fade-in duration-100 flex flex-col"
+                      >
+                        <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#7D7A70] dark:text-[#9E9C93] border-b border-[#E8E5DC] dark:border-[#2D3027] mb-1">
+                          Derive Chained Artifact
+                        </div>
+                        <button
+                          type="button"
+                          data-testid="btn-derive-plan"
+                          onClick={() => handleDerive('plan_from_research')}
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                        >
+                          <span className="text-sm">📋</span>
+                          <div className="flex flex-col">
+                            <span className="font-medium group-hover:text-emerald-700 dark:group-hover:text-emerald-400">
+                              Derive Execution Plan
+                            </span>
+                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                              Synthesizes phased implementation milestones
+                            </span>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="btn-derive-ideas"
+                          onClick={() => handleDerive('extract_ideas')}
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                        >
+                          <span className="text-sm">💡</span>
+                          <div className="flex flex-col">
+                            <span className="font-medium group-hover:text-amber-700 dark:group-hover:text-amber-400">
+                              Extract Discrete Ideas
+                            </span>
+                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                              Deconstructs into discrete hypothesis objects
+                            </span>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="btn-derive-tasks"
+                          onClick={() => handleDerive('extract_tasks')}
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                        >
+                          <span className="text-sm">☑️</span>
+                          <div className="flex flex-col">
+                            <span className="font-medium group-hover:text-blue-700 dark:group-hover:text-blue-400">
+                              Extract Action Checklist
+                            </span>
+                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                              Consolidated checklist of actionable tasks
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Phase 17: Page Action Menu (top-right, beside the Edit ⟷ Preview toggle) */}
@@ -1450,6 +1616,19 @@ export const FocusView: React.FC<FocusViewProps> = ({
           onClose={() => setUndoToast(null)}
         />
       )}
+
+      {/* Chained Synthesis: Refine / Re-Research Modal */}
+      <RefineArtifactModal
+        isOpen={isRefineModalOpen}
+        onClose={() => setIsRefineModalOpen(false)}
+        artifactId={context?.artifact?.id || artifactId || ''}
+        artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
+        onRefined={(newContent) => {
+          handleEditorChange(newContent);
+          onContentUpdate?.(newContent);
+          loadProjectData();
+        }}
+      />
     </div>
   );
 };

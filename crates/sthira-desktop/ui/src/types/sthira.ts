@@ -57,6 +57,8 @@ export interface Artifact {
   deleted_at?: number | null;
   created_at: number;
   updated_at: number;
+  derived_from_artifact_id?: string | null;
+  derivation_type?: string | null;
 }
 
 export interface HomeStateView {
@@ -92,7 +94,10 @@ export interface ArtifactContext {
   pending_proposals: ProposalView[];
   project_id?: string | null;
   is_unfinished_draft: boolean;
+  derived_from_title?: string | null;
 }
+
+export type DerivationType = 'refine' | 'plan_from_research' | 'extract_ideas' | 'extract_tasks';
 
 export type EpistemicOrigin = 'user_recorded' | 'source_backed' | 'ai_inferred';
 
@@ -203,6 +208,12 @@ export type CoreEvent =
 
 export type OperationalMode = 'capture' | 'research' | 'plan' | 'act';
 
+export type WebSearchCapability =
+  | 'native'
+  | 'agentic_tool_call'
+  | 'engine_augmented_only'
+  | 'unsupported';
+
 export interface ProviderModelEntry {
   id: string;
   provider_id: string;
@@ -212,6 +223,21 @@ export interface ProviderModelEntry {
   supports_structured_output: boolean;
   is_enabled: boolean;
   is_default: boolean;
+  web_search_capability?: WebSearchCapability;
+}
+
+export interface ModelView {
+  id: string;
+  provider_id: string;
+  provider_name: string;
+  provider_type: string;
+  model_identifier: string;
+  display_name: string;
+  context_window: number;
+  supports_structured_output: boolean;
+  is_enabled: boolean;
+  is_default: boolean;
+  web_search_capability: WebSearchCapability;
 }
 
 export interface ProviderEntry {

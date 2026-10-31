@@ -15,7 +15,9 @@ import {
   RefreshCw,
   ChevronRight,
   Filter,
+  Info,
 } from 'lucide-react';
+import { ModelSelector } from '../components/ModelSelector';
 import {
   getWorkspaceIndex,
   getWorkspaceTree,
@@ -147,6 +149,25 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [models, setModels] = useState<ProviderModelEntry[]>([]);
   const [notes, setNotes] = useState<WorkspaceIndexItem[]>([]);
+
+  // Web search capability for selected research model
+  const activeResearchModel = useMemo(() => {
+    return (
+      models.find(
+        (m) => m.model_identifier === selectedResearchModel || m.id === selectedResearchModel
+      ) || null
+    );
+  }, [models, selectedResearchModel]);
+
+  const researchCapability = activeResearchModel?.web_search_capability || 'agentic_tool_call';
+  const isResearchUnsupported = researchCapability === 'unsupported';
+  const isResearchEngineAugmented = researchCapability === 'engine_augmented_only';
+
+  useEffect(() => {
+    if (isResearchUnsupported && webSearchMode !== 'local_vault_only') {
+      setWebSearchMode('local_vault_only');
+    }
+  }, [isResearchUnsupported, webSearchMode]);
 
   // Sync initial tab when changed from props
   useEffect(() => {
@@ -546,71 +567,101 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div className="flex flex-wrap items-center gap-2.5">
                   {/* Web Search Mode Toggle */}
-                  <div
-                    data-testid="toggle-web-search"
-                    className="flex items-center gap-1 bg-[#FAF8F3] dark:bg-[#121310] p-1 rounded-xl border border-[#E8E5DC] dark:border-[#2C2E27]"
-                  >
-                    <span className="text-[11px] font-semibold text-[#8C8A82] px-1.5 flex items-center gap-1">
-                      <Globe className="w-3 h-3" />
-                      <span>Web Search:</span>
-                    </span>
-                    <button
-                      type="button"
-                      data-testid="search-mode-auto"
-                      onClick={() => setWebSearchMode('auto')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                        webSearchMode === 'auto'
-                          ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                          : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      data-testid="toggle-web-search"
+                      className={`flex items-center gap-1 bg-[#FAF8F3] dark:bg-[#121310] p-1 rounded-xl border border-[#E8E5DC] dark:border-[#2C2E27] ${
+                        isResearchUnsupported ? 'opacity-50 cursor-not-allowed' : ''
                       }`}
+                      title={
+                        isResearchUnsupported
+                          ? 'Web search is disabled because the selected model is offline/unsupported.'
+                          : undefined
+                      }
                     >
-                      Auto
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="search-mode-always"
-                      onClick={() => setWebSearchMode('always_search')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                        webSearchMode === 'always_search'
-                          ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                          : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
-                      }`}
-                    >
-                      Enabled
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="search-mode-vault"
-                      onClick={() => setWebSearchMode('local_vault_only')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                        webSearchMode === 'local_vault_only'
-                          ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                          : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
-                      }`}
-                    >
-                      Local Vault Only
-                    </button>
+                      <span className="text-[11px] font-semibold text-[#8C8A82] px-1.5 flex items-center gap-1">
+                        <Globe className="w-3 h-3" />
+                        <span>Web Search:</span>
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="search-mode-auto"
+                        disabled={isResearchUnsupported}
+                        onClick={() => setWebSearchMode('auto')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                        } ${
+                          webSearchMode === 'auto'
+                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
+                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                        }`}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="search-mode-always"
+                        disabled={isResearchUnsupported}
+                        onClick={() => setWebSearchMode('always_search')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                        } ${
+                          webSearchMode === 'always_search'
+                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
+                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                        }`}
+                      >
+                        Enabled
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="search-mode-vault"
+                        disabled={isResearchUnsupported}
+                        onClick={() => setWebSearchMode('local_vault_only')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                        } ${
+                          webSearchMode === 'local_vault_only'
+                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
+                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                        }`}
+                      >
+                        Local Vault Only
+                      </button>
+                    </div>
+
+                    {/* Quiet hint icon for EngineAugmentedOnly */}
+                    {isResearchEngineAugmented && (
+                      <span
+                        data-testid="web-search-engine-augmented-hint"
+                        title="Sthira will automatically query SearXNG/Brave and inject scraped web pages into this model's prompt."
+                        className="inline-flex items-center text-[#8C8A82] dark:text-[#A8A59B] hover:text-[#282C25] dark:hover:text-[#EDEAE2] cursor-help p-1"
+                      >
+                        <Info className="w-3.5 h-3.5" />
+                      </span>
+                    )}
+
+                    {/* Explicit indicator when model is Unsupported */}
+                    {isResearchUnsupported && (
+                      <span
+                        data-testid="web-search-unsupported-hint"
+                        title="Web search is disabled because the selected model is offline/unsupported."
+                        className="text-[11px] text-stone-500 italic pl-0.5"
+                      >
+                        (Offline only)
+                      </span>
+                    )}
                   </div>
 
-                  {/* Model Selector Pill */}
+                  {/* Model Selector */}
                   <div className="flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
-                    <select
-                      data-testid="select-research-model"
-                      value={selectedResearchModel}
-                      onChange={(e) => setSelectedResearchModel(e.target.value)}
-                      className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
-                    >
-                      {models.length > 0 ? (
-                        models.map((m) => (
-                          <option key={m.id} value={m.model_identifier}>
-                            {m.display_name || m.model_identifier}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="default">Default Model</option>
-                      )}
-                    </select>
+                    <ModelSelector
+                      dataTestId="select-research-model"
+                      models={models}
+                      selectedModelId={selectedResearchModel}
+                      onSelectModel={(m) => setSelectedResearchModel(m.model_identifier)}
+                    />
                   </div>
 
                   {/* Project Selector */}
@@ -755,25 +806,15 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               {/* Controls Row */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Model Selector Pill */}
+                  {/* Model Selector */}
                   <div className="flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
-                    <select
-                      data-testid="select-plan-model"
-                      value={selectedPlanModel}
-                      onChange={(e) => setSelectedPlanModel(e.target.value)}
-                      className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
-                    >
-                      {models.length > 0 ? (
-                        models.map((m) => (
-                          <option key={m.id} value={m.model_identifier}>
-                            {m.display_name || m.model_identifier}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="default">Default Model</option>
-                      )}
-                    </select>
+                    <ModelSelector
+                      dataTestId="select-plan-model"
+                      models={models}
+                      selectedModelId={selectedPlanModel}
+                      onSelectModel={(m) => setSelectedPlanModel(m.model_identifier)}
+                    />
                   </div>
 
                   {/* Project Selector */}

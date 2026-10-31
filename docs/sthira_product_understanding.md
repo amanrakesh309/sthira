@@ -1,7 +1,7 @@
-# Sthira — Product Understanding (v3)
+# Sthira — Product Understanding (v4)
 
 **Status:** Canonical product understanding, experience specification & architecture manual  
-**Last updated:** 29 October 2026
+**Last updated:** November 2026
 
 This document captures the product vision, experience decisions, and epistemic invariants for **Sthira**. It serves as the canonical source of truth for product behavior, guiding principles, and resolved experience mechanics.
 
@@ -21,10 +21,15 @@ A user can:
 - Preserve the underlying material and reasoning as durable knowledge.
 - Return later after an interruption and immediately recover the context of their work.
 - Reuse knowledge in a different project without recreating or copying it unnecessarily.
-- Interact with structured objects (Ideas, Tasks, Decisions, Sources) in Tables and Kanban boards.
+- Interact with structured objects (Ideas, Tasks, Decisions, Sources, custom schemas) in Tables and Kanban boards.
 - Explore cross-project connections through an interactive 2D physics Knowledge Graph.
-- Conduct privacy-first web research grounded in verified external quotes.
+- Conduct privacy-first, autonomous web research grounded in verified external quotes and rendered directly into the center document workspace.
 - Experience adaptive progressive streaming that shifts conditionally between raw Markdown and interactive generative UI widgets.
+- Track evolving questions autonomously over time with continuous topic trackers running on wall-clock schedules (`ExplorePlanView`).
+- Refine existing notes with targeted critique prompts and 1-click snapshot rollback, or derive discrete execution plans, ideas, and action checklists with full epistemic lineage tracking (`FocusView`).
+- Define custom typed object schemas and pre-filled Markdown templates with Notion/Anytype-style properties.
+- Browse, filter, and organize all projects, notes, and objects in a unified "All Files" directory.
+- Know model capabilities at a glance with explicit web search capability detection and badging (`Native`, `AgenticToolCall`, `EngineAugmentedOnly`, `Unsupported`).
 
 The experience makes research, planning, and knowledge storage feel like connected parts of the same activity rather than separate apps or disconnected workflows.
 
@@ -91,11 +96,12 @@ Sthira never uses streak counters, overdue badges, or guilt-inducing language (e
 Sthira offers fluid, interconnected modes of engaging with the same underlying workspace:
 
 ### 4.1 Home — Orient yourself
-Home separates deep ongoing threads from quick captures:
-- **Active Threads ("Pick Up"):** Ordered by **last substantive work** (ignoring trivial file views or whitespace edits), surfacing each project's continuation point or primary unresolved question.
-- **Loose Captures:** Recent unfiled notes, thoughts, and saved sources that haven't been assigned to a project yet.
-- **Universal Input Card:** A single, central entry point for capturing spontaneous thoughts, asking transient questions, initiating research, planning, or resuming projects.
-- **Inline Compute Provider Chip:** Select active local or cloud models (`[ 🦙 Ollama: llama3.2 ▾ ]`, `[ 🚀 Groq: llama-3.3-70b ▾ ]`, `[ ⚡ Anthropic: claude-3-7-sonnet ▾ ]`) with 1-click settings shortcuts.
+Home provides a calm, focused launchpad separating active threads from quick capture:
+- **Decluttered Layout:** The Home screen is strictly limited to high-signal items (max 3 active projects and max 3 recent documents), eliminating unfiled clutter and distracting note lists.
+- **Unified Top Bar:** Clean header featuring brand indicator, Command Palette shortcut (`⌘K`), inline model selector chip, and Settings button (`⚙️`).
+- **Active Threads ("Pick Up"):** Ordered by **last substantive work** (ignoring trivial views or whitespace edits), surfacing each project's continuation point or primary unresolved question.
+- **Universal Input Card:** A single, central entry point for capturing spontaneous thoughts, asking transient questions, initiating research, planning, or resuming projects. Submitting in `Research` or `Plan` mode navigates immediately to the center workspace.
+- **Inline Compute Provider Chip:** Select active local or cloud models (`[ 🦙 Ollama: llama3.2 ▾ ]`, `[ 🚀 Groq: llama-3.3-70b ▾ ]`, `[ ⚡ Anthropic: claude-3-7-sonnet ▾ ]`) with model search capability badging and 1-click settings shortcuts.
 - **Calm Proposal Indicator:** A quiet, non-intrusive count of pending AI suggestions—never noisy popups or red warning badges.
 
 ### 4.2 Canvas — Think and organize spatially
@@ -104,14 +110,25 @@ A flexible spatial canvas lets users arrange notes, sources, text cards, and fra
 - **Reversible Layout Revisions:** If the user asks Sthira to help organize or cluster a canvas, the previous layout is snapshotted in a reversible Change Set (`cmd_revert_change_set`).
 
 ### 4.3 Focus — Go deep
-A distraction-free environment for reading, writing, and synthesizing within a document or project:
-- **Debounced Auto-Save (600ms):** Automatically commits edits to both SQLite and disk on typing settle, input blur, and view navigation.
-- **Live Status Pill:** Shows `Saving...` with spinner, transitions to `Saved` with an emerald checkmark, and settles into `Auto-saved`.
+A distraction-free, full-width canvas for reading, writing, and synthesizing within a document or project:
+- **Full-Width Canvas & Collapsible Epistemic Margin:** The Epistemic Margin is collapsed by default (`showMargin: false`) allowing the editor canvas to expand to full width (`flex-1 max-w-5xl mx-auto`). The top toolbar button `[ 📖 Margin ]` toggles the margin open and closed on demand.
+- **Clean Binary Workspace Toggle:** Seamlessly switch between `[ ✏️ Edit ]` (distraction-free Markdown editor with caret-positioned `/` slash menu) and `[ 👁️ Preview ]` (Component-Decorated Rich Workspace) via the top-right toolbar or the `Cmd/Ctrl + E` keyboard shortcut.
+- **Component-Decorated Rich Document Renderer:** The preview renders standard Markdown decorated with interactive components:
+  - **Interactive Comparison Tables:** Rich Warm Stone matrix with real-time row filtering and a 1-click `[📋 Copy Table]` clipboard button.
+  - **Interactive Checklists:** Styled checkboxes (`- [ ]` / `- [x]`) that can be clicked to toggle state, automatically auto-saving back to the document via debounced save.
+  - **Epistemic Decision Callouts:** Styled callouts with solid Sage borders, Soft Sand backgrounds, and an inline `[Add to Decisions]` action chip.
+  - **Embedded Custom Objects:** Fenced `sthira-object` blocks render as warm stone cards displaying live property pills synced to SQLite.
+  - **Mermaid Diagrams:** Fenced `mermaid` blocks dynamically execute diagrams with Warm Stone theme colors.
+- **Interactive Document Property Header:** Displayed directly beneath the page title for typed objects (`Idea`, `Task`, `Decision`, `Source`, custom schemas) with live-editable property pills that persist immediately to SQLite.
+- **Targeted Re-Research & Note Derivation (Chained Synthesis):**
+  - **`[ 🔄 Refine ]` Modal:** Iteratively refines an existing note with user critique and optional web search. Snapshots the prior version in a reversible `ChangeSet` for **1-click undo**.
+  - **`[ ⚡ Derive ▾ ]` Dropdown:** Derives structured child artifacts (`📋 Derive Execution Plan`, `💡 Extract Discrete Ideas`, `☑️ Extract Action Checklist`) with parent-child lineage tracking.
+  - **Lineage Header Chip:** Derived notes render a prominent header chip: `🔗 Derived from: [Parent Artifact Title]`, allowing 1-click navigation back to the source note.
+- **Center-Workspace Streaming Banner:** Research and Plan generators stream live stage updates (`searching` $\rightarrow$ `scraped` $\rightarrow$ `synthesizing` $\rightarrow$ `done`) and tokens directly inside the center document canvas.
+- **Debounced Auto-Save (600ms):** Commits edits to both SQLite and disk on typing settle, input blur, and view navigation with a live status pill (`Saving...` $\rightarrow$ `Saved` $\rightarrow$ `Auto-saved`).
 - **Real-Time Sidebar Title Sync (0ms):** Typing a heading or title synchronizes with the navigation sidebar instantly on every keystroke.
-- **Automatic Line 1 Heading Derivation:** If an artifact title is empty, line 1 (`# Heading`) is extracted automatically to keep the workspace organized.
-- **Contextual Resume Pane:** Auto-expands on cold return ($\ge 48$ hours) or unresolved decision conflicts; collapses into an ambient pill during active sessions.
-- **Epistemic Margin:** Extracted claims and quotes highlighted alongside the text with hover provenance tooltips.
-- **Ambient Proposals:** Up to 2 un-intrusive contextual proposals with 1-click `[Accept]` and `[Dismiss]`, backed by an `UndoToast`.
+- **Automatic Line 1 Heading Derivation:** If an artifact title is empty, line 1 (`# Heading`) is extracted automatically.
+- **Contextual Resume Pane:** Auto-expands on cold return ($\ge 48$ hours) or unresolved decision conflicts.
 
 ### 4.4 Knowledge Graph — Explore connected structure
 An interactive 2D force-directed physics graph view (`GraphView`):
@@ -119,16 +136,15 @@ An interactive 2D force-directed physics graph view (`GraphView`):
 - **Edge Relationships:** Structural containment (`belongs_to`) and semantic connections (`supports`, `contradicts`, `extends`, `references`).
 - **Interactive Controls:** Smooth pan, mouse-wheel zoom, drag-to-pin simulation, entity filter pills, real-time search query isolation, and floating details cards with direct jump-to-editor actions.
 
-### 4.5 Workspace Navigation Shell (Sidebar & Rail)
+### 4.5 Workspace Navigation Shell (Sidebar & Center Workspace)
 - **Left Hierarchy Sidebar:** Collapsible navigation tree with customizable width (persisted to `localStorage`). Displays:
-  - **Projects Tree:** Expandable project folders with child pages, canvases, and `+ New Page` actions.
-  - **Unassociated Pages:** Loose captures created without project assignment.
-  - **3-Dots Settings Menu (`...`):** Pin to top (`📌`), Duplicate (`(Copy)`), Add to Project modal, Inline rename (`Enter`/`Escape`), and Safe Deletion.
-- **Right Operational Mode Rail:** Collapsible workspace rail hosting dedicated consoles:
-  - `CapturePanel`: Fast capture with background epistemic extraction.
-  - `ResearchPanel`: Search exploration, web source inclusion toggle (`[🌐 Include Web Search]`), citation cards, and 1-click `[Import to Vault]`.
-  - `PlanPanel`: Hierarchical milestone decomposition with interactive DAG widgets.
-  - `ActPanel`: Synthesis console, deliverable drafts, and reversible change sets.
+  - **Top Navigation:** `📁 All Files` (master directory of all items with Scope Filter and Sort) and `🧭 Explore & Plan` (unified research, planning, trackers, and digests hub).
+  - **Projects Tree:** Expandable project folders with child pages, canvases, and `+ New Page` actions. Capped at 7 items with pinning (`📌`).
+  - **Notes & Pages:** Standalone notes capped at 7 items with pinning and section header `View all →` link to All Files.
+  - **Custom Objects:** Object collections filtered by registered type with quick creator gear icon.
+  - **Unified Page Action Menu (`...`):** Hover-revealed three-dots menu on every note row for instant Link, Move, Duplicate, Convert, Rename, and Safe Delete.
+- **Center Workspace Architecture (Elimination of Right Rail):**
+  - The legacy Right Mode Rail was permanently eliminated. The center workspace expands to full width (`flex-1 h-full min-w-0 bg-[#FAF8F3]`) between the Left Sidebar and the window frame, providing an unconstrained canvas for reading, editing, and streaming.
 
 ---
 
@@ -234,14 +250,60 @@ Enables structured knowledge entities alongside freeform Markdown:
 - **Top-Right Mode Toggle:** Users can switch at any time between `[ 🎛️ Interactive Widgets ]` and `[ 📄 Plain Markdown ]`.
 - **Zero-Stub Production Invariant:** The core runtime and UI strictly invoke the active selected model provider (`OllamaProvider`, `OpenAiCompatibleProvider`) for real inference streaming. Hardcoded static template stubs are permanently eliminated from live runtime paths.
 
-### 8.9 Full-Height Canvas Workspace & Docked Epistemic Margin (`FocusView`)
-- **Full-Viewport Canvas:** Focus View expands to the full viewport height (`flex-1 h-full overflow-y-auto bg-[#FAF8F3]`) with a generous responsive document sheet (`max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full bg-white border-x border-[#E8E5DC]`), completely eliminating cramped "postage-stamp" floating cards.
-- **Docked Collapsible Epistemic Margin:** Claims, verified quotes, and epistemic badges are cleanly docked in a dedicated right sidebar (`w-80 border-l border-[#E8E5DC] bg-[#FAF9F6]`), toggleable with a single click (`btn-toggle-epistemic-margin`).
+### 8.9 Full-Height Canvas Workspace & Collapsed Epistemic Margin (`FocusView`)
+- **Full-Viewport Canvas:** Focus View expands to the full viewport height (`flex-1 h-full overflow-y-auto bg-[#FAF8F3]`) with a generous responsive document sheet (`max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full bg-white border-x border-[#E8E5DC]`), eliminating cramped "postage-stamp" floating cards.
+- **Collapsed Epistemic Margin by Default:** Extracted claims, verified quotes, and epistemic badges are docked in a dedicated right sidebar (`w-80 border-l border-[#E8E5DC] bg-[#FAF9F6]`). The margin is collapsed by default (`showMargin: false`) to give users maximum writing canvas, and smoothly opens on demand with the `[ 📖 Margin ]` toolbar button.
 
-### 8.10 Notion-Style Slash Command Menu (`/`) & Rich Visual Editing
+### 8.10 Notion-Style Slash Command Menu (`/`) & Component-Decorated Rich Workspace
 - **Caret-Positioned `/` Menu:** Typing `/` at the beginning of a line or after whitespace opens an interactive popover with keyboard navigation (Arrow Up/Down, Enter, Escape):
   - **Formatting Blocks:** `/h1`, `/h2`, `/h3`, `/todo` (`- [ ] `), `/bullet`, `/table`, `/code`, `/callout`.
-  - **Sthira Epistemic & Object Blocks:** `/decision` (registers `UserRecorded` decision node), `/question`, `/idea`, `/task`.
+  - **Sthira Epistemic & Object Blocks:** `/decision` (registers `UserRecorded` decision node), `/question`, `/idea`, `/task`, plus all user-registered custom types.
   - **Inline AI Assistant:** `/plan <goal>`, `/research <topic>`, `/expand` stream real model completions directly into the document at the cursor position.
 - **Formatting Toolbar:** Quick-access toolbar at the top of the canvas provides one-click formatting (`B`, `I`, `H1`, `H2`, `Checklist`, `Code`, `Table`, `/ Insert Block`).
-- **Live Edit / Rich Preview Toggle:** Seamlessly switches between raw markdown editing and a rich typography preview where headings render with proper typography, tables are styled, and checklists (`- [ ] `) are interactively clickable and auto-save back to the document.
+- **Binary Mode Toggle (`Cmd+E`):** Seamlessly switches between raw Markdown editing and `RichDocumentRenderer` where tables are searchable/copyable, checklists are interactively clickable and auto-save back to the document, decision callouts render with Sage badges, and Mermaid diagrams execute dynamically.
+
+### 8.11 Unified "Explore & Plan" Hub (`ExplorePlanView`) & Center-Workspace Streaming
+- **Permanent Elimination of the Right Mode Rail:** All research, planning, and synthesis stream directly inside the center document workspace (`FocusView`), completely replacing cramped side drawers.
+- **4-Tab Master Hub:**
+  1. **`[ 🔍 Research ]`:** Full-width inquiry card with Web Search mode selector (`Auto` / `Always Search Web` / `Local Vault Only`), model selector, and project affiliation.
+  2. **`[ 📋 Plan ]`:** Full-width planning card with milestone generation and project creation.
+  3. **`[ ⏱️ Trackers ]`:** Management of active recurring research and plan trackers with pause/resume, run-now, and deletion controls.
+  4. **`[ 📚 All Digests ]`:** Searchable directory of all past generated Research digests and Plan reviews with type filters and project chips.
+- **Smart LLM Title Generation (`generate_smart_title`):** Fast, bounded prompt against the active model generates concise 3-to-6 word titles in Title Case, preventing conversational prompts from becoming messy artifact titles.
+- **Grounded Research Fallback Guarantee:** When web search fails or yields 0 results, the system marks `search_status = "web_search_failed"`, renders an amber warning badge (`⚠️ Web search returned no results; synthesized using local context`), and falls back to strictly relevant local vault documents.
+
+### 8.12 Continuous & Scheduled Topic Trackers (Wall-Clock Scheduling & Continuity Boundaries)
+- **Wall-Clock Cadence Engine:** Topics can be scheduled for exact times of day (e.g. `06:00 UTC`) and specific weekdays for weekly topics, evaluated in the background every 30 minutes without requiring open modal drawers.
+- **Anti-Duplication Continuity Boundary:** Research topics extract key findings from the last 5 digest runs and inject them into the search planner as an explicit `CONTINUITY BOUNDARY`. This prevents repetitive web queries and ensures each scheduled digest covers genuine new developments.
+- **Preserved Intelligence on Deletion:** Deleting a scheduled tracker purges run records from the scheduler but **strictly preserves all generated digest artifacts** in the user's vault.
+
+### 8.13 Object Type & Template Management System (Notion/Anytype-Style Schemas)
+- **Extensible Schema Engine:** Users can create custom object types with typed properties (`Text`, `Number`, `Checkbox`, `Select`, `Multi-Select`, `Date`, `URL`) and customizable option palettes.
+- **Pre-Filled Markdown Templates:** Each object type supports default and named reusable Markdown templates with pre-configured property values. Built-in types ship seeded templates (`idea`, `todo`, `decision`, `source`).
+- **Document Property Header:** Typed objects open with a Notion-style property header in `FocusView` displaying interactive chips that auto-save property edits directly to SQLite.
+- **Slash Menu Integration:** Typing `/` surfaces a Template Selector popover (`[Default]`, `[Blank]`, or named presets) before instantiating the object.
+
+### 8.14 Page Action Menu (`...`) & Safe Multi-Project Lifecycle Management
+- **Unified Action Surface:** Consistent `•••` action menu mounted across FocusView toolbar, Left Sidebar note rows, and All Files table rows.
+- **Single-Transaction Relocation:** Moving a note between projects runs as a single SQLite transaction that maintains append-only audit events (`artifact_attached`, `artifact_detached`), guaranteeing epistemic history and resume briefs remain intact.
+- **Byte-Preserving Object Conversion:** Converting a note to an object type writes an `object_instances` row while keeping the underlying Markdown body byte-identical.
+- **Safe Detach vs. Deletion:** Detaching a note returns it to the standalone pool without deleting data; deleting a note explains real semantics based on whether the note is shared across projects.
+
+### 8.15 Explicit Web Search Capability Detection & Badging
+- **Four-Tier Classification:** Every model in Sthira's registry is classified under `WebSearchCapability`:
+  - `Native`: Built-in web grounding (e.g. Perplexity Sonar).
+  - `AgenticToolCall`: Function calling support for SearXNG / Brave tools (e.g. Claude 3.7, GPT-OSS 120b, Gemma 4 31b).
+  - `EngineAugmentedOnly`: Sthira's Rust backend scrapes search results and injects clean Markdown chunks into the prompt (e.g. local Ollama Llama 3.2, Phi-3).
+  - `Unsupported`: Offline / embedding models where search is forbidden.
+- **Visual Badging & Adaptive Prompts:** Model selectors display color-coded badges (`[🌐 Native Search]`, `[🌐 Web Search Ready]`, `[📄 Web Context Injected]`, `[🚫 Offline Only]`). Search toggles automatically adapt or disable with clear explanatory tooltips.
+
+### 8.16 Targeted Re-Research & Note Derivation (Chained Synthesis & Epistemic Lineage)
+- **Database Lineage Architecture (PRAGMA user_version = 10):**
+  - Artifacts track provenance via `derived_from_artifact_id REFERENCES artifacts(id) ON DELETE SET NULL` and `derivation_type` (`'refine'`, `'plan_from_research'`, `'extract_ideas'`, `'extract_tasks'`), indexed via `idx_artifacts_lineage`.
+- **Targeted Re-Research (`refine_artifact`):**
+  - Allows iterative critique of an existing note with custom instructions, model switching, and optional live web search.
+  - Automatically snapshots the previous state as a reversible `ChangeSet` (`restore_artifact`), enabling instant **1-click undo**.
+- **Note Derivation (`derive_artifact`):**
+  - Generates new structured artifacts from an existing note (e.g. converting a Research note into an Execution Plan or discrete Ideas).
+  - Automatically links the child note to the source note via `derived_from_artifact_id` and inherits project associations.
+- **Lineage Header Chip:** Derived notes render a prominent header badge: `🔗 Derived from: [Parent Artifact Title]`. Clicking the badge navigates immediately to the parent document, making research-to-plan trajectories transparent and traceable.

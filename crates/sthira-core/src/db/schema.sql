@@ -55,11 +55,15 @@ CREATE TABLE IF NOT EXISTS artifacts (
     is_unfinished_draft INTEGER NOT NULL DEFAULT 0 CHECK(is_unfinished_draft IN (0, 1)),
     is_pinned INTEGER NOT NULL DEFAULT 0,
     last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    derived_from_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+    derivation_type TEXT,
     deleted_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     CHECK (type <> 'source' OR authorship = 'external')
 );
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_lineage ON artifacts(derived_from_artifact_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
     artifact_id UNINDEXED,
@@ -312,6 +316,7 @@ CREATE TABLE IF NOT EXISTS provider_models (
     supports_structured_output INTEGER NOT NULL DEFAULT 1,
     is_enabled INTEGER NOT NULL DEFAULT 1,
     is_default INTEGER NOT NULL DEFAULT 0,
+    web_search_capability TEXT NOT NULL DEFAULT 'engine_augmented_only',
     created_at INTEGER NOT NULL,
     UNIQUE(provider_id, model_identifier)
 );
@@ -331,7 +336,8 @@ SELECT
     pm.model_identifier,
     pm.display_name AS model_display_name,
     pm.context_window,
-    pm.is_default
+    pm.is_default,
+    pm.web_search_capability
 FROM provider_models pm
 JOIN providers p ON pm.provider_id = p.id
 WHERE pm.is_enabled = 1 AND p.is_enabled = 1

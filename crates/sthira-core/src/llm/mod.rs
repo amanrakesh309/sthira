@@ -1,11 +1,13 @@
 pub mod anthropic;
 pub mod autodiscover;
 pub mod dispatcher;
+pub mod models;
 pub mod streaming;
 
 pub use anthropic::AnthropicProvider;
 pub use autodiscover::{discover_local_ollama_models, sync_discovered_models};
 pub use dispatcher::{resolve_model_provider, ResolvedModel};
+pub use models::*;
 pub use streaming::*;
 
 use crate::{CoreError, Locality, ModelProvider};

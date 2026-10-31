@@ -1,4 +1,5 @@
 use crate::{
+    llm::models::WebSearchCapability,
     models::router::{ProviderEntry, ProviderModelEntry},
     CoreError,
 };
@@ -12,7 +13,7 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
     )?;
 
     let mut model_stmt = conn.prepare(
-        "SELECT pm.id, pm.provider_id, pm.model_identifier, pm.display_name, pm.context_window, pm.supports_structured_output, pm.is_enabled, pm.is_default
+        "SELECT pm.id, pm.provider_id, pm.model_identifier, pm.display_name, pm.context_window, pm.supports_structured_output, pm.is_enabled, pm.is_default, COALESCE(pm.web_search_capability, 'engine_augmented_only')
          FROM provider_models pm
          WHERE pm.provider_id = ?1
            AND pm.id IN (
@@ -46,6 +47,7 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
         let (id, display_name, provider_type, base_url, has_api_key, is_enabled) = row?;
 
         let model_rows = model_stmt.query_map(params![id], |mr| {
+            let cap_str: String = mr.get(8).unwrap_or_else(|_| "engine_augmented_only".to_string());
             Ok(ProviderModelEntry {
                 id: mr.get(0)?,
                 provider_id: mr.get(1)?,
@@ -55,6 +57,7 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
                 supports_structured_output: mr.get::<_, i32>(5)? != 0,
                 is_enabled: mr.get::<_, i32>(6)? != 0,
                 is_default: mr.get::<_, i32>(7)? != 0,
+                web_search_capability: WebSearchCapability::from_str_lossy(&cap_str),
             })
         })?;
 
@@ -92,7 +95,8 @@ pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(Prov
     let mut stmt = conn.prepare(
         "SELECT m.id, m.provider_id, m.model_identifier, m.display_name, m.context_window,
                 m.supports_structured_output, m.is_enabled, m.is_default,
-                p.display_name, p.provider_type, p.base_url, p.api_key, p.is_enabled
+                p.display_name, p.provider_type, p.base_url, p.api_key, p.is_enabled,
+                COALESCE(m.web_search_capability, 'engine_augmented_only')
          FROM provider_models m
          JOIN providers p ON m.provider_id = p.id
          WHERE m.id = ?1 OR m.model_identifier = ?1
@@ -115,6 +119,7 @@ pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(Prov
         let p_url: String = r.get(10)?;
         let p_key: Option<String> = r.get(11)?;
         let p_enabled: bool = r.get::<_, i32>(12)? != 0;
+        let m_cap_str: String = r.get(13).unwrap_or_else(|_| "engine_augmented_only".to_string());
 
         let model = ProviderModelEntry {
             id: m_id,
@@ -125,6 +130,7 @@ pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(Prov
             supports_structured_output: m_struct,
             is_enabled: m_enabled,
             is_default: m_default,
+            web_search_capability: WebSearchCapability::from_str_lossy(&m_cap_str),
         };
 
         let provider = ProviderEntry {
@@ -209,16 +215,18 @@ pub fn upsert_model(
     conn.execute(
         "INSERT INTO provider_models (
             id, provider_id, model_identifier, display_name,
-            context_window, supports_structured_output, is_enabled, is_default, created_at
+            context_window, supports_structured_output, is_enabled, is_default,
+            web_search_capability, created_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(provider_id, model_identifier) DO UPDATE SET
             id = excluded.id,
             display_name = excluded.display_name,
             context_window = excluded.context_window,
             supports_structured_output = excluded.supports_structured_output,
             is_enabled = excluded.is_enabled,
-            is_default = excluded.is_default;",
+            is_default = excluded.is_default,
+            web_search_capability = excluded.web_search_capability;",
         params![
             model.id,
             model.provider_id,
@@ -228,9 +236,25 @@ pub fn upsert_model(
             if model.supports_structured_output { 1 } else { 0 },
             if model.is_enabled { 1 } else { 0 },
             if model.is_default { 1 } else { 0 },
+            model.web_search_capability.as_str(),
             now_ms,
         ],
     )?;
+    Ok(())
+}
+
+pub fn update_model_search_capability(
+    conn: &Connection,
+    model_id: &str,
+    capability: WebSearchCapability,
+) -> Result<(), CoreError> {
+    let changed = conn.execute(
+        "UPDATE provider_models SET web_search_capability = ?1 WHERE id = ?2 OR model_identifier = ?2;",
+        params![capability.as_str(), model_id],
+    )?;
+    if changed == 0 {
+        return Err(CoreError::NotFound(format!("Model ID '{}' not found", model_id)));
+    }
     Ok(())
 }
 
@@ -315,6 +339,7 @@ pub fn seed_default_providers_if_empty(conn: &Connection, now_ms: i64) -> Result
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: true,
+                web_search_capability: WebSearchCapability::EngineAugmentedOnly,
             },
         ],
     };

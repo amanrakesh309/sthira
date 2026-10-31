@@ -1,3 +1,4 @@
+use crate::llm::models::WebSearchCapability;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -30,6 +31,8 @@ pub struct ProviderModelEntry {
     pub supports_structured_output: bool,
     pub is_enabled: bool,
     pub is_default: bool,
+    #[serde(default)]
+    pub web_search_capability: WebSearchCapability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]

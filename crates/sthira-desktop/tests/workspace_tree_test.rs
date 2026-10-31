@@ -168,6 +168,7 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: true,
+                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
             ProviderModelEntry {
                 id: "custom_groq:gemma4:31b".to_string(),
@@ -178,6 +179,7 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
+                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
         ],
     };
