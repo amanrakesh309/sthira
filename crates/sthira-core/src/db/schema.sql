@@ -439,3 +439,17 @@ CREATE TABLE IF NOT EXISTS scheduled_topic_runs (
 CREATE INDEX IF NOT EXISTS idx_scheduled_topics_active ON scheduled_topics(is_active, topic_type);
 CREATE INDEX IF NOT EXISTS idx_scheduled_topic_runs_topic ON scheduled_topic_runs(topic_id, executed_at DESC);
 
+-- Selectable Synthesis Templates for Research and Planning
+CREATE TABLE IF NOT EXISTS synthesis_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan')),
+    description TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    template_skeleton_md TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);
+
+

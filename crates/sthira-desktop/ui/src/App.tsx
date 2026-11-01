@@ -206,7 +206,8 @@ export const App: React.FC = () => {
   const handleStartResearch = async (
     query: string,
     mode: WebSearchMode = 'auto',
-    projectId?: string | null
+    projectId?: string | null,
+    templateId?: string | null
   ): Promise<WebResearchResult | null> => {
     const q = query.trim();
     if (!q) return null;
@@ -234,11 +235,14 @@ export const App: React.FC = () => {
       });
 
       // 2. Stream the pipeline's real stages into the banner.
-      const result = await runResearchIntoPage(artifactId, q, mode, (stage) => {
+      const onStageCallback = (stage: any) => {
         setDocumentRun((prev) =>
           prev && prev.artifactId === artifactId ? { ...prev, message: stage.message } : prev
         );
-      });
+      };
+      const result = templateId
+        ? await runResearchIntoPage(artifactId, q, mode, onStageCallback, templateId)
+        : await runResearchIntoPage(artifactId, q, mode, onStageCallback);
 
       // 3. Mark complete and ask the editor to reload the now-populated page.
       const isFailedSearch =

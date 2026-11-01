@@ -1053,5 +1053,72 @@
 - **TypeScript & Vite Build (`crates/sthira-desktop/ui`):**
   - `npm run build`: 0 errors.
 
+---
+
+## Phase 25: Core Workflow Engine (Synthesis Templates, Lineage, Search Badging & Explore Hub)
+- **Status:** PASSED (Verification Gates Passed: Rust Workspace 113/113 tests; Vitest 18/18 files, 85/85 tests; TypeScript/Vite 0 errors)
+
+### Step 1: Database Layer & Pre-Seeded Templates (`crates/sthira-core`)
+- Database Migration (PRAGMA user_version = 11):
+  - Created `synthesis_templates` table:
+    - `id TEXT PRIMARY KEY`
+    - `name TEXT NOT NULL`
+    - `target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan'))`
+    - `description TEXT NOT NULL DEFAULT ''`
+    - `is_default INTEGER NOT NULL DEFAULT 0`
+    - `template_skeleton_md TEXT NOT NULL`
+    - `created_at INTEGER NOT NULL`
+  - Created index: `CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);`
+  - Maintained `artifacts` lineage tracking columns:
+    - `derived_from_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL`
+    - `derivation_type TEXT`
+    - `idx_artifacts_lineage`
+- Created `crates/sthira-core/src/models/synthesis_templates.rs` defining `SynthesisTemplate`.
+- Implemented `crates/sthira-core/src/db/templates_repo.rs` with pre-seeded templates:
+  - **Research (Default): "Comparative Tech Evaluation"**: Executive Summary, Contenders, Comparison Matrix table, Grounded Sources, Recommendation.
+  - **Research: "Deep Dive Investigation"**: Architecture & Mechanics, Key Advantages, Trade-offs & Limitations, Verification Sources.
+  - **Plan (Default): "Milestone Roadmap"**: Scope & Objectives, Phase 1: Foundation & Core Setup (- [ ]), Phase 2: Implementation & Engine (- [ ]), Phase 3: Polish & Verification (- [ ]), Open Decisions & Risks.
+  - **Plan: "Fast Iteration Sprint"**: Sprint Goal, Action Items (- [ ]), Blockers & Invariants.
+- Exposed template repo methods on `Engine`: `list_synthesis_templates`, `get_synthesis_template`, `get_default_synthesis_template`.
+
+### Step 2: Web Search Capabilities & Synthesis Steering (`crates/sthira-core`)
+- In `crates/sthira-core/src/llm/models.rs`:
+  - `WebSearchCapability` enum: `Native`, `AgenticToolCall`, `EngineAugmentedOnly`, `Unsupported`.
+  - Added `web_search_capability` to `ModelSpec` (local models default to `EngineAugmentedOnly`, cloud/frontier to `AgenticToolCall`).
+- In `crates/sthira-core/src/engines/research_engine.rs` & `router_engine.rs`:
+  - Accepted `template_id: Option<String>` in research and planning flows.
+  - Injected skeleton steering instruction into synthesis prompts:
+    `"Synthesize strictly into this markdown skeleton preserving all headers:\n{template_skeleton}"`
+  - Maintained snapshot ChangeSets on `refine_artifact` and child artifact creation with `derived_from_artifact_id` on `derive_artifact`.
+
+### Step 3: Desktop IPC Commands (`crates/sthira-desktop/src/commands.rs`)
+- Added `SynthesisTemplateView` and exposed `cmd_list_synthesis_templates(target_mode: Option<String>) -> Result<Vec<SynthesisTemplateView>, String>`.
+- Verified `cmd_refine_artifact` and `cmd_derive_artifact` accept flexible parameters (`source_id` / `source_artifact_id`).
+- Verified `cmd_list_available_models()` returns `web_search_capability` on all model views.
+- Registered commands in `crates/sthira-desktop/src/lib.rs`.
+
+### Step 4: UI Implementation (`crates/sthira-desktop/ui`)
+- **Explore & Plan Hub (`ExplorePlanView.tsx`):**
+  - Clean 4-tab workflow: `[ 🔍 Research ]`, `[ 📋 Plan ]`, `[ ⏱️ Trackers ]`, `[ 📚 All Digests ]`.
+  - Research and Plan tabs feature a full-width input card, model selector with search capability badge, and a template dropdown selector (`<select data-testid="select-synthesis-template">`).
+  - Searchable, filterable list of all research/plan digests in `All Digests` with 1-click navigation to `FocusView`.
+- **Focus View Derivation & Refinement (`FocusView.tsx`):**
+  - `[ 🔄 Refine ]` modal with critique input, model switcher, and web search toggle.
+  - `[ ⚡ Derive ▾ ]` dropdown menu for execution plan, ideas, and tasks.
+  - Lineage header chip: `🔗 Derived from: [Parent Artifact Title]` with instant navigation to parent.
+- **Model Badging (`ModelSelector.tsx`):**
+  - Capability chips (`[🌐 Ready]`, `[📄 Augmented]`, `[🚫 Offline]`).
+
+### Step 5: Verification & Automated Tests
+- **Backend Tests:**
+  - `crates/sthira-desktop/tests/synthesis_templates_test.rs`: 3/3 PASSED.
+  - All workspace tests (`cargo test --workspace`): 113/113 PASSED (0 failures).
+- **Frontend Vitest Suite:**
+  - `crates/sthira-desktop/ui/src/test/explore_plan_view.test.tsx`: 7/7 PASSED.
+  - All 18 test suites: 85/85 tests PASSED (0 failures, 0 regressions).
+- **Production Build:**
+  - `npm run build` in `crates/sthira-desktop/ui`: 0 errors (built in 3.19s).
+
+
 
 

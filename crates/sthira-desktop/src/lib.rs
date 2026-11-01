@@ -92,6 +92,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_delete_scheduled_topic,
         commands::cmd_refine_artifact,
         commands::cmd_derive_artifact,
+        commands::cmd_list_synthesis_templates,
     ])
 }
 

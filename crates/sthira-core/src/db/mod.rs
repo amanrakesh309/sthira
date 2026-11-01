@@ -3,6 +3,7 @@ pub mod objects_repo;
 pub mod providers_repo;
 pub mod scheduled_topics_repo;
 pub mod search_repo;
+pub mod templates_repo;
 
 use crate::CoreError;
 use rusqlite::Connection;

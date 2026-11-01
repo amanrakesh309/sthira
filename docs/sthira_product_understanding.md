@@ -307,3 +307,16 @@ Enables structured knowledge entities alongside freeform Markdown:
   - Generates new structured artifacts from an existing note (e.g. converting a Research note into an Execution Plan or discrete Ideas).
   - Automatically links the child note to the source note via `derived_from_artifact_id` and inherits project associations.
 - **Lineage Header Chip:** Derived notes render a prominent header badge: `🔗 Derived from: [Parent Artifact Title]`. Clicking the badge navigates immediately to the parent document, making research-to-plan trajectories transparent and traceable.
+
+### 8.17 Selectable Synthesis Templates & Integrated Workflow Engine
+- **Pre-Seeded Synthesis Templates (`synthesis_templates`):**
+  - Database-backed templates for `research` and `plan` modes, enabling steered markdown structure.
+  - **Research Defaults:** "Comparative Tech Evaluation" (Executive Summary, Contenders, Comparison Matrix table, Grounded Sources, Recommendation) and "Deep Dive Investigation".
+  - **Plan Defaults:** "Milestone Roadmap" (Scope & Objectives, Phase 1-3 tasks `- [ ]`, Open Decisions) and "Fast Iteration Sprint".
+- **Prompt Skeleton Steering:**
+  - Sthira injects strict formatting instructions into synthesis prompts:
+    `"Synthesize strictly into this markdown skeleton preserving all headers:\n{template_skeleton}"`
+  - Guarantees predictable, rich, and high-fidelity artifact structuring across local and cloud LLM providers.
+- **4-Tab Explore & Plan Hub:**
+  - Unified hub for ideation, scoping, tracking, and review (`[ 🔍 Research ]`, `[ 📋 Plan ]`, `[ ⏱️ Trackers ]`, `[ 📚 All Digests ]`).
+  - Native model selector with search capability chips and interactive synthesis template selector.

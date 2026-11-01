@@ -33,6 +33,16 @@ impl Engine {
         explicit_mode: Option<OperationalMode>,
         selected_model_id: Option<&str>,
     ) -> Result<RouteOutcome, CoreError> {
+        self.route_input_steered_with_template(raw, explicit_mode, selected_model_id, None).await
+    }
+
+    pub async fn route_input_steered_with_template(
+        &self,
+        raw: &str,
+        explicit_mode: Option<OperationalMode>,
+        selected_model_id: Option<&str>,
+        template_id: Option<&str>,
+    ) -> Result<RouteOutcome, CoreError> {
         let trimmed = raw.trim();
 
         // Query read-only database state in a synchronous block and drop ro_conn before any await
@@ -148,6 +158,7 @@ impl Engine {
                         OperationalMode::Plan,
                         &resolved,
                         &active_projects,
+                        template_id,
                     )
                     .await?;
                 Ok(RouteOutcome::StructuredPreview(preview))
@@ -159,6 +170,7 @@ impl Engine {
                         OperationalMode::Research,
                         &resolved,
                         &active_projects,
+                        template_id,
                     )
                     .await?;
                 Ok(RouteOutcome::StructuredPreview(preview))
@@ -216,6 +228,7 @@ impl Engine {
         mode: OperationalMode,
         resolved: &ResolvedModel,
         active_projects: &[(String, String)],
+        template_id: Option<&str>,
     ) -> Result<StructuredPlanPreview, CoreError> {
         let schema = schemars::schema_for!(LlmPlanBreakdown);
         let schema_val = serde_json::to_value(&schema).unwrap_or_default();
@@ -226,9 +239,30 @@ impl Engine {
             _ => "structured analysis and execution",
         };
 
+        let target_mode_str = match mode {
+            OperationalMode::Plan => "plan",
+            OperationalMode::Research => "research",
+            _ => "plan",
+        };
+
+        let template_skeleton = if let Some(tid) = template_id {
+            self.get_synthesis_template(tid).ok().flatten().map(|t| t.template_skeleton_md)
+        } else {
+            self.get_default_synthesis_template(target_mode_str).ok().flatten().map(|t| t.template_skeleton_md)
+        };
+
+        let template_instruction = match template_skeleton.as_deref() {
+            Some(skeleton) => format!(
+                "\n\nSynthesize strictly into this markdown skeleton preserving all headers:\n{}\n",
+                skeleton
+            ),
+            None => String::new(),
+        };
+
         let system_prompt = format!(
-            "You are a master strategist and domain-adaptive execution partner specializing in {}. Given the user's objective, break it down into at least 3 distinct chronological phases (e.g. Phase 1, Phase 2, Phase 3), key decisions, and concrete actions. Adapt your terminology naturally to the goal domain (fitness/health, business, engineering, etc.). Never force software engineering metaphors onto unrelated personal topics.",
-            mode_desc
+            "You are a master strategist and domain-adaptive execution partner specializing in {}. Given the user's objective, break it down into at least 3 distinct chronological phases (e.g. Phase 1, Phase 2, Phase 3), key decisions, and concrete actions. Adapt your terminology naturally to the goal domain (fitness/health, business, engineering, etc.). Never force software engineering metaphors onto unrelated personal topics.{}",
+            mode_desc,
+            template_instruction
         );
 
         let user_prompt = format!(
@@ -322,7 +356,12 @@ impl Engine {
                 ),
             };
 
-            let page_content = if mode == OperationalMode::Plan {
+            let page_content = if let Some(ref skel) = template_skeleton {
+                format!(
+                    "# {}\n\n> **Objective:** {}\n\n{}\n",
+                    clean_topic, raw, skel
+                )
+            } else if mode == OperationalMode::Plan {
                 format!(
                     "# {}\n\n## Vision & Scope\n{}\n\n```widget:plan\n{{\"phase_number\": 1, \"title\": \"Phase 1: Architecture & Invariants\", \"milestones\": [\"Establish safety bounds and data models\", \"Define SQLite schema migrations\"], \"prerequisites\": []}}\n```\n\n```widget:plan\n{{\"phase_number\": 2, \"title\": \"Phase 2: Core Implementation & Engine Logic\", \"milestones\": [\"Construct core execution flows\", \"Implement fail-safe token buffer parser\"], \"prerequisites\": [\"Phase 1\"]}}\n```\n\n```widget:plan\n{{\"phase_number\": 3, \"title\": \"Phase 3: Verification & Integration Testing\", \"milestones\": [\"Validate edge cases and reversible actions\", \"Automated regression test suite\"], \"prerequisites\": [\"Phase 2\"]}}\n```\n\n```widget:decision\n{{\"id\": \"execution_architecture\", \"question\": \"Which implementation architecture should be prioritized?\", \"options\": [\"Local-First SQLite Engine (deterministic, offline-first)\", \"Hybrid Cloud Synced Engine\", \"Event-Sourced Append-Only Log\"], \"recommended\": \"Local-First SQLite Engine (deterministic, offline-first)\"}}\n```\n\n## Execution Phases & Milestones\n- [ ] **Phase 1: Architecture & Data Schemas**\n  - Establish safety bounds and data models.\n- [ ] **Phase 2: Core Implementation & Engine Logic**\n  - Construct core execution flows and state transitions.\n- [ ] **Phase 3: Verification & Integration Testing**\n  - Validate edge cases, idempotency, and reversible actions.\n\n## Open Invariants & Questions\n- What are the core constraints and resource bounds?\n- Which failure modes require deterministic rollback?\n\n## Workspace & Notes\nWorking document for \"{}\".\n",
                     clean_topic, raw, clean_topic

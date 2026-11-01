@@ -6,7 +6,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     if user_version == 0 {
         let schema_sql = include_str!("schema.sql");
         conn.execute_batch(schema_sql)?;
-        conn.execute_batch("PRAGMA user_version = 10;")?;
+        conn.execute_batch("PRAGMA user_version = 11;")?;
     } else {
         if user_version < 2 {
             conn.execute_batch(
@@ -183,7 +183,23 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
                  PRAGMA user_version = 10;",
             )?;
         }
+        if user_version < 11 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS synthesis_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan')),
+                    description TEXT NOT NULL DEFAULT '',
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    template_skeleton_md TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);
+                PRAGMA user_version = 11;",
+            )?;
+        }
     }
 
     Ok(())
 }
+

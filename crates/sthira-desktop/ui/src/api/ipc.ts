@@ -37,6 +37,7 @@ import type {
   ResearchStage,
   ModelView,
   WebSearchCapability,
+  SynthesisTemplateView,
 } from '../types/sthira';
 
 // Check if running inside Tauri runtime
@@ -775,13 +776,17 @@ export async function toggleModel(modelId: string, enabled: boolean): Promise<vo
 export async function routeInputSteered(
   raw: string,
   mode?: OperationalMode,
-  modelId?: string
+  modelId?: string,
+  templateId?: string | null
 ): Promise<RouteOutcome> {
   if (isTauri) {
     return await invoke<RouteOutcome>('cmd_route_input_steered', {
       raw,
       mode: mode || null,
       modelId: modelId || null,
+      model_id: modelId || null,
+      templateId: templateId || null,
+      template_id: templateId || null,
     });
   }
 
@@ -1974,7 +1979,8 @@ export async function runResearchIntoPage(
   artifactId: string,
   query: string,
   webSearchMode: WebSearchMode,
-  onStage?: (stage: ResearchStage) => void
+  onStage?: (stage: ResearchStage) => void,
+  templateId?: string | null
 ): Promise<WebResearchResult> {
   if (isTauri) {
     const channel = new Channel<ResearchStage>();
@@ -1987,6 +1993,8 @@ export async function runResearchIntoPage(
       query,
       webSearchMode,
       web_search_mode: webSearchMode,
+      templateId: templateId || null,
+      template_id: templateId || null,
       onProgress: channel,
       on_progress: channel,
     });
@@ -2049,5 +2057,61 @@ export async function deriveArtifact(
   }
 
   return 'derived-preview-art-' + Date.now();
+}
+
+export async function listSynthesisTemplates(
+  targetMode?: string
+): Promise<SynthesisTemplateView[]> {
+  if (isTauri) {
+    return await invoke<SynthesisTemplateView[]>('cmd_list_synthesis_templates', {
+      targetMode: targetMode || null,
+      target_mode: targetMode || null,
+    });
+  }
+
+  // Preview fallbacks for browser testing
+  const allTemplates: SynthesisTemplateView[] = [
+    {
+      id: 'research-comparative-tech',
+      name: 'Comparative Tech Evaluation',
+      target_mode: 'research',
+      description: 'Systematic architectural comparison matrix evaluating tradeoffs, throughput, memory bounds, and operational invariants.',
+      is_default: true,
+      template_skeleton_md: `## Executive Summary & Recommendation\n\n## Contenders & Key Criteria\n\n## Comparison Matrix\n| Criteria | Option A | Option B |\n|---|---|---|\n| Architecture | | |\n| Throughput / Latency | | |\n| Operational Invariants | | |\n\n## Grounded Sources & Verifications\n\n## Final Recommendation\n`,
+      created_at: 1700000000000,
+    },
+    {
+      id: 'research-deep-dive',
+      name: 'Deep Dive Investigation',
+      target_mode: 'research',
+      description: 'Exhaustive thematic breakdown with historical context and contradictions.',
+      is_default: false,
+      template_skeleton_md: `## Problem Formulation\n\n## In-Depth Analysis\n\n## Contradictions & Historical Evolution\n\n## Empirical Findings\n\n## Conclusion & Open Questions\n`,
+      created_at: 1700000000000,
+    },
+    {
+      id: 'plan-milestone-roadmap',
+      name: 'Milestone Roadmap',
+      target_mode: 'plan',
+      description: 'Phased milestone breakdown with explicit risk boundaries and action items.',
+      is_default: true,
+      template_skeleton_md: `## Scope & Invariants\n\n## Phase 1: Foundation & Data Contracts\n- [ ] \n\n## Phase 2: Engine Implementation & Safety Bounds\n- [ ] \n\n## Phase 3: Integration & Verifications\n- [ ] \n\n## Open Decisions & Risks\n`,
+      created_at: 1700000000000,
+    },
+    {
+      id: 'plan-fast-sprint',
+      name: 'Fast Iteration Sprint',
+      target_mode: 'plan',
+      description: 'Lean 2-stage execution checklist designed for rapid prototypes and tactical fixes.',
+      is_default: false,
+      template_skeleton_md: `## Objective & Non-Goals\n\n## Stage 1: Quick Wins & Prototyping\n- [ ] \n\n## Stage 2: Hardening & Sanity Checks\n- [ ] \n\n## Verification Criteria\n`,
+      created_at: 1700000000000,
+    },
+  ];
+
+  if (!targetMode) {
+    return allTemplates;
+  }
+  return allTemplates.filter((t) => t.target_mode === targetMode);
 }
 

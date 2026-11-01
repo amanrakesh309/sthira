@@ -27,6 +27,8 @@ pub use models::scheduled_topics::{
     format_hhmm, is_topic_due, iso_weekday_of, most_recent_scheduled_instant,
     next_scheduled_instant, parse_hhmm, ScheduledTopic, ScheduledTopicRun, TopicCadence, TopicType,
 };
+pub use models::synthesis_templates::SynthesisTemplate;
+
 
 /// Converts epoch milliseconds to an ISO-8601 `YYYY-MM-DD` civil date (UTC).
 ///
@@ -284,6 +286,7 @@ impl Engine {
             let _ = db::providers_repo::seed_default_providers_if_empty(&writer, now_ms);
             let _ = db::objects_repo::seed_default_object_types_if_empty(&writer, now_ms);
             let _ = db::search_repo::seed_default_search_providers_if_empty(&writer, now_ms);
+            let _ = db::templates_repo::seed_default_synthesis_templates(&writer, now_ms);
         }
 
         Ok(Self {
@@ -1219,4 +1222,29 @@ impl Engine {
             occurred_at: now_ms,
         })
     }
+
+    pub fn list_synthesis_templates(
+        &self,
+        target_mode: Option<&str>,
+    ) -> Result<Vec<SynthesisTemplate>, CoreError> {
+        let reader = self.db.reader()?;
+        db::templates_repo::list_synthesis_templates(&reader, target_mode)
+    }
+
+    pub fn get_synthesis_template(
+        &self,
+        id: &str,
+    ) -> Result<Option<SynthesisTemplate>, CoreError> {
+        let reader = self.db.reader()?;
+        db::templates_repo::get_synthesis_template(&reader, id)
+    }
+
+    pub fn get_default_synthesis_template(
+        &self,
+        target_mode: &str,
+    ) -> Result<Option<SynthesisTemplate>, CoreError> {
+        let reader = self.db.reader()?;
+        db::templates_repo::get_default_synthesis_template(&reader, target_mode)
+    }
 }
+

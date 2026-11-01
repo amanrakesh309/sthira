@@ -351,11 +351,84 @@ describe('🧭 Explore & Plan Hub', () => {
     // Submit
     await user.click(screen.getByTestId('btn-start-research'));
 
-    expect(onStartResearch).toHaveBeenCalledWith('Speculative Decoding Algorithms', 'always_search', null);
+    expect(onStartResearch).toHaveBeenCalledWith(
+      'Speculative Decoding Algorithms',
+      'always_search',
+      null,
+      'research-comparative-tech'
+    );
   });
 
   // ---------------------------------------------------------------------------
-  // 5. Trackers Creation Modal
+  // 5. Template Dropdown Updates on Mode Change (Research vs Plan)
+  // ---------------------------------------------------------------------------
+  it('Step 5: Template dropdown updates its selectable templates when switching between Research and Plan tabs', async () => {
+    const user = userEvent.setup();
+    const onStartResearch = vi.fn().mockResolvedValue(null);
+    const onStartPlan = vi.fn().mockResolvedValue(null);
+
+    render(
+      <ExplorePlanView
+        initialTab="research"
+        onStartResearch={onStartResearch}
+        onStartPlan={onStartPlan}
+      />
+    );
+
+    // 1. In Research tab, template selector has research options
+    await waitFor(() => {
+      expect(screen.getByTestId('select-synthesis-template')).toBeInTheDocument();
+    });
+
+    const researchTemplateSelect = screen.getByTestId('select-synthesis-template') as HTMLSelectElement;
+    expect(researchTemplateSelect.value).toBe('research-comparative-tech');
+    expect(screen.getByRole('option', { name: /Comparative Tech Evaluation/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Deep Dive Investigation/i })).toBeInTheDocument();
+
+    // Select alternative template: Deep Dive Investigation
+    await user.selectOptions(researchTemplateSelect, 'research-deep-dive');
+    expect(researchTemplateSelect.value).toBe('research-deep-dive');
+
+    // Submit research with selected alternative template
+    await user.type(screen.getByTestId('input-research-query'), 'CRDT vs OT Tradeoffs');
+    await user.click(screen.getByTestId('btn-start-research'));
+
+    expect(onStartResearch).toHaveBeenCalledWith(
+      'CRDT vs OT Tradeoffs',
+      'auto',
+      null,
+      'research-deep-dive'
+    );
+
+    // 2. Switch to Plan tab
+    await user.click(screen.getByTestId('tab-plan'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tab-content-plan')).toBeInTheDocument();
+    });
+
+    const planTemplateSelect = screen.getByTestId('select-synthesis-template') as HTMLSelectElement;
+    expect(planTemplateSelect.value).toBe('plan-milestone-roadmap');
+    expect(screen.getByRole('option', { name: /Milestone Roadmap/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Fast Iteration Sprint/i })).toBeInTheDocument();
+
+    // Select alternative plan template: Fast Iteration Sprint
+    await user.selectOptions(planTemplateSelect, 'plan-fast-sprint');
+    expect(planTemplateSelect.value).toBe('plan-fast-sprint');
+
+    // Submit plan with selected template
+    await user.type(screen.getByTestId('input-plan-goal'), 'Ship SQLite v2 schema');
+    await user.click(screen.getByTestId('btn-start-plan'));
+
+    expect(onStartPlan).toHaveBeenCalledWith(
+      'Ship SQLite v2 schema',
+      null,
+      'plan-fast-sprint'
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // 6. Trackers Creation Modal
   // ---------------------------------------------------------------------------
   it('opens New Tracker modal and dispatches cmd_create_scheduled_topic', async () => {
     const user = userEvent.setup();

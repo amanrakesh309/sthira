@@ -313,12 +313,13 @@ pub async fn execute_multi_query_research(
     limit_docs: usize,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
-    execute_multi_query_research_with_capability(
+    execute_multi_query_research_with_template(
         engine,
         inquiry,
         search_provider,
         limit_docs,
         WebSearchCapability::EngineAugmentedOnly,
+        None,
         on_stage,
     )
     .await
@@ -332,7 +333,29 @@ pub async fn execute_multi_query_research_with_capability(
     capability: WebSearchCapability,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
+    execute_multi_query_research_with_template(
+        engine,
+        inquiry,
+        search_provider,
+        limit_docs,
+        capability,
+        None,
+        on_stage,
+    )
+    .await
+}
+
+pub async fn execute_multi_query_research_with_template(
+    engine: &Engine,
+    inquiry: &str,
+    search_provider: &dyn SearchProvider,
+    limit_docs: usize,
+    capability: WebSearchCapability,
+    template_id: Option<&str>,
+    on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
+) -> Result<WebResearchResult, CoreError> {
     let now_ms = engine.clock().now_ms();
+
 
     // Ordered progress log, mirrored to `on_stage` at the true moment each step runs so
     // the UI can render a genuine live banner rather than a post-hoc summary.
@@ -507,8 +530,20 @@ pub async fn execute_multi_query_research_with_capability(
         "Synthesizing research...".to_string(),
     );
 
+    let template_skeleton = if let Some(tid) = template_id {
+        engine.get_synthesis_template(tid).ok().flatten().map(|t| t.template_skeleton_md)
+    } else if let Ok(reader) = engine.db().reader() {
+        crate::db::templates_repo::get_default_synthesis_template(&reader, "research")
+            .ok()
+            .flatten()
+            .map(|t| t.template_skeleton_md)
+    } else {
+        None
+    };
+
     let synthesis =
-        synthesize_with_temporal_grounding(engine, inquiry, &today, &documents, &findings, capability).await;
+        synthesize_with_temporal_grounding(engine, inquiry, &today, &documents, &findings, capability, template_skeleton.as_deref()).await;
+
 
     // 7. Assemble the grounded research document.
     let title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
@@ -625,6 +660,7 @@ async fn synthesize_with_temporal_grounding(
     documents: &[ScrapedWebDocument],
     findings: &[WebResearchFinding],
     capability: WebSearchCapability,
+    template_skeleton: Option<&str>,
 ) -> ResearchSynthesisOutput {
     let mut context = String::new();
     for (i, doc) in documents.iter().enumerate() {
@@ -657,11 +693,19 @@ async fn synthesize_with_temporal_grounding(
         WebSearchCapability::EngineAugmentedOnly | WebSearchCapability::Unsupported => "",
     };
 
+    let template_instruction = match template_skeleton {
+        Some(skeleton) => format!(
+            "\n\nSynthesize strictly into this markdown skeleton preserving all headers:\n{}\n",
+            skeleton
+        ),
+        None => String::new(),
+    };
+
     let system_prompt = format!(
         "Today is {today}. {tool_prompt_prefix}Use the retrieved web context for current specifications, versions, and \
          benchmarks. If the retrieved context contradicts older conventions, explicitly flag the \
          difference in `contradictions_and_evolution`. Ground every claim in the retrieved context \
-         and cite sources as [Source N]. Output strictly JSON."
+         and cite sources as [Source N]. Output strictly JSON.{template_instruction}"
     );
 
     let context_header = match capability {
@@ -701,7 +745,17 @@ async fn synthesize_with_temporal_grounding(
 
     // Deterministic fallback: state the retrieved facts without inventing analysis.
     let mut synthesis = String::new();
-    if findings.is_empty() {
+    if let Some(skeleton) = template_skeleton {
+        let mut filled = skeleton.replace("{Title}", inquiry.trim());
+        if !findings.is_empty() {
+            let mut points = String::from("\n\n### Grounded Findings\n");
+            for f in findings {
+                points.push_str(&format!("- {}\n", f.statement));
+            }
+            filled.push_str(&points);
+        }
+        synthesis = filled;
+    } else if findings.is_empty() {
         synthesis.push_str(
             "Model synthesis unavailable and no verified quotes could be grounded in the retrieved context.\n",
         );
@@ -715,6 +769,7 @@ async fn synthesize_with_temporal_grounding(
             synthesis.push_str(&format!("- {}\n", f.statement));
         }
     }
+
 
     ResearchSynthesisOutput {
         synthesis,
@@ -1020,13 +1075,14 @@ pub async fn execute_research(
     limit_docs: usize,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
-    execute_research_with_capability(
+    execute_research_with_template(
         engine,
         inquiry,
         mode,
         search_provider,
         provider_label,
         limit_docs,
+        None,
         None,
         on_stage,
     )
@@ -1041,6 +1097,31 @@ pub async fn execute_research_with_capability(
     provider_label: &str,
     limit_docs: usize,
     capability: Option<WebSearchCapability>,
+    on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
+) -> Result<WebResearchResult, CoreError> {
+    execute_research_with_template(
+        engine,
+        inquiry,
+        mode,
+        search_provider,
+        provider_label,
+        limit_docs,
+        capability,
+        None,
+        on_stage,
+    )
+    .await
+}
+
+pub async fn execute_research_with_template(
+    engine: &Engine,
+    inquiry: &str,
+    mode: WebSearchMode,
+    search_provider: Option<&dyn SearchProvider>,
+    provider_label: &str,
+    limit_docs: usize,
+    capability: Option<WebSearchCapability>,
+    template_id: Option<&str>,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
     let mut stages: Vec<ResearchStage> = Vec::new();
@@ -1128,12 +1209,13 @@ pub async fn execute_research_with_capability(
         }
     };
 
-    let web_res = execute_multi_query_research_with_capability(
+    let web_res = execute_multi_query_research_with_template(
         engine,
         inquiry,
         provider,
         limit_docs,
         resolved_cap,
+        template_id,
         Some(&labelled),
     )
     .await;
@@ -1369,37 +1451,59 @@ pub async fn derive_artifact(
     engine: &Engine,
     source_artifact_id: &str,
     target_derivation_type: &str,
-    _target_template_id: Option<&str>,
+    target_template_id: Option<&str>,
     model_override: Option<&str>,
 ) -> Result<String, String> {
     let src = engine.get_artifact(source_artifact_id).map_err(|e| e.to_string())?;
+
+    let template_skeleton = target_template_id
+        .and_then(|tid| engine.get_synthesis_template(tid).ok().flatten())
+        .or_else(|| {
+            if target_derivation_type == "plan_from_research" {
+                engine.get_default_synthesis_template("plan").ok().flatten()
+            } else {
+                None
+            }
+        })
+        .map(|t| t.template_skeleton_md);
+
+    let template_injection = match template_skeleton.as_deref() {
+        Some(skeleton) => format!(
+            "\n\nSynthesize strictly into this markdown skeleton preserving all headers:\n{}\n",
+            skeleton
+        ),
+        None => String::new(),
+    };
 
     let (default_title, sys_prompt, user_prompt) = match target_derivation_type {
         "plan_from_research" => (
             format!("Execution Plan: {}", src.title.as_deref().unwrap_or("Untitled")),
             "You are an expert system architect and planner. Synthesize a structured milestone execution plan based on authoritative research findings.",
             format!(
-                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nSynthesize a structured milestone execution plan based on the findings above. Include phased milestones, concrete action items, and risk mitigations.",
+                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nSynthesize a structured milestone execution plan based on the findings above. Include phased milestones, concrete action items, and risk mitigations.{}",
                 src.title.as_deref().unwrap_or("Untitled"),
-                src.content_md
+                src.content_md,
+                template_injection
             ),
         ),
         "extract_ideas" => (
             format!("Ideas: {}", src.title.as_deref().unwrap_or("Untitled")),
             "You are a creative product strategist. Deconstruct research findings into discrete hypothesis and idea objects.",
             format!(
-                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nExtract discrete hypothesis and idea objects from the research findings above.",
+                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nExtract discrete hypothesis and idea objects from the research findings above.{}",
                 src.title.as_deref().unwrap_or("Untitled"),
-                src.content_md
+                src.content_md,
+                template_injection
             ),
         ),
         "extract_tasks" | _ => (
             format!("Action Checklist: {}", src.title.as_deref().unwrap_or("Untitled")),
             "You are an operational task coordinator. Extract a consolidated checklist of action items from the context.",
             format!(
-                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nExtract a consolidated checklist of actionable tasks from the document above.",
+                "Source Note Title: {}\n\n<AUTHORITATIVE_CONTEXT>\n{}\n</AUTHORITATIVE_CONTEXT>\n\nExtract a consolidated checklist of actionable tasks from the document above.{}",
                 src.title.as_deref().unwrap_or("Untitled"),
-                src.content_md
+                src.content_md,
+                template_injection
             ),
         ),
     };
@@ -1434,13 +1538,13 @@ pub async fn derive_artifact(
     let (final_title, final_content) = if let Some(out) = derived_result {
         let title = if out.title.trim().is_empty() { default_title } else { out.title.trim().to_string() };
         let content = if out.content_md.trim().is_empty() {
-            generate_derivation_fallback(target_derivation_type, &src)
+            generate_derivation_fallback(target_derivation_type, &src, template_skeleton.as_deref())
         } else {
             out.content_md
         };
         (title, content)
     } else {
-        (default_title, generate_derivation_fallback(target_derivation_type, &src))
+        (default_title, generate_derivation_fallback(target_derivation_type, &src, template_skeleton.as_deref()))
     };
 
     let new_art = engine.create_derived_artifact(
@@ -1470,8 +1574,24 @@ pub async fn derive_artifact(
     Ok(new_art.id)
 }
 
-fn generate_derivation_fallback(target_derivation_type: &str, src: &crate::Artifact) -> String {
+fn generate_derivation_fallback(
+    target_derivation_type: &str,
+    src: &crate::Artifact,
+    skeleton: Option<&str>,
+) -> String {
     let src_title = src.title.as_deref().unwrap_or("Untitled Note");
+    if let Some(skel) = skeleton {
+        return format!(
+            "# Execution Plan: {src_title}\n\n\
+             > **Derived from:** [[{src_title}]] (`{}`)\n\
+             > **Derivation Type:** `{}`\n\n\
+             {}",
+            src.id,
+            target_derivation_type,
+            skel
+        );
+    }
+
     match target_derivation_type {
         "plan_from_research" => format!(
             "# Execution Plan: {src_title}\n\n\

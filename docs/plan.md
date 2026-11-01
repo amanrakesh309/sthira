@@ -1579,17 +1579,63 @@ pub enum ProgressiveStreamChunk {
 
 ---
 
+## Phase 25: Integrated Core Workflow Engine (Synthesis Templates, Capability Badging & Derivation Lineage)
+
+**Status:** PASSED (Verified via `synthesis_templates_test.rs`, `explore_plan_view.test.tsx`, and full workspace suites)
+
+### 25.1 Product Requirements Implemented
+* **Database Layer & Pre-Seeded Templates (`crates/sthira-core`):**
+  - Schema migration (PRAGMA user_version = 11) adding `synthesis_templates`:
+    ```sql
+    CREATE TABLE IF NOT EXISTS synthesis_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan')),
+        description TEXT NOT NULL DEFAULT '',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        template_skeleton_md TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);
+    ```
+  - Pre-seeded default templates in `crates/sthira-core/src/db/templates_repo.rs`:
+    - **Research (Default): "Comparative Tech Evaluation"**: Executive Summary, Contenders, Comparison Matrix table, Grounded Sources, Recommendation.
+    - **Research: "Deep Dive Investigation"**: Architecture & Mechanics, Key Advantages, Trade-offs & Limitations, Verification Sources.
+    - **Plan (Default): "Milestone Roadmap"**: Scope & Objectives, Phase 1: Foundation & Core Setup (- [ ]), Phase 2: Implementation & Engine (- [ ]), Phase 3: Polish & Verification (- [ ]), Open Decisions & Risks.
+    - **Plan: "Fast Iteration Sprint"**: Sprint Goal, Action Items (- [ ]), Blockers & Invariants.
+* **Synthesis Steering & Web Search Capabilities (`crates/sthira-core`):**
+  - Models classified with `WebSearchCapability` (`Native`, `AgenticToolCall`, `EngineAugmentedOnly`, `Unsupported`).
+  - Research and planning calls accept `template_id: Option<String>` and steer the model:
+    `"Synthesize strictly into this markdown skeleton preserving all headers:\n{template_skeleton}"`
+  - Re-research (`refine_artifact`) preserves reversible ChangeSet history; note derivation (`derive_artifact`) links child notes with `derived_from_artifact_id`.
+* **Desktop IPC Commands (`crates/sthira-desktop/src/commands.rs`):**
+  - `cmd_list_synthesis_templates(target_mode: Option<String>) -> Result<Vec<SynthesisTemplateView>, String>`
+  - `cmd_refine_artifact` and `cmd_derive_artifact` supporting targeted iteration and lineage derivation.
+  - `cmd_list_available_models()` exposing `web_search_capability` per model.
+* **UI Implementation (`crates/sthira-desktop/ui`):**
+  - **Explore & Plan Hub (`ExplorePlanView.tsx`):**
+    - 4-tab workflow: `[ 🔍 Research ]`, `[ 📋 Plan ]`, `[ ⏱️ Trackers ]`, `[ 📚 All Digests ]`.
+    - Integrated model selector with web search capability badge (`[🌐 Ready]`, `[📄 Augmented]`, `[🚫 Offline]`).
+    - Selectable synthesis template dropdown (`<select data-testid="select-synthesis-template">`).
+    - `All Digests` tab provides a searchable, filterable repository of generated research/plan artifacts with 1-click navigation to `FocusView`.
+  - **Focus View (`FocusView.tsx`):**
+    - Toolbar action `[ 🔄 Refine ]` opens refinement modal for critique, model override, and web search toggle.
+    - Toolbar action `[ ⚡ Derive ▾ ]` enables 1-click derivation into Execution Plans, Discrete Ideas, or Action Checklists.
+    - Lineage breadcrumb header chip `🔗 Derived from: [Parent Artifact Title]` links directly to the parent document.
+
+---
+
 ## Comprehensive Testing & Verification Playbook
 
-Sthira is protected by comprehensive test suites across both Rust (110 tests) and React/TypeScript (84 tests across 18 Vitest suites), totaling **194 automated tests**.
+Sthira is protected by comprehensive test suites across both Rust (113 tests) and React/TypeScript (85 tests across 18 Vitest suites), totaling **198 automated tests**.
 
 ### 1. Automated Test Execution Commands
 
 ```bash
-# 1. Run All Rust Workspace Tests (110 tests)
+# 1. Run All Rust Workspace Tests (113 tests)
 cargo test --workspace
 
-# 2. Run All Desktop UI Tests (84 tests across 18 Vitest suites)
+# 2. Run All Desktop UI Tests (85 tests across 18 Vitest suites)
 cd crates/sthira-desktop/ui && npm test && cd ../../..
 
 # 3. Run Quality Gates (Phases 1 through 7)

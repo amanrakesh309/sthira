@@ -1777,9 +1777,10 @@ pub async fn handle_route_input_steered(
     raw: String,
     mode: Option<OperationalMode>,
     model_id: Option<String>,
+    template_id: Option<String>,
 ) -> Result<RouteOutcome, String> {
     engine
-        .route_input_steered(&raw, mode, model_id.as_deref())
+        .route_input_steered_with_template(&raw, mode, model_id.as_deref(), template_id.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -1789,9 +1790,10 @@ pub async fn cmd_route_input_steered(
     raw: String,
     mode: Option<OperationalMode>,
     model_id: Option<String>,
+    template_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<RouteOutcome, String> {
-    handle_route_input_steered(&state.engine, raw, mode, model_id).await
+    handle_route_input_steered(&state.engine, raw, mode, model_id, template_id).await
 }
 
 pub fn handle_execute_plan_action(
@@ -3361,9 +3363,10 @@ pub async fn handle_run_research_into_page(
     artifact_id: String,
     query: String,
     web_search_mode: Option<String>,
+    template_id: Option<String>,
     on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
-    use sthira_core::engines::research_engine::{execute_research, WebSearchMode};
+    use sthira_core::engines::research_engine::{execute_research_with_template, WebSearchMode};
 
     // Verify the target page exists before doing any expensive work.
     engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
@@ -3396,13 +3399,15 @@ pub async fn handle_run_research_into_page(
         let _ = on_progress.send(stage);
     };
 
-    let result = execute_research(
+    let result = execute_research_with_template(
         engine,
         query.trim(),
         mode,
         Some(provider.as_ref()),
         &provider_label,
         4,
+        None,
+        template_id.as_deref(),
         Some(&progress),
     )
     .await
@@ -3433,6 +3438,7 @@ pub async fn cmd_run_research_into_page(
     artifact_id: String,
     query: String,
     web_search_mode: Option<String>,
+    template_id: Option<String>,
     on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
     state: State<'_, AppState>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
@@ -3441,6 +3447,7 @@ pub async fn cmd_run_research_into_page(
         artifact_id,
         query,
         web_search_mode,
+        template_id,
         on_progress,
     )
     .await
@@ -4413,20 +4420,65 @@ pub async fn handle_derive_artifact(
 
 #[tauri::command]
 pub async fn cmd_derive_artifact(
-    source_artifact_id: String,
+    source_artifact_id: Option<String>,
+    source_id: Option<String>,
     derivation_type: String,
     template_id: Option<String>,
     model_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let resolved_source = source_id
+        .or(source_artifact_id)
+        .ok_or_else(|| "Missing source_id or source_artifact_id".to_string())?;
     handle_derive_artifact(
         &state.engine,
-        source_artifact_id,
+        resolved_source,
         derivation_type,
         template_id,
         model_id,
     )
     .await
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SynthesisTemplateView {
+    pub id: String,
+    pub name: String,
+    pub target_mode: String,
+    pub description: String,
+    pub is_default: bool,
+    pub template_skeleton_md: String,
+    pub created_at: i64,
+}
+
+pub fn handle_list_synthesis_templates(
+    engine: &Engine,
+    target_mode: Option<String>,
+) -> Result<Vec<SynthesisTemplateView>, String> {
+    let templates = engine
+        .list_synthesis_templates(target_mode.as_deref().filter(|s| !s.trim().is_empty()))
+        .map_err(|e| e.to_string())?;
+    Ok(templates
+        .into_iter()
+        .map(|t| SynthesisTemplateView {
+            id: t.id,
+            name: t.name,
+            target_mode: t.target_mode,
+            description: t.description,
+            is_default: t.is_default,
+            template_skeleton_md: t.template_skeleton_md,
+            created_at: t.created_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn cmd_list_synthesis_templates(
+    target_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<SynthesisTemplateView>, String> {
+    handle_list_synthesis_templates(&state.engine, target_mode)
+}
+
 
 
