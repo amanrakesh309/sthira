@@ -1,0 +1,449 @@
+/* Phase 3: All Files, projects, and custom-object directory.
+   Tokens come from sthira-theme-tokens.css. */
+
+.sthira-all-files {
+  container: all-files / inline-size;
+  color: var(--sthira-text);
+  background: var(--sthira-canvas);
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.all-files-container {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .all-files-container {
+    padding: 32px 32px 64px;
+  }
+}
+
+/* Header */
+.all-files-header {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .all-files-header {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+}
+
+.all-files-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sthira-text-subtle);
+}
+
+.all-files-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.all-files-folder-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--sthira-radius-md);
+  background: color-mix(in srgb, var(--sthira-accent) 15%, transparent);
+  color: var(--sthira-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.all-files-heading {
+  font-family: var(--sthira-font-editorial);
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--sthira-text);
+  letter-spacing: -0.02em;
+}
+
+@media (min-width: 640px) {
+  .all-files-heading {
+    font-size: 32px;
+  }
+}
+
+.all-files-subtitle {
+  font-size: 13px;
+  color: var(--sthira-text-muted);
+  margin-top: 4px;
+}
+
+/* Header Actions */
+.all-files-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.all-files-search-box {
+  position: relative;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .all-files-search-box {
+    width: 320px;
+  }
+}
+
+.all-files-search-input {
+  width: 100%;
+  height: 40px;
+  padding-left: 36px;
+  padding-right: 56px;
+  border-radius: var(--sthira-radius-xl, 20px);
+  background: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  color: var(--sthira-text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.all-files-search-input:focus {
+  border-color: var(--sthira-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sthira-focus) 20%, transparent);
+}
+
+.all-files-search-input::placeholder {
+  color: var(--sthira-text-subtle);
+}
+
+.all-files-manage-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--sthira-radius-xl, 20px);
+  background: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  color: var(--sthira-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.all-files-manage-btn:hover {
+  background: var(--sthira-surface-muted);
+  border-color: var(--sthira-border-strong);
+}
+
+/* Category Tabs */
+.all-files-category-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.all-files-category-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--sthira-radius-xl, 20px);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  border: 1px solid var(--sthira-border);
+  background: var(--sthira-surface);
+  color: var(--sthira-text-muted);
+}
+
+.all-files-category-tab:hover {
+  color: var(--sthira-text);
+  border-color: var(--sthira-border-strong);
+  background: var(--sthira-surface-muted);
+}
+
+.all-files-category-tab[aria-selected="true"] {
+  background: var(--sthira-primary);
+  color: var(--sthira-on-primary);
+  border-color: var(--sthira-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.all-files-tab-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 12px;
+  background: var(--sthira-surface-muted);
+  color: var(--sthira-text-muted);
+}
+
+.all-files-category-tab[aria-selected="true"] .all-files-tab-badge {
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--sthira-on-primary);
+}
+
+/* Secondary Filter / Sort Row */
+.all-files-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.all-files-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.all-files-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sthira-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+}
+
+.all-files-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--sthira-radius-xl, 16px);
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--sthira-border);
+  background: var(--sthira-surface);
+  color: var(--sthira-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.all-files-filter-pill:hover {
+  color: var(--sthira-text);
+  border-color: var(--sthira-border-strong);
+  background: var(--sthira-surface-muted);
+}
+
+.all-files-filter-pill[aria-pressed="true"] {
+  background: var(--sthira-primary);
+  color: var(--sthira-on-primary);
+  border-color: var(--sthira-primary);
+  font-weight: 600;
+}
+
+.all-files-pill-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  background: var(--sthira-surface-muted);
+  color: var(--sthira-text-muted);
+}
+
+.all-files-filter-pill[aria-pressed="true"] .all-files-pill-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--sthira-on-primary);
+}
+
+.all-files-sort-select {
+  height: 32px;
+  padding: 0 28px 0 12px;
+  border-radius: var(--sthira-radius-xl, 16px);
+  background: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  color: var(--sthira-text);
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2362665D' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px;
+}
+
+.all-files-sort-select:focus {
+  border-color: var(--sthira-focus);
+}
+
+/* Directory Table Card */
+.all-files-card {
+  background: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  border-radius: var(--sthira-radius-lg, 16px);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.all-files-table-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--sthira-surface-raised);
+  border-bottom: 1px solid var(--sthira-border);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sthira-text-muted);
+}
+
+.all-files-table-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sthira-border);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  min-height: 64px;
+}
+
+.all-files-table-row:last-child {
+  border-bottom: none;
+}
+
+.all-files-table-row:hover {
+  background: var(--sthira-surface-muted);
+}
+
+.all-files-table-row:focus-visible {
+  outline: 2px solid var(--sthira-focus);
+  outline-offset: -2px;
+}
+
+/* Entity Icons */
+.all-files-entity-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sthira-radius-sm, 8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+/* Type Badges */
+.all-files-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Directory Footer & Pagination */
+.all-files-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid var(--sthira-border);
+  background: var(--sthira-surface);
+  font-size: 12px;
+  color: var(--sthira-text-muted);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.all-files-pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.all-files-page-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: var(--sthira-radius-sm, 6px);
+  border: 1px solid var(--sthira-border);
+  background: var(--sthira-surface);
+  color: var(--sthira-text);
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.all-files-page-btn:hover:not(:disabled) {
+  background: var(--sthira-surface-muted);
+  border-color: var(--sthira-border-strong);
+}
+
+.all-files-page-btn[aria-current="page"] {
+  background: var(--sthira-primary);
+  color: var(--sthira-on-primary);
+  border-color: var(--sthira-primary);
+  font-weight: 600;
+}
+
+.all-files-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Projects Card Grid */
+.all-files-project-card {
+  background: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  border-radius: var(--sthira-radius-lg, 16px);
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.all-files-project-card:hover {
+  border-color: var(--sthira-border-strong);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.all-files-project-card:focus-visible {
+  outline: 2px solid var(--sthira-focus);
+  outline-offset: -2px;
+}

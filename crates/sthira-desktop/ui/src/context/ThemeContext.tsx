@@ -17,6 +17,12 @@ const THEME_STORAGE_KEY = 'sthira_theme';
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setThemeState] = useState<Theme>(() => {
     try {
+      if (typeof window !== 'undefined') {
+        const urlTheme = new URLSearchParams(window.location.search).get('theme');
+        if (urlTheme === 'dark' || urlTheme === 'light' || urlTheme === 'system') {
+          return urlTheme;
+        }
+      }
       const stored = localStorage.getItem(THEME_STORAGE_KEY);
       if (stored === 'light' || stored === 'dark' || stored === 'system') {
         return stored;

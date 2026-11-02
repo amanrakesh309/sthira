@@ -5,6 +5,25 @@
     <link rel="icon" type="image/png" href="/icons/32x32.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>sthira</title>
+    <script>
+      (function() {
+        try {
+          var params = new URLSearchParams(window.location.search);
+          var urlTheme = params.get('theme');
+          var stored = localStorage.getItem('sthira_theme');
+          var isDark = urlTheme === 'dark' || (!urlTheme && stored === 'dark');
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
+            document.documentElement.style.colorScheme = 'dark';
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.setAttribute('data-theme', 'light');
+            document.documentElement.style.colorScheme = 'light';
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">

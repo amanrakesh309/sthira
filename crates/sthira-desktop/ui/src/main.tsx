@@ -6,6 +6,7 @@ import './index.css';
 import './styles/sthira-theme-tokens.css';
 import './styles/home-shell.css';
 import './styles/focus-workspace.css';
+import './styles/all-files.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

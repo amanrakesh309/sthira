@@ -44,8 +44,26 @@ export const App: React.FC = () => {
     | 'workspace_index'
     | 'scheduled_topics'
     | 'explore_plan'
-  >('home');
-  const [workspaceIndexTab, setWorkspaceIndexTab] = useState<WorkspaceIndexTab>('all');
+  >(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get('view');
+      if (v === 'workspace_index' || v === 'all_files' || v === 'all-files') return 'workspace_index';
+      if (v === 'focus') return 'focus';
+      if (v === 'graph') return 'graph';
+      if (v === 'objects') return 'objects';
+      if (v === 'explore_plan') return 'explore_plan';
+    }
+    return 'home';
+  });
+  const [workspaceIndexTab, setWorkspaceIndexTab] = useState<WorkspaceIndexTab>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get('tab') as WorkspaceIndexTab;
+      if (tab === 'all' || tab === 'projects' || tab === 'notes' || tab === 'objects') return tab;
+    }
+    return 'all';
+  });
   const [explorePlanTab, setExplorePlanTab] = useState<ExplorePlanTab>('research');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
