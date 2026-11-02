@@ -510,81 +510,82 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       }`}
     >
       {/* Top Header */}
-      <div className="px-4 py-3.5 flex items-center justify-between border-b border-[#E8E5DC]/70 dark:border-[#262822]">
+      <div className="px-4 py-3.5 flex items-center justify-between border-b border-[#E8E5DC]/80 dark:border-[#2C2E27]">
         <button
           type="button"
           onClick={onNavigateHome}
-          className="flex items-center gap-2.5 hover:opacity-80 transition-opacity cursor-pointer group"
+          className="flex items-center gap-2.5 hover:opacity-85 transition-opacity cursor-pointer group"
         >
-          <div className="w-7 h-7 rounded-lg bg-[#282C25] dark:bg-[#22241F] border border-transparent dark:border-[#383B32] flex items-center justify-center text-white shadow-xs">
+          <div className="w-8 h-8 rounded-xl bg-[#49583D] dark:bg-[#2F3E28] flex items-center justify-center text-white shadow-xs">
             <svg
-              className="w-3.5 h-3.5 fill-none stroke-current stroke-2"
+              className="w-4 h-4 fill-none stroke-current stroke-2"
               viewBox="0 0 24 24"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              <rect x="3" y="3" width="18" height="18" rx="4" />
-              <line x1="3" y1="9" x2="21" y2="9" />
-              <line x1="9" y1="21" x2="9" y2="9" />
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
             </svg>
           </div>
-          <span className="text-base font-bold text-[#1E201C] dark:text-[#F3F1EA] tracking-tight">sthira</span>
+          <span className="text-base font-bold font-editorial tracking-tight text-[#1E201C] dark:text-[#EDEAE2]">
+            Sthira
+          </span>
         </button>
 
         <div className="flex items-center gap-1">
           <ThemeToggle />
           <button
             type="button"
-            onClick={onNavigateHome}
-            title="Home"
-            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-              currentView === 'home'
-                ? 'bg-[#EFECE4] dark:bg-[#22241F] text-[#1E201C] dark:text-[#EDEAE2]'
-                : 'text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
-            }`}
-          >
-            <Home className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
             onClick={onToggleCollapse}
             title="Collapse Sidebar"
-            className="p-1.5 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-[#62665D] dark:text-[#B1B5AB] hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
           >
-            <PanelLeftClose className="w-3.5 h-3.5" />
+            <PanelLeftClose className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Quick Search & Graph Navigation */}
-      <div className="px-3 pt-3 pb-1 space-y-1.5">
+      {/* Quick Search & Main Navigation */}
+      <div className="px-3 pt-3 pb-1 space-y-1">
         <button
           type="button"
           onClick={onOpenSearch}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-xs text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer border border-[#E8E5DC]/80 dark:border-[#2C2E27] shadow-2xs"
+          className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white dark:bg-[#1C1D19] hover:bg-[#FAF8F3] dark:hover:bg-[#23251F] text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer border border-[#E8E5DC] dark:border-[#2C2E27] shadow-2xs mb-2"
         >
           <span className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5" />
+            <Search className="w-3.5 h-3.5 text-[#62665D] dark:text-[#B1B5AB]" />
             <span>Search workspace...</span>
           </span>
-          <kbd className="text-[10px] bg-white/70 dark:bg-[#262822] px-1.5 py-0.5 rounded text-[#3A3B36] dark:text-[#D4D1C7] font-mono border border-[#E8E5DC] dark:border-[#383B32]">
+          <kbd className="text-[10px] bg-[#F1EEE6] dark:bg-[#262822] px-1.5 py-0.5 rounded text-[#1E201C] dark:text-[#D4D1C7] font-mono border border-[#E8E5DC] dark:border-[#383B32]">
             ⌘K
           </kbd>
         </button>
 
         <button
           type="button"
-          data-testid="nav-knowledge-graph"
-          onClick={onNavigateGraph}
-          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border ${
-            currentView === 'graph'
-              ? 'bg-[#282C25] dark:bg-[#2C3026] text-white border-[#282C25] dark:border-[#3E4334] font-semibold shadow-xs'
-              : 'bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white border-[#E8E5DC]/80 dark:border-[#2C2E27]'
+          data-testid="nav-home"
+          onClick={onNavigateHome}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+            currentView === 'home'
+              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
+              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
           }`}
         >
-          <Share2 className="w-3.5 h-3.5" />
-          <span>🌐 Knowledge Graph</span>
+          <Home className="w-4 h-4" />
+          <span>Home</span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="nav-knowledge-graph"
+          onClick={onNavigateGraph}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+            currentView === 'graph'
+              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
+              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
+          }`}
+        >
+          <Share2 className="w-4 h-4" />
+          <span>Knowledge Graph</span>
         </button>
 
         <button
@@ -592,13 +593,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           data-testid="nav-workspace-index"
           onClick={() => onNavigateWorkspaceIndex?.('all')}
           title="All Files — every project, note, and typed object"
-          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border ${
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'workspace_index'
-              ? 'bg-[#282C25] dark:bg-[#2C3026] text-white border-[#282C25] dark:border-[#3E4334] font-semibold shadow-xs'
-              : 'bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white border-[#E8E5DC]/80 dark:border-[#2C2E27]'
+              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
+              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
           }`}
         >
-          <span className="text-xs">📁</span>
+          <Folder className="w-4 h-4" />
           <span>All Files</span>
         </button>
 
@@ -607,13 +608,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           data-testid="nav-explore-plan"
           onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
           title="🧭 Explore & Plan — unified research, planning, trackers, and digests"
-          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border ${
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'explore_plan' || currentView === 'scheduled_topics'
-              ? 'bg-[#282C25] dark:bg-[#2C3026] text-white border-[#282C25] dark:border-[#3E4334] font-semibold shadow-xs'
-              : 'bg-[#EFECE4] dark:bg-[#1E201B] hover:bg-[#E5E1D6] dark:hover:bg-[#242721] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white border-[#E8E5DC]/80 dark:border-[#2C2E27]'
+              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
+              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
           }`}
         >
-          <span className="text-xs">🧭</span>
+          <span className="text-sm">🧭</span>
           <span>Explore &amp; Plan</span>
         </button>
         {/* Backward-compatibility alias for tests referencing nav-scheduled-feeds */}
@@ -1290,23 +1291,26 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <button
             type="button"
             onClick={onOpenSettings}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#E5E1D6] dark:hover:bg-[#232520] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] transition-colors cursor-pointer"
           >
-            <SlidersHorizontal className="w-3.5 h-3.5 text-[#6E6D66] dark:text-[#A8A69E]" />
+            <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>Settings</span>
           </button>
 
           <button
             type="button"
             onClick={onOpenAccount}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#E5E1D6] dark:hover:bg-[#232520] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] transition-colors cursor-pointer"
           >
-            <User className="w-3.5 h-3.5 text-[#6E6D66] dark:text-[#A8A69E]" />
+            <User className="w-3.5 h-3.5" />
             <span>Account</span>
           </button>
         </div>
 
-        <ThemeToggle />
+        <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-[#62665D] dark:text-[#B1B5AB] font-medium select-none" title="All changes saved to local SQLite & filesystem vault">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#49583D] dark:bg-[#879E78]" />
+          <span className="hidden xl:inline">Local &amp; synced</span>
+        </div>
       </div>
       {/* Add To Project Modal */}
       <AddToProjectModal

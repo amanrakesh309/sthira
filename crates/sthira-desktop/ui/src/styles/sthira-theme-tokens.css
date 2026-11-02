@@ -1,0 +1,102 @@
+/* Sthira visual tokens v1 — use semantic vars in React/Tailwind components. */
+/* Default Warm Stone. Mirrors current documented canvas/border values. */
+:root {
+  color-scheme: light;
+  --sthira-app: #F5F3EC;
+  --sthira-canvas: #FAF8F3;
+  --sthira-surface: #FFFFFF;
+  --sthira-surface-raised: #FDFBF7;
+  --sthira-surface-muted: #F1EEE6;
+  --sthira-text: #1E201C;
+  --sthira-text-muted: #62665D;
+  --sthira-text-subtle: #73766D;
+  --sthira-border: #E8E5DC;
+  --sthira-border-strong: #D8D4C8;
+  --sthira-primary: #49583D;
+  --sthira-primary-hover: #39472F;
+  --sthira-on-primary: #FFFFFF;
+  --sthira-primary-tint: #EEF1E8;
+  --sthira-accent: #BE8B41;
+  --sthira-warning-bg: #FFF7E8;
+  --sthira-warning-text: #7E581D;
+  --sthira-danger: #9D3F36;
+  --sthira-focus: #6E835C;
+  --sthira-shadow-popover: 0 12px 36px rgba(30,32,28,.12), 0 2px 8px rgba(30,32,28,.06);
+  --sthira-radius-sm: 8px;
+  --sthira-radius-md: 12px;
+  --sthira-radius-lg: 16px;
+  --sthira-radius-hero: 20px;
+  --sthira-space-1: 4px;
+  --sthira-space-2: 8px;
+  --sthira-space-3: 12px;
+  --sthira-space-4: 16px;
+  --sthira-space-6: 24px;
+  --sthira-space-8: 32px;
+  --sthira-space-12: 48px;
+  --sthira-font-ui: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --sthira-font-editorial: Fraunces, "Source Serif 4", Georgia, serif;
+  --sthira-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sthira-sidebar-width: 264px;
+  --sthira-header-height: 56px;
+  --sthira-content-max: 1200px;
+  --sthira-document-max: 800px;
+}
+
+/* Compatible with existing theme toggle's html.dark and data-theme patterns. */
+html.dark, html[data-theme="dark"] {
+  color-scheme: dark;
+  --sthira-app: #121310;
+  --sthira-canvas: #161714;
+  --sthira-surface: #1C1D19;
+  --sthira-surface-raised: #23251F;
+  --sthira-surface-muted: #292B25;
+  --sthira-text: #EDEAE2;
+  --sthira-text-muted: #B1B5AB;
+  --sthira-text-subtle: #A3A69D;
+  --sthira-border: #2C2E27;
+  --sthira-border-strong: #3B4037;
+  --sthira-primary: #879E78;
+  --sthira-primary-hover: #9CB38D;
+  --sthira-on-primary: #121710;
+  --sthira-primary-tint: #283427;
+  --sthira-accent: #D3A15D;
+  --sthira-warning-bg: #3B301E;
+  --sthira-warning-text: #F1C787;
+  --sthira-danger: #ED9C91;
+  --sthira-focus: #A1BE8B;
+  --sthira-shadow-popover: 0 12px 36px rgba(0,0,0,.38), 0 2px 8px rgba(0,0,0,.24);
+}
+
+/* Opt-in primitives, not a global reset. Adopt incrementally to avoid regressions. */
+.sthira-shell { background: var(--sthira-app); color: var(--sthira-text); font-family: var(--sthira-font-ui); }
+.sthira-canvas { background: var(--sthira-canvas); color: var(--sthira-text); }
+.sthira-surface { background: var(--sthira-surface); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-lg); }
+.sthira-heading { font-family: var(--sthira-font-editorial); letter-spacing: -.025em; }
+.sthira-muted { color: var(--sthira-text-muted); }
+.sthira-button-primary {
+  background: var(--sthira-primary); color: var(--sthira-on-primary);
+  border: 1px solid transparent; border-radius: var(--sthira-radius-sm);
+  min-height: 40px; padding: 0 16px; font: 500 14px/1 var(--sthira-font-ui);
+  transition: background-color 150ms ease;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.sthira-button-primary:hover:not(:disabled) { background: var(--sthira-primary-hover); }
+.sthira-button-secondary {
+  background: var(--sthira-surface); color: var(--sthira-text);
+  border: 1px solid var(--sthira-border-strong); border-radius: var(--sthira-radius-sm);
+  min-height: 40px; padding: 0 16px; font: 500 14px/1 var(--sthira-font-ui);
+  transition: background-color 150ms ease, border-color 150ms ease;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.sthira-button-secondary:hover:not(:disabled) {
+  background: var(--sthira-surface-muted);
+}
+.sthira-button-primary:focus-visible, .sthira-button-secondary:focus-visible,
+.sthira-shell :is(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--sthira-focus); outline-offset: 2px;
+}
+.sthira-document-prose { max-width: var(--sthira-document-max); font-size: 16px; line-height: 1.7; }
+.sthira-popover { box-shadow: var(--sthira-shadow-popover); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); }
+@media (prefers-reduced-motion: reduce) {
+  .sthira-button-primary, .sthira-button-secondary { transition: none; }
+}

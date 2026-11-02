@@ -346,11 +346,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
         ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
 
         if (node.kind === 'project') {
-          // Large Hub Node
-          ctx.fillStyle = '#282C25';
+          // Large Hub Node in Forest Sage
+          ctx.fillStyle = '#49583D';
           ctx.fill();
           ctx.lineWidth = isHovered ? 3 : 2;
-          ctx.strokeStyle = isHovered ? '#6E6D66' : '#3A3B36';
+          ctx.strokeStyle = isHovered ? '#6E7F60' : '#38462F';
           ctx.stroke();
         } else if (node.kind === 'object') {
           // Typed Object Node
@@ -565,16 +565,16 @@ export const GraphView: React.FC<GraphViewProps> = ({
   return (
     <div
       data-testid="graph-view-container"
-      className="flex flex-col h-screen w-full bg-[#F5F3EC] text-[#1E201C] overflow-hidden select-none"
+      className="flex flex-col h-screen w-full bg-[#FAF8F3] dark:bg-[#121310] text-[#1E201C] dark:text-[#EDEAE2] overflow-hidden select-none"
     >
       {/* Top Header & Interactive Filter Bar */}
-      <header className="bg-[#FFFFFF] border-b border-[#E8E5DC] px-6 py-3 shrink-0 flex flex-wrap items-center justify-between gap-3 shadow-2xs z-20">
+      <header className="bg-white dark:bg-[#1C1D19] border-b border-[#E8E5DC] dark:border-[#2C2E27] px-6 py-3 shrink-0 flex flex-wrap items-center justify-between gap-3 shadow-2xs z-20">
         {/* Left: Breadcrumbs & Stats */}
         <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#EFECE4] hover:bg-[#E5E1D6] text-xs font-semibold text-[#1E201C] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#252820] hover:bg-[#E5E1D6] dark:hover:bg-[#2D3027] text-xs font-semibold text-[#1E201C] dark:text-[#EDEAE2] transition-colors cursor-pointer"
             title="Return to Home"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -584,19 +584,19 @@ export const GraphView: React.FC<GraphViewProps> = ({
           <span className="text-[#8C8A82] text-xs font-medium">/</span>
 
           <div className="flex items-center gap-2">
-            <Share2 className="w-4 h-4 text-[#282C25]" />
-            <h1 className="text-sm font-bold text-[#1E201C] tracking-tight">
+            <Share2 className="w-4 h-4 text-[#49583D] dark:text-[#879E78]" />
+            <h1 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] tracking-tight">
               Knowledge Graph Map
             </h1>
           </div>
 
-          <div className="hidden md:flex items-center gap-1.5 text-[11px] text-[#6E6D66] bg-[#FAF9F5] border border-[#E8E5DC] px-2.5 py-1 rounded-lg">
-            <span data-testid="graph-node-count" className="font-semibold text-[#1E201C]">
+          <div className="hidden md:flex items-center gap-1.5 text-[11px] text-[#6E6D66] dark:text-[#9E9C93] bg-[#FAF9F5] dark:bg-[#22241F] border border-[#E8E5DC] dark:border-[#2C2E27] px-2.5 py-1 rounded-lg">
+            <span data-testid="graph-node-count" className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">
               {totalVisibleNodes}
             </span>{' '}
             nodes
             <span className="text-[#8C8A82]">·</span>
-            <span data-testid="graph-edge-count" className="font-semibold text-[#1E201C]">
+            <span data-testid="graph-edge-count" className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">
               {totalVisibleEdges}
             </span>{' '}
             edges
@@ -605,7 +605,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
         {/* Center: Filter Pills */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] font-bold text-[#8C8A82] uppercase tracking-wider mr-1 hidden lg:inline">
+          <span className="text-[11px] font-bold text-[#8C8A82] dark:text-[#7A786F] uppercase tracking-wider mr-1 hidden lg:inline">
             Filters:
           </span>
 
@@ -613,10 +613,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-projects"
             onClick={() => setShowProjects((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
               showProjects
-                ? 'bg-[#282C25] text-white border-[#282C25]'
-                : 'bg-white text-[#6E6D66] border-[#E8E5DC] hover:bg-[#FAF9F5]'
+                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
+                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
             }`}
           >
             <span>📂</span>
@@ -627,10 +627,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-pages"
             onClick={() => setShowPages((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
               showPages
-                ? 'bg-[#282C25] text-white border-[#282C25]'
-                : 'bg-white text-[#6E6D66] border-[#E8E5DC] hover:bg-[#FAF9F5]'
+                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
+                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
             }`}
           >
             <span>📄</span>
@@ -641,10 +641,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-ideas"
             onClick={() => setShowIdeas((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
               showIdeas
-                ? 'bg-[#282C25] text-white border-[#282C25]'
-                : 'bg-white text-[#6E6D66] border-[#E8E5DC] hover:bg-[#FAF9F5]'
+                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
+                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
             }`}
           >
             <span>💡</span>
@@ -655,10 +655,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-tasks"
             onClick={() => setShowTasks((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
               showTasks
-                ? 'bg-[#282C25] text-white border-[#282C25]'
-                : 'bg-white text-[#6E6D66] border-[#E8E5DC] hover:bg-[#FAF9F5]'
+                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
+                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
             }`}
           >
             <span>☑️</span>
@@ -669,10 +669,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-sources"
             onClick={() => setShowSources((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
               showSources
-                ? 'bg-[#282C25] text-white border-[#282C25]'
-                : 'bg-white text-[#6E6D66] border-[#E8E5DC] hover:bg-[#FAF9F5]'
+                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
+                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
             }`}
           >
             <span>🔗</span>
@@ -798,7 +798,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
               type="button"
               data-testid="btn-open-selected-node"
               onClick={() => handleNavigateToNode(selectedNode)}
-              className="w-full py-1.5 px-3 rounded-xl bg-[#282C25] hover:opacity-90 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-opacity cursor-pointer shadow-xs"
+              className="w-full py-1.5 px-3 rounded-xl bg-[#49583D] hover:bg-[#39472F] text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
             >
               <span>{selectedNode.kind === 'project' ? 'Open Project' : 'Focus Note'}</span>
               <ExternalLink className="w-3.5 h-3.5" />
@@ -807,22 +807,22 @@ export const GraphView: React.FC<GraphViewProps> = ({
         )}
 
         {/* Legend Overlay at Bottom-Left */}
-        <div className="absolute bottom-6 left-6 z-10 bg-white/90 backdrop-blur-xs border border-[#E8E5DC] rounded-xl px-3 py-2 text-[11px] text-[#6E6D66] shadow-xs hidden sm:flex items-center gap-4">
+        <div className="absolute bottom-6 left-6 z-10 bg-white/95 dark:bg-[#1C1D19]/95 backdrop-blur-xs border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl px-3.5 py-2 text-[11px] text-[#6E6D66] dark:text-[#9E9C93] shadow-xs hidden sm:flex items-center gap-4">
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#282C25]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#49583D]" />
             <span>Project</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-white border border-[#E8E5DC]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FAF8F3] border border-[#CCDCCC]" />
             <span>Note</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#6366F1]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#BE8B41]" />
             <span>Object</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-[#10B981]" />
-            <span>Semantic Link</span>
+            <span className="w-3 h-0.5 bg-[#49583D]" />
+            <span>Link</span>
           </div>
         </div>
       </div>

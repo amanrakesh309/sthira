@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Zap,
   ChevronDown,
+  ExternalLink,
 } from 'lucide-react';
 import { RefineArtifactModal } from './RefineArtifactModal';
 import { ContextualResumePane } from './ContextualResumePane';
@@ -117,6 +118,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
   // Layout & Clean Binary Mode State ([ ✏️ Edit ] ⟷ [ 👁️ Preview ])
   const [showMargin, setShowMargin] = useState(false);
+  const [marginTab, setMarginTab] = useState<'insights' | 'sources'>('insights');
   const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [activeModelName, setActiveModelName] = useState('Active Model');
   const [activeModelId, setActiveModelId] = useState<string | undefined>(undefined);
@@ -1145,7 +1147,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
             )}
 
             {/* Document Title Header */}
-            <div className="pb-3 mb-4 border-b border-[#ECE9E0] dark:border-[#262822]">
+            <div className="pb-3 mb-5 border-b border-[#BE8B41]/25 dark:border-[#BE8B41]/20">
               <input
                 type="text"
                 data-testid="input-artifact-title"
@@ -1153,7 +1155,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 onChange={(e) => handleTitleChange(e.target.value)}
                 onBlur={handleSave}
                 placeholder="Document title..."
-                className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] bg-transparent border-none outline-none w-full placeholder-[#A09D94] dark:placeholder-[#6E6D66]"
+                className="text-3xl sm:text-4xl font-editorial font-bold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] bg-transparent border-none outline-none w-full placeholder-[#A09D94] dark:placeholder-[#6E6D66]"
               />
             </div>
 
@@ -1168,9 +1170,9 @@ export const FocusView: React.FC<FocusViewProps> = ({
             )}
 
             {/* Notion-Style Formatting Toolbar & Rich Preview Toggle */}
-            <div className="flex items-center justify-between pb-3 mb-5 border-b border-[#ECE9E0] dark:border-[#262822] text-xs text-[#6E6D66] dark:text-[#9E9C93]">
+            <div className="flex items-center justify-between pb-3 mb-5 border-b border-[#ECE9E0] dark:border-[#262822] text-xs text-[#6E6D66] dark:text-[#9E9C93] gap-3 flex-wrap">
               {/* Left: Quick Formatting Actions */}
-              <div className="flex items-center gap-1 flex-wrap">
+              <div className="flex items-center gap-1 flex-wrap p-1 rounded-xl bg-[#F7F5EF] dark:bg-[#1E201A] border border-[#E8E5DC] dark:border-[#2C2E27]">
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('bold')}
@@ -1513,23 +1515,23 @@ export const FocusView: React.FC<FocusViewProps> = ({
         {showMargin && (
           <aside
             data-testid="epistemic-margin-sidebar"
-            className="w-80 shrink-0 border-l border-[#E8E5DC] dark:border-[#262822] bg-[#FAF9F6] dark:bg-[#141512] h-full overflow-y-auto p-5 flex flex-col space-y-5 animate-in slide-in-from-right duration-150"
+            className="w-80 shrink-0 border-l border-[#E8E5DC] dark:border-[#262822] bg-[#FAF9F6] dark:bg-[#141512] h-full overflow-y-auto p-4 flex flex-col space-y-4 animate-in slide-in-from-right duration-150"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#E8E5DC] dark:border-[#262822]">
               <div className="flex items-center gap-2">
-                <Quote className="w-4 h-4 text-[#282C25] dark:text-[#EDEAE2]" />
-                <h3 className="text-xs font-bold text-[#282C25] dark:text-[#EDEAE2] uppercase tracking-wider">
+                <Quote className="w-4 h-4 text-[#49583D] dark:text-[#879E78]" />
+                <h3 className="text-xs font-bold text-[#282C25] dark:text-[#EDEAE2] uppercase tracking-wider font-sans">
                   Epistemic Margin
                 </h3>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#EFECE4] dark:bg-[#22241F] text-[#6E6D66] dark:text-[#9E9C93] font-bold">
-                  {context?.epistemic_nodes?.length || 0}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#EFECE4] dark:bg-[#22241F] text-[#49583D] dark:text-[#879E78] font-bold">
+                  {marginTab === 'insights' ? (context?.epistemic_nodes?.length || 0) : (context?.artifact?.source_url ? 1 : 0)}
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowMargin(false)}
-                  className="text-[#8C8A82] dark:text-[#6E6D66] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] p-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] transition-colors"
+                  className="text-[#8C8A82] dark:text-[#6E6D66] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] p-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] transition-colors cursor-pointer"
                   title="Collapse Sidebar"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1537,55 +1539,148 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
             </div>
 
-            {/* Grounded Epistemic Nodes */}
-            {context?.epistemic_nodes && context.epistemic_nodes.length > 0 ? (
-              <div className="space-y-3">
-                {context.epistemic_nodes.map((node) => (
-                  <div
-                    key={node.id}
-                    onMouseEnter={() => setHoveredQuote(node.quote || null)}
-                    onMouseLeave={() => setHoveredQuote(null)}
-                    className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs hover:border-[#D8D4C8] dark:hover:border-[#3E4237] hover:shadow-xs transition-all"
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <EpistemicBadge origin={node.origin} />
-                      <span className="text-[10px] text-[#6E6D66] dark:text-[#9E9C93] font-medium capitalize">
-                        {node.node_type}
-                      </span>
-                    </div>
-                    <p className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] mb-1">
-                      {node.statement}
-                    </p>
-                    {node.quote && (
-                      <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] italic bg-[#FAF8F3] dark:bg-[#161714] p-2 rounded-lg border border-[#ECE9E0] dark:border-[#262822] mt-1.5">
-                        &ldquo;{node.quote}&rdquo;
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-xs text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-4 text-center">
-                <Info className="w-4 h-4 mx-auto mb-2 text-[#8C8A82] dark:text-[#6E6D66]" />
-                Type <span className="font-mono font-semibold text-[#1E201C] dark:text-[#EDEAE2]">/decision</span> or write notes to register verified decisions in the knowledge graph.
-              </div>
-            )}
+            {/* Segmented Control: Insights vs Sources (Matching Mockup 3) */}
+            <div className="flex p-0.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27] text-xs">
+              <button
+                type="button"
+                data-testid="btn-margin-tab-insights"
+                onClick={() => setMarginTab('insights')}
+                className={`flex-1 py-1 rounded-lg text-center font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  marginTab === 'insights'
+                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
+                    : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                }`}
+              >
+                <Sparkles className="w-3 h-3 text-[#49583D] dark:text-[#879E78]" />
+                <span>Insights</span>
+              </button>
+              <button
+                type="button"
+                data-testid="btn-margin-tab-sources"
+                onClick={() => setMarginTab('sources')}
+                className={`flex-1 py-1 rounded-lg text-center font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  marginTab === 'sources'
+                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
+                    : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                }`}
+              >
+                <Globe className="w-3 h-3 text-[#49583D] dark:text-[#879E78]" />
+                <span>Sources</span>
+              </button>
+            </div>
 
-            {/* Ambient Graph Proposals */}
-            {context?.pending_proposals && context.pending_proposals.length > 0 && (
-              <div className="pt-2 border-t border-[#E8E5DC] dark:border-[#262822] space-y-3">
-                <h4 className="text-xs font-bold text-[#6E6D66] dark:text-[#9E9C93] uppercase tracking-wider flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-[#8C6D1F] dark:text-[#D4A738]" />
-                  Ambient Proposals
-                </h4>
-                {context.pending_proposals.map((prop) => (
-                  <AmbientProposalPill
-                    key={prop.id}
-                    proposal={prop}
-                    onAccept={handleAcceptProposal}
-                    onDismiss={handleDismissProposal}
-                  />
-                ))}
+            {marginTab === 'insights' ? (
+              <>
+                {/* Grounded Epistemic Nodes */}
+                {context?.epistemic_nodes && context.epistemic_nodes.length > 0 ? (
+                  <div className="space-y-3">
+                    {context.epistemic_nodes.map((node) => (
+                      <div
+                        key={node.id}
+                        onMouseEnter={() => setHoveredQuote(node.quote || null)}
+                        onMouseLeave={() => setHoveredQuote(null)}
+                        className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs hover:border-[#CCDCCC] dark:hover:border-[#2E4A28] hover:shadow-2xs transition-all"
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <EpistemicBadge origin={node.origin} />
+                          <span className="text-[10px] text-[#6E6D66] dark:text-[#9E9C93] font-medium capitalize">
+                            {node.node_type}
+                          </span>
+                        </div>
+                        <p className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] mb-1">
+                          {node.statement}
+                        </p>
+                        {node.quote && (
+                          <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] italic bg-[#FAF8F3] dark:bg-[#161714] p-2 rounded-lg border border-[#ECE9E0] dark:border-[#262822] mt-1.5">
+                            &ldquo;{node.quote}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-4 text-center">
+                    <Info className="w-4 h-4 mx-auto mb-2 text-[#8C8A82] dark:text-[#6E6D66]" />
+                    Type <span className="font-mono font-semibold text-[#1E201C] dark:text-[#EDEAE2]">/decision</span> or write notes to register verified decisions in the knowledge graph.
+                  </div>
+                )}
+
+                {/* Ambient Graph Proposals */}
+                {context?.pending_proposals && context.pending_proposals.length > 0 && (
+                  <div className="pt-2 border-t border-[#E8E5DC] dark:border-[#262822] space-y-3">
+                    <h4 className="text-xs font-bold text-[#6E6D66] dark:text-[#9E9C93] uppercase tracking-wider flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-[#8C6D1F] dark:text-[#D4A738]" />
+                      Ambient Proposals
+                    </h4>
+                    {context.pending_proposals.map((prop) => (
+                      <AmbientProposalPill
+                        key={prop.id}
+                        proposal={prop}
+                        onAccept={handleAcceptProposal}
+                        onDismiss={handleDismissProposal}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              /* Sources Tab Content */
+              <div className="space-y-3">
+                {context?.artifact?.source_url ? (
+                  <div className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs space-y-1.5 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold text-[#49583D] dark:text-[#879E78] tracking-wider">
+                        Primary Source
+                      </span>
+                      <ExternalLink className="w-3 h-3 text-[#8C8A82]" />
+                    </div>
+                    <a
+                      href={context.artifact.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-[#1E201C] dark:text-[#EDEAE2] hover:underline break-all block"
+                    >
+                      {context.artifact.source_url}
+                    </a>
+                  </div>
+                ) : null}
+
+                {(() => {
+                  const linkMatches = Array.from(editorContent.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g));
+                  if (!context?.artifact?.source_url && linkMatches.length === 0) {
+                    return (
+                      <div className="text-xs text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-4 text-center">
+                        <Globe className="w-4 h-4 mx-auto mb-2 text-[#8C8A82] dark:text-[#6E6D66]" />
+                        No external sources linked yet. External citations or web search references will appear here.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="space-y-2">
+                      {linkMatches.map((match, i) => (
+                        <div
+                          key={i}
+                          className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs shadow-2xs hover:border-[#CCDCCC] dark:hover:border-[#2E4A28] transition-all"
+                        >
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <span className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] truncate">
+                              {match[1]}
+                            </span>
+                            <ExternalLink className="w-3 h-3 text-[#8C8A82] shrink-0" />
+                          </div>
+                          <a
+                            href={match[2]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-[#49583D] dark:text-[#879E78] hover:underline truncate block"
+                          >
+                            {match[2]}
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </aside>

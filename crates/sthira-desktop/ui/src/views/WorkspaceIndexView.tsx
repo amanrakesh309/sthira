@@ -193,8 +193,8 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
               <span>/</span>
               <span className="text-[#1E201C] dark:text-[#EDEAE2]">All Files</span>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2.5">
-              <span>📁 All Files</span>
+            <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2.5">
+              <span>All Files</span>
             </h1>
             <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
               Unified directory of every project, note, page, and structured object.
@@ -211,7 +211,7 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Filter by title, content or type..."
-                className="w-full pl-9 pr-4 py-2 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93] transition-colors shadow-2xs"
+                className="w-full pl-9 pr-4 py-2 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#49583D] dark:focus:border-[#879E78] transition-colors shadow-2xs"
               />
               {searchQuery && (
                 <button
@@ -239,43 +239,45 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
           </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60">
-          {[
-            { id: 'all', label: 'All Items', count: data.counts.all },
-            { id: 'projects', label: 'Projects', count: data.counts.projects },
-            { id: 'notes', label: 'Notes & Pages', count: data.counts.notes },
-            { id: 'objects', label: 'Custom Objects', count: data.counts.objects },
-          ].map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                data-testid={`tab-${tab.id}`}
-                onClick={() => {
-                  setActiveTab(tab.id as WorkspaceIndexTab);
-                  setSelectedTypeFilter(null);
-                }}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-                  isActive
-                    ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] shadow-2xs'
-                    : 'bg-white/70 dark:bg-[#1C1D19]/70 text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-white dark:hover:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27]'
-                }`}
-              >
-                <span>{tab.label}</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+        {/* Tab Switcher: Warm Stone Pill Bar */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none">
+          <div className="p-1 rounded-2xl bg-[#EFECE4] dark:bg-[#1E201A] border border-[#E0DCD3] dark:border-[#2C2E27] inline-flex items-center gap-1">
+            {[
+              { id: 'all', label: 'All Items', count: data.counts.all },
+              { id: 'projects', label: 'Projects', count: data.counts.projects },
+              { id: 'notes', label: 'Notes & Pages', count: data.counts.notes },
+              { id: 'objects', label: 'Custom Objects', count: data.counts.objects },
+            ].map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  data-testid={`tab-${tab.id}`}
+                  onClick={() => {
+                    setActiveTab(tab.id as WorkspaceIndexTab);
+                    setSelectedTypeFilter(null);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
                     isActive
-                      ? 'bg-white/20 dark:bg-black/10 text-white dark:text-[#121310]'
-                      : 'bg-[#EFECE4] dark:bg-[#252820] text-[#7A7870] dark:text-[#B5B2A8]'
+                      ? 'bg-[#49583D] text-white shadow-2xs'
+                      : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-white/60 dark:hover:bg-[#252820]'
                   }`}
                 >
-                  {tab.count}
-                </span>
-              </button>
-            );
-          })}
+                  <span>{tab.label}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      isActive
+                        ? 'bg-white/20 text-white'
+                        : 'bg-[#E5E1D6] dark:bg-[#282B23] text-[#7A7870] dark:text-[#B5B2A8]'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Custom Objects Type Filter Bar */}
@@ -485,6 +487,15 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
             {/* NOTES & PAGES TAB (Table / List Layout) */}
             {activeTab === 'notes' && (
               <div className="bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl overflow-hidden shadow-2xs divide-y divide-[#E8E5DC]/60 dark:divide-[#2C2E27]/60">
+                {/* Table Column Headers */}
+                <div className="bg-[#FAF8F3] dark:bg-[#181915] px-4 py-2.5 flex items-center justify-between text-[10px] font-bold text-[#8C8A82] dark:text-[#7A786F] uppercase tracking-wider border-b border-[#E8E5DC] dark:border-[#2C2E27]">
+                  <span className="flex-1">Title & Description</span>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="w-28 text-left">Project</span>
+                    <span className="w-20 text-right">Modified</span>
+                    <span className="w-24 text-right">Actions</span>
+                  </div>
+                </div>
                 {filteredItems.map((item) => (
                   <div
                     key={item.id}
@@ -711,6 +722,16 @@ export const WorkspaceIndexView: React.FC<WorkspaceIndexViewProps> = ({
             {/* ALL ITEMS TAB (Unified Table) */}
             {activeTab === 'all' && (
               <div className="bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl overflow-hidden shadow-2xs divide-y divide-[#E8E5DC]/60 dark:divide-[#2C2E27]/60">
+                {/* Table Column Headers */}
+                <div className="bg-[#FAF8F3] dark:bg-[#181915] px-4 py-2.5 flex items-center justify-between text-[10px] font-bold text-[#8C8A82] dark:text-[#7A786F] uppercase tracking-wider border-b border-[#E8E5DC] dark:border-[#2C2E27]">
+                  <span className="flex-1">Title & Description</span>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="w-20 text-left">Type</span>
+                    <span className="w-28 text-left">Project</span>
+                    <span className="w-20 text-right">Modified</span>
+                    <span className="w-16 text-right">Actions</span>
+                  </div>
+                </div>
                 {filteredItems.map((item) => {
                   const isProj = item.entity_type === 'project';
                   const isObj = item.entity_type === 'object';

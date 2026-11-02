@@ -569,17 +569,17 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="w-full max-w-2xl bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-3xl bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-[#ECE9E0] dark:border-[#2C2E27] flex items-center justify-between bg-[#FAF8F3] dark:bg-[#161714]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] flex items-center justify-center shadow-sm">
+            <div className="w-9 h-9 rounded-xl bg-[#49583D] dark:bg-[#283427] text-white dark:text-[#879E78] flex items-center justify-center shadow-sm">
               <SlidersHorizontal className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[#1E201C] dark:text-[#EDEAE2]">OmniRouter Compute Fabric</h3>
+              <h3 className="text-base font-bold font-editorial text-[#1E201C] dark:text-[#EDEAE2]">Model &amp; Workspace Settings</h3>
               <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
-                Connect any model provider, paste API keys, and configure appearance
+                Configure local and cloud AI providers, default routing, and knowledge grounding.
               </p>
             </div>
           </div>
@@ -601,7 +601,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
               onClick={() => setActiveTab('models')}
               className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
                 activeTab === 'models'
-                  ? 'border-[#282C25] dark:border-[#EDEAE2] text-[#1E201C] dark:text-[#EDEAE2]'
+                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
                   : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
               }`}
             >
@@ -613,7 +613,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
               onClick={() => setActiveTab('search')}
               className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
                 activeTab === 'search'
-                  ? 'border-[#282C25] dark:border-[#EDEAE2] text-[#1E201C] dark:text-[#EDEAE2]'
+                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
                   : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
               }`}
             >
@@ -625,7 +625,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
               onClick={() => setActiveTab('appearance')}
               className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
                 activeTab === 'appearance'
-                  ? 'border-[#282C25] dark:border-[#EDEAE2] text-[#1E201C] dark:text-[#EDEAE2]'
+                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
                   : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
               }`}
             >
@@ -637,7 +637,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
               onClick={() => setActiveTab('vault')}
               className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
                 activeTab === 'vault'
-                  ? 'border-[#282C25] dark:border-[#EDEAE2] text-[#1E201C] dark:text-[#EDEAE2]'
+                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
                   : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
               }`}
             >

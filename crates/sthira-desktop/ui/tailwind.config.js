@@ -48,6 +48,27 @@ export default {
           "amber-text-dark": "#F0C75E",
           "amber-border": "#E5D7B7",
           "amber-border-dark": "#4D4023",
+        },
+        sthira: {
+          app: "var(--sthira-app)",
+          canvas: "var(--sthira-canvas)",
+          surface: "var(--sthira-surface)",
+          "surface-raised": "var(--sthira-surface-raised)",
+          "surface-muted": "var(--sthira-surface-muted)",
+          text: "var(--sthira-text)",
+          "text-muted": "var(--sthira-text-muted)",
+          "text-subtle": "var(--sthira-text-subtle)",
+          border: "var(--sthira-border)",
+          "border-strong": "var(--sthira-border-strong)",
+          primary: "var(--sthira-primary)",
+          "primary-hover": "var(--sthira-primary-hover)",
+          "on-primary": "var(--sthira-on-primary)",
+          "primary-tint": "var(--sthira-primary-tint)",
+          accent: "var(--sthira-accent)",
+          "warning-bg": "var(--sthira-warning-bg)",
+          "warning-text": "var(--sthira-warning-text)",
+          danger: "var(--sthira-danger)",
+          focus: "var(--sthira-focus)",
         }
       },
       fontFamily: {
@@ -59,8 +80,15 @@ export default {
           'Roboto',
           'sans-serif'
         ],
+        editorial: [
+          'Fraunces',
+          '"Source Serif 4"',
+          'Georgia',
+          'serif'
+        ],
       },
       borderRadius: {
+        'hero': '20px',
         '2xl': '1rem',
         'xl': '0.75rem',
       }

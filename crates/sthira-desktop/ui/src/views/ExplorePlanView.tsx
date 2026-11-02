@@ -545,7 +545,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               <span>/</span>
               <span className="text-[#1E201C] dark:text-[#EDEAE2]">Explore &amp; Plan</span>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2.5">
+            <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2.5">
               <span>🧭 Explore &amp; Plan</span>
             </h1>
             <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
@@ -555,40 +555,42 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
           </div>
         </div>
 
-        {/* Top Segmented Tabs (matching All Files design) */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60">
-          {TABS.map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                data-testid={`tab-${tab.id}`}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-                  isActive
-                    ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] shadow-2xs'
-                    : 'bg-white/70 dark:bg-[#1C1D19]/70 text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-white dark:hover:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27]'
-                }`}
-              >
-                <span>
-                  {tab.icon} {tab.label}
-                </span>
-                {tab.count !== undefined && (
-                  <span
-                    data-testid={tab.countTestId}
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                      isActive
-                        ? 'bg-white/20 dark:bg-black/10 text-white dark:text-[#121310]'
-                        : 'bg-[#EFECE4] dark:bg-[#252820] text-[#7A7870] dark:text-[#B5B2A8]'
-                    }`}
-                  >
-                    {tab.count}
+        {/* Top Segmented Tabs: Warm Stone Pill Bar */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none">
+          <div className="p-1 rounded-2xl bg-[#EFECE4] dark:bg-[#1E201A] border border-[#E0DCD3] dark:border-[#2C2E27] inline-flex items-center gap-1">
+            {TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  data-testid={`tab-${tab.id}`}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                    isActive
+                      ? 'bg-[#49583D] text-white shadow-2xs'
+                      : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-white/60 dark:hover:bg-[#252820]'
+                  }`}
+                >
+                  <span>
+                    {tab.icon} {tab.label}
                   </span>
-                )}
-              </button>
-            );
-          })}
+                  {tab.count !== undefined && (
+                    <span
+                      data-testid={tab.countTestId}
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                        isActive
+                          ? 'bg-white/20 text-white'
+                          : 'bg-[#E5E1D6] dark:bg-[#282B23] text-[#7A7870] dark:text-[#B5B2A8]'
+                      }`}
+                    >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Tab 1: RESEARCH */}
