@@ -117,7 +117,7 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     expect(rootWorkspace.className).toContain('flex-1');
     expect(rootWorkspace.className).toContain('h-full');
     expect(rootWorkspace.className).toContain('overflow-hidden');
-    expect(rootWorkspace.className).toContain('bg-[#FAF8F3]');
+    expect(rootWorkspace.className).toContain('focus-workspace');
 
     // Wait for context to load
     await waitFor(() => {
@@ -128,11 +128,9 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     const editorCanvas = screen.getByTestId('editor-canvas');
     expect(editorCanvas).toBeTruthy();
     expect(editorCanvas.className).toContain('flex-1');
-    expect(editorCanvas.className).toContain('max-w-5xl');
-    expect(editorCanvas.className).toContain('mx-auto');
+    expect(editorCanvas.className).toContain('focus-document-sheet');
     expect(editorCanvas.className).toContain('min-h-full');
-    expect(editorCanvas.className).toContain('bg-white');
-    expect(editorCanvas.className).toContain('border-x');
+    expect(screen.getByTestId('document-scroll-region')).toContainElement(editorCanvas);
 
     // Issue 1: Verify Epistemic Margin right sidebar is collapsed/hidden by default
     expect(screen.queryByTestId('epistemic-margin-sidebar')).toBeNull();
@@ -145,8 +143,8 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     fireEvent.click(toggleMarginBtn);
     const marginSidebar = screen.getByTestId('epistemic-margin-sidebar');
     expect(marginSidebar).toBeTruthy();
-    expect(marginSidebar.className).toContain('w-80');
-    expect(marginSidebar.className).toContain('border-l');
+    expect(marginSidebar).toHaveClass('focus-margin');
+    expect(toggleMarginBtn).toHaveAttribute('aria-expanded', 'true');
 
     // Click again to close
     fireEvent.click(toggleMarginBtn);

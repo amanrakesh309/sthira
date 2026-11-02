@@ -665,7 +665,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
 
     const aside = container.querySelector('aside');
     expect(aside).toBeInTheDocument();
-    expect(aside).toHaveStyle({ width: '280px' });
+    expect(aside).toHaveStyle({ '--sidebar-user-width': '264px' });
 
     const resizeHandle = screen.getByTestId('sidebar-resize-handle');
     expect(resizeHandle).toBeInTheDocument();
@@ -681,7 +681,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
     });
 
     // Verify width updated
-    expect(aside).toHaveStyle({ width: '380px' });
+    expect(aside).toHaveStyle({ '--sidebar-user-width': '380px' });
 
     // Release mouse
     act(() => {
@@ -691,12 +691,12 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
     // Verify persisted in localStorage
     expect(localStorage.getItem('sthira_sidebar_width')).toBe('380');
 
-    // Double-click to reset width back to default (280px)
+    // Double-click to reset width back to default (264px)
     act(() => {
       fireEvent.doubleClick(resizeHandle);
     });
-    expect(aside).toHaveStyle({ width: '280px' });
-    expect(localStorage.getItem('sthira_sidebar_width')).toBe('280');
+    expect(aside).toHaveStyle({ '--sidebar-user-width': '264px' });
+    expect(localStorage.getItem('sthira_sidebar_width')).toBe('264');
   });
 
   // -------------------------------------------------------------------------

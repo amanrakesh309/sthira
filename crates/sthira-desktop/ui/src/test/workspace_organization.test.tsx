@@ -189,10 +189,10 @@ describe('Workspace Organization Refactor', () => {
     // Verify Hero
     expect(screen.getByText('Make room to think.')).toBeInTheDocument();
 
-    // Verify Top Nav components
-    expect(screen.getByTestId('home-search-btn')).toBeInTheDocument();
+    // One model settings entry on Home; global search stays in the shell.
     expect(screen.getByTestId('home-model-chip')).toBeInTheDocument();
-    expect(screen.getByTestId('home-settings-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('home-search-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-settings-btn')).not.toBeInTheDocument();
 
     // Verify projects capped to 3
     expect(screen.getByText('Proj 1')).toBeInTheDocument();

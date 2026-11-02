@@ -20,6 +20,10 @@ import {
   Copy,
   Edit3,
   Settings2,
+  Compass,
+  Sprout,
+  HardDrive,
+  ArrowUpRight,
 } from 'lucide-react';
 import {
   getWorkspaceTree,
@@ -151,7 +155,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         }
       }
     } catch {}
-    return 280;
+    return 264;
   });
   const [isDragging, setIsDragging] = useState(false);
 
@@ -161,9 +165,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   };
 
   const handleResetWidth = () => {
-    setSidebarWidth(280);
+    setSidebarWidth(264);
     try {
-      localStorage.setItem('sthira_sidebar_width', '280');
+      localStorage.setItem('sthira_sidebar_width', '264');
     } catch {}
   };
 
@@ -383,46 +387,49 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     }
   };
 
+  const navigationRowProps = {
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        event.currentTarget.click();
+      }
+    },
+  };
+
   if (isCollapsed) {
     return (
-      <aside className="w-14 bg-[#F5F3EC] dark:bg-[#161714] border-r border-[#E8E5DC] dark:border-[#2C2E27] flex flex-col items-center py-3.5 h-screen shrink-0 transition-all select-none z-30 justify-between">
+      <aside className="sthira-sidebar sidebar-collapsed w-14 bg-sthira-app border-r border-sthira-border flex flex-col items-center py-3.5 h-screen shrink-0 transition-all select-none z-30 justify-between">
         <div className="flex flex-col items-center gap-3">
           {/* Logo / Home */}
           <button
             type="button"
             onClick={onNavigateHome}
             title="Sthira Home"
-            className="w-9 h-9 rounded-xl bg-[#282C25] dark:bg-[#20221C] border border-transparent dark:border-[#383B32] flex items-center justify-center text-white shadow-sm hover:opacity-90 transition-opacity cursor-pointer"
+            aria-current={currentView === 'home' ? 'page' : undefined}
+            className="w-9 h-9 rounded-xl bg-sthira-primary border border-transparent flex items-center justify-center text-sthira-on-primary shadow-sm hover:opacity-90 transition-opacity cursor-pointer"
           >
-            <svg
-              className="w-4 h-4 fill-none stroke-current stroke-2"
-              viewBox="0 0 24 24"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="3" width="18" height="18" rx="4" />
-              <line x1="3" y1="9" x2="21" y2="9" />
-              <line x1="9" y1="21" x2="9" y2="9" />
-            </svg>
+            <Sprout size={20} strokeWidth={1.7} />
           </button>
 
           <button
             type="button"
             onClick={onToggleCollapse}
             title="Expand Sidebar"
-            className="w-8 h-8 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2F28] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-lg bg-sthira-surface-muted hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text flex items-center justify-center transition-colors cursor-pointer"
           >
             <PanelLeft className="w-4 h-4" />
           </button>
 
-          <div className="w-6 h-px bg-[#E8E5DC] dark:bg-[#2C2E27] my-1" />
+          <div className="w-6 h-px bg-sthira-border my-1" />
 
           {/* Search Trigger */}
           <button
             type="button"
             onClick={onOpenSearch}
-            title="Search (Cmd+K)"
-            className="w-8 h-8 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F] flex items-center justify-center transition-colors cursor-pointer"
+            title="Search workspace"
+            className="w-8 h-8 rounded-lg text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted flex items-center justify-center transition-colors cursor-pointer"
           >
             <Search className="w-4 h-4" />
           </button>
@@ -431,12 +438,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <button
             type="button"
             data-testid="nav-knowledge-graph-collapsed"
+            aria-current={currentView === 'graph' ? 'page' : undefined}
             onClick={onNavigateGraph}
             title="Knowledge Graph"
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
               currentView === 'graph'
-                ? 'bg-[#282C25] dark:bg-[#2C3026] text-white font-semibold'
-                : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F]'
+                ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
+                : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
             }`}
           >
             <Share2 className="w-4 h-4" />
@@ -446,30 +454,32 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <button
             type="button"
             data-testid="nav-workspace-index-collapsed"
+            aria-current={currentView === 'workspace_index' ? 'page' : undefined}
             onClick={() => onNavigateWorkspaceIndex?.('all')}
             title="All Files"
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
               currentView === 'workspace_index'
-                ? 'bg-[#282C25] dark:bg-[#2C3026] text-white font-semibold'
-                : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F]'
+                ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
+                : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
             }`}
           >
-            <span className="text-sm">📁</span>
+            <Folder className="w-4 h-4" />
           </button>
 
           {/* Explore & Plan Trigger */}
           <button
             type="button"
             data-testid="nav-explore-plan-collapsed"
+            aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
             onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
             title="🧭 Explore & Plan"
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
               currentView === 'explore_plan' || currentView === 'scheduled_topics'
-                ? 'bg-[#282C25] dark:bg-[#2C3026] text-white font-semibold'
-                : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F]'
+                ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
+                : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
             }`}
           >
-            <span className="text-sm">🧭</span>
+            <Compass className="w-4 h-4" />
           </button>
           <span
             data-testid="nav-scheduled-feeds-collapsed"
@@ -485,7 +495,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             type="button"
             onClick={onOpenSettings}
             title="Model Settings"
-            className="w-8 h-8 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F] flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-lg text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted flex items-center justify-center transition-colors cursor-pointer"
           >
             <SlidersHorizontal className="w-4 h-4" />
           </button>
@@ -493,7 +503,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             type="button"
             onClick={onOpenAccount}
             title="Account"
-            className="w-8 h-8 rounded-full bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2F28] text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white flex items-center justify-center transition-colors border border-[#E8E5DC] dark:border-[#2C2E27] cursor-pointer"
+            className="w-8 h-8 rounded-full bg-sthira-surface-muted hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text flex items-center justify-center transition-colors border border-sthira-border cursor-pointer"
           >
             <User className="w-3.5 h-3.5" />
           </button>
@@ -504,29 +514,22 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   return (
     <aside
-      style={{ width: `${sidebarWidth}px` }}
-      className={`relative bg-[#F5F3EC] dark:bg-[#141512] border-r border-[#E8E5DC] dark:border-[#262822] flex flex-col h-screen shrink-0 select-none z-30 ${
+      style={{ '--sidebar-user-width': `${sidebarWidth}px` } as React.CSSProperties}
+      className={`sthira-sidebar relative bg-sthira-app border-r border-sthira-border flex flex-col h-screen shrink-0 select-none z-30 ${
         isDragging ? '' : 'transition-[width] duration-150 ease-out'
       }`}
     >
       {/* Top Header */}
-      <div className="px-4 py-3.5 flex items-center justify-between border-b border-[#E8E5DC]/80 dark:border-[#2C2E27]">
+      <div className="sidebar-brand">
         <button
           type="button"
           onClick={onNavigateHome}
           className="flex items-center gap-2.5 hover:opacity-85 transition-opacity cursor-pointer group"
         >
-          <div className="w-8 h-8 rounded-xl bg-[#49583D] dark:bg-[#2F3E28] flex items-center justify-center text-white shadow-xs">
-            <svg
-              className="w-4 h-4 fill-none stroke-current stroke-2"
-              viewBox="0 0 24 24"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
+          <div className="w-8 h-8 rounded-xl bg-sthira-primary flex items-center justify-center text-sthira-on-primary shadow-xs">
+            <Sprout size={20} strokeWidth={1.7} />
           </div>
-          <span className="text-base font-bold font-editorial tracking-tight text-[#1E201C] dark:text-[#EDEAE2]">
+          <span className="text-[23px] font-semibold font-editorial tracking-tight text-sthira-text">
             Sthira
           </span>
         </button>
@@ -537,7 +540,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             type="button"
             onClick={onToggleCollapse}
             title="Collapse Sidebar"
-            className="p-1.5 rounded-lg text-[#62665D] dark:text-[#B1B5AB] hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
           >
             <PanelLeftClose className="w-4 h-4" />
           </button>
@@ -545,18 +548,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       </div>
 
       {/* Quick Search & Main Navigation */}
-      <div className="px-3 pt-3 pb-1 space-y-1">
+      <div className="sidebar-navigation">
         <button
           type="button"
           onClick={onOpenSearch}
-          className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white dark:bg-[#1C1D19] hover:bg-[#FAF8F3] dark:hover:bg-[#23251F] text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer border border-[#E8E5DC] dark:border-[#2C2E27] shadow-2xs mb-2"
+          className="sidebar-search w-full flex items-center justify-between px-3 py-2 rounded-xl bg-sthira-surface hover:bg-sthira-canvas text-xs text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer border border-sthira-border shadow-2xs mb-2"
         >
           <span className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5 text-[#62665D] dark:text-[#B1B5AB]" />
+            <Search className="w-3.5 h-3.5 text-sthira-text-muted" />
             <span>Search workspace...</span>
           </span>
-          <kbd className="text-[10px] bg-[#F1EEE6] dark:bg-[#262822] px-1.5 py-0.5 rounded text-[#1E201C] dark:text-[#D4D1C7] font-mono border border-[#E8E5DC] dark:border-[#383B32]">
-            ⌘K
+          <kbd className="text-[10px] bg-sthira-surface-muted px-1.5 py-0.5 rounded text-sthira-text font-mono border border-sthira-border">
+            {typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}
           </kbd>
         </button>
 
@@ -564,10 +567,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           type="button"
           data-testid="nav-home"
           onClick={onNavigateHome}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+          aria-current={currentView === 'home' ? 'page' : undefined}
+          className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'home'
-              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
-              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
+              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+              : 'text-sthira-text hover:bg-sthira-surface-muted'
           }`}
         >
           <Home className="w-4 h-4" />
@@ -577,11 +581,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           data-testid="nav-knowledge-graph"
+          aria-current={currentView === 'graph' ? 'page' : undefined}
           onClick={onNavigateGraph}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+          className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'graph'
-              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
-              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
+              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+              : 'text-sthira-text hover:bg-sthira-surface-muted'
           }`}
         >
           <Share2 className="w-4 h-4" />
@@ -591,12 +596,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           data-testid="nav-workspace-index"
+          aria-current={currentView === 'workspace_index' ? 'page' : undefined}
           onClick={() => onNavigateWorkspaceIndex?.('all')}
           title="All Files — every project, note, and typed object"
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+          className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'workspace_index'
-              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
-              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
+              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+              : 'text-sthira-text hover:bg-sthira-surface-muted'
           }`}
         >
           <Folder className="w-4 h-4" />
@@ -606,15 +612,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           data-testid="nav-explore-plan"
+          aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
           onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
           title="🧭 Explore & Plan — unified research, planning, trackers, and digests"
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+          className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
             currentView === 'explore_plan' || currentView === 'scheduled_topics'
-              ? 'bg-[#49583D] dark:bg-[#2F3E28] text-white font-semibold shadow-xs'
-              : 'text-[#1E201C] dark:text-[#EDEAE2] hover:bg-[#F1EEE6] dark:hover:bg-[#1E201B]'
+              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+              : 'text-sthira-text hover:bg-sthira-surface-muted'
           }`}
         >
-          <span className="text-sm">🧭</span>
+          <Compass className="w-4 h-4" />
           <span>Explore &amp; Plan</span>
         </button>
         {/* Backward-compatibility alias for tests referencing nav-scheduled-feeds */}
@@ -626,11 +633,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       </div>
 
       {/* Tree Navigation Scroll Container */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-5 text-xs">
+      <div className="sidebar-tree">
         {/* 1. PROJECTS SECTION */}
         <div>
-          <div className="flex items-center justify-between px-2 pb-1.5">
-            <span className="text-[11px] font-bold text-[#8C8A82] dark:text-[#A8A59C] uppercase tracking-wider">
+          <div className="sidebar-group-heading">
+            <span className="text-[11px] font-bold text-sthira-text-subtle uppercase tracking-wider">
               Projects
             </span>
             <div className="flex items-center gap-1.5">
@@ -638,16 +645,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 type="button"
                 data-testid="btn-view-all-projects"
                 onClick={() => onNavigateWorkspaceIndex?.('projects')}
-                className="text-[10px] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:underline cursor-pointer font-medium"
+                className="text-[10px] text-sthira-text-muted hover:text-sthira-text hover:underline cursor-pointer font-medium"
               >
-                View all →
+                View all
               </button>
               <button
                 type="button"
                 data-testid="btn-new-project"
                 onClick={() => setIsCreatingProject(true)}
                 title="New Project"
-                className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+                className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -658,7 +665,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <form
               onSubmit={handleCreateProjectSubmit}
               data-testid="form-new-project"
-              className="p-2 mb-2 bg-white dark:bg-[#1C1D19] rounded-xl border border-[#E8E5DC] dark:border-[#2C2E27] shadow-xs space-y-1.5"
+              className="p-2 mb-2 bg-sthira-surface rounded-xl border border-sthira-border shadow-xs space-y-1.5"
             >
               <input
                 type="text"
@@ -668,7 +675,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
                 placeholder="Project Name..."
-                className="w-full px-2 py-1 text-xs font-medium rounded-lg border border-[#E8E5DC] dark:border-[#2C2E27] bg-[#FAF9F5] dark:bg-[#161714] text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93]"
+                className="w-full px-2 py-1 text-xs font-medium rounded-lg border border-sthira-border bg-sthira-canvas text-sthira-text placeholder:text-sthira-text-subtle outline-none focus:border-sthira-primary"
               />
               <input
                 type="text"
@@ -676,13 +683,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 value={newProjectPurpose}
                 onChange={(e) => setNewProjectPurpose(e.target.value)}
                 placeholder="Purpose (optional)..."
-                className="w-full px-2 py-1 text-[11px] rounded-lg border border-[#E8E5DC] dark:border-[#2C2E27] bg-[#FAF9F5] dark:bg-[#161714] text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93]"
+                className="w-full px-2 py-1 text-[11px] rounded-lg border border-sthira-border bg-sthira-canvas text-sthira-text placeholder:text-sthira-text-subtle outline-none focus:border-sthira-primary"
               />
               <div className="flex items-center justify-end gap-1.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setIsCreatingProject(false)}
-                  className="px-2 py-0.5 rounded text-[11px] text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] cursor-pointer"
+                  className="px-2 py-0.5 rounded text-[11px] text-sthira-text-muted hover:bg-sthira-surface-muted cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -690,7 +697,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   type="submit"
                   disabled={isSubmittingProject || !newProjectName.trim()}
                   data-testid="btn-submit-new-project"
-                  className="px-2.5 py-0.5 rounded text-[11px] font-semibold bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                  className="px-2.5 py-0.5 rounded text-[11px] font-semibold bg-sthira-primary text-sthira-on-primary hover:opacity-90 disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmittingProject ? 'Creating...' : 'Create'}
                 </button>
@@ -699,7 +706,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           )}
 
           {((sidebarItems?.projects?.length ?? 0) === 0 && (tree?.projects?.length ?? 0) === 0 && !isCreatingProject) ? (
-            <div className="px-2 py-2 text-[11px] text-[#8C8A82] dark:text-[#8E8C82] italic">
+            <div className="px-2 py-2 text-[11px] text-sthira-text-subtle italic">
               No projects yet
             </div>
           ) : (
@@ -722,18 +729,21 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   <div key={proj.id} className="rounded-lg">
                     {/* Project Header Row */}
                     <div
+                      {...navigationRowProps}
                       onClick={() => onOpenProject(proj.id)}
                       className={`group flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                         isActiveProj
-                          ? 'bg-[#EFECE4] dark:bg-[#252821] text-[#1E201C] dark:text-white font-semibold shadow-2xs border border-[#E0DCD3] dark:border-[#383B32]'
-                          : 'text-[#2E2F2B] dark:text-[#EDEAE2] hover:bg-[#EFECE4]/70 dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                          ? 'bg-sthira-surface-muted text-sthira-text font-semibold shadow-2xs border border-sthira-border-strong'
+                          : 'text-sthira-text hover:bg-sthira-surface-muted/70 hover:text-sthira-text'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0 flex-1">
                         <button
                           type="button"
                           onClick={(e) => toggleProjectExpand(proj.id, e)}
-                          className="p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors"
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${proj.title}`}
+                          className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors"
                         >
                           {isExpanded ? (
                             <ChevronDown className="w-3.5 h-3.5" />
@@ -759,7 +769,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                               else if (e.key === 'Escape') setRenamingId(null);
                             }}
                             onBlur={() => commitRename(proj.id, 'project')}
-                            className="px-1.5 py-0.5 text-xs rounded border border-[#282C25] dark:border-[#9E9C93] bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] outline-none w-32"
+                            className="px-1.5 py-0.5 text-xs rounded border border-sthira-primary bg-sthira-surface text-sthira-text outline-none w-32"
                           />
                         ) : (
                           <span className="truncate text-xs font-medium flex items-center gap-1">
@@ -780,6 +790,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       {/* Right hover actions: Pin toggle, + New Page, Settings 3-Dots */}
                       <div
                         className="flex items-center gap-1 shrink-0 relative"
+                        data-project-actions
                         data-menu-container
                       >
                         <button
@@ -787,10 +798,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                           data-testid={`pin-btn-${proj.id}`}
                           onClick={(e) => handleTogglePin(proj.id, 'project', isPinned, e)}
                           title={isPinned ? 'Unpin project' : 'Pin project'}
-                          className={`p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] cursor-pointer transition-colors ${
+                          className={`p-0.5 rounded hover:bg-sthira-surface-muted cursor-pointer transition-colors ${
                             isPinned
                               ? 'opacity-100 text-amber-600 dark:text-amber-400'
-                              : 'opacity-0 group-hover:opacity-100 text-[#8C8A82] hover:text-[#1E201C] dark:hover:text-white'
+                              : 'opacity-0 group-hover:opacity-100 text-sthira-text-subtle hover:text-sthira-text'
                           }`}
                         >
                           <Pin className={`w-3 h-3 ${isPinned ? 'rotate-45' : ''}`} />
@@ -800,7 +811,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                           type="button"
                           onClick={(e) => handleCreatePageInProject(proj.id, e)}
                           title="New page in this project"
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white cursor-pointer transition-opacity"
+                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text cursor-pointer transition-opacity"
                         >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
@@ -813,41 +824,41 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                             setOpenMenuId(openMenuId === `proj-${proj.id}` ? null : `proj-${proj.id}`);
                           }}
                           title="Project settings"
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white cursor-pointer transition-opacity"
+                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text cursor-pointer transition-opacity"
                         >
                           <MoreHorizontal className="w-3.5 h-3.5" />
                         </button>
 
                         {/* Project 3-Dots Popup Menu */}
                         {openMenuId === `proj-${proj.id}` && (
-                          <div className="absolute right-0 top-6 z-50 w-44 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-xl py-1 text-xs animate-in fade-in duration-100">
+                          <div className="absolute right-0 top-6 z-50 w-44 bg-sthira-surface border border-sthira-border rounded-xl shadow-xl py-1 text-xs animate-in fade-in duration-100">
                             <button
                               type="button"
                               data-testid={`btn-pin-project-${proj.id}`}
                               onClick={(e) => handleTogglePin(proj.id, 'project', isPinned, e)}
-                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
+                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-sthira-canvas text-left text-sthira-text-muted hover:text-sthira-text cursor-pointer"
                             >
-                              <Pin className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
+                              <Pin className="w-3.5 h-3.5 text-sthira-text-subtle" />
                               <span>{isPinned ? 'Unpin from Top' : 'Pin to Top'}</span>
                             </button>
                             <button
                               type="button"
                               data-testid={`btn-duplicate-project-${proj.id}`}
                               onClick={(e) => handleDuplicateProjectAction(proj.id, e)}
-                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
+                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-sthira-canvas text-left text-sthira-text-muted hover:text-sthira-text cursor-pointer"
                             >
-                              <Copy className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
+                              <Copy className="w-3.5 h-3.5 text-sthira-text-subtle" />
                               <span>Duplicate</span>
                             </button>
                             <button
                               type="button"
                               onClick={(e) => startInlineRename(proj.id, proj.title, 'project', e)}
-                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#FAF9F5] dark:hover:bg-[#252820] text-left text-[#3A3B36] dark:text-[#EDEAE2] hover:text-[#1E201C] dark:hover:text-white cursor-pointer"
+                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-sthira-canvas text-left text-sthira-text-muted hover:text-sthira-text cursor-pointer"
                             >
-                              <Edit3 className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#A8A69E]" />
+                              <Edit3 className="w-3.5 h-3.5 text-sthira-text-subtle" />
                               <span>Rename</span>
                             </button>
-                            <div className="h-px bg-[#E8E5DC] dark:bg-[#2C2E27] my-1" />
+                            <div className="h-px bg-sthira-border my-1" />
                             <button
                               type="button"
                               data-testid={`btn-delete-project-${proj.id}`}
@@ -868,7 +879,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
                     {/* Expanded Project Children: Canvases & Pages */}
                     {isExpanded && treeProj && (
-                      <div className="ml-5 pl-1.5 border-l border-[#E8E5DC] dark:border-[#2C2E27] py-0.5 space-y-0.5">
+                      <div className="ml-5 pl-1.5 border-l border-sthira-border py-0.5 space-y-0.5">
                         {treeProj.canvases.map((canvas) => {
                           const isActiveCanvas =
                             currentView === 'canvas' && activeCanvasId === canvas.id;
@@ -878,8 +889,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                               onClick={() => onOpenCanvas(canvas.id, proj.id)}
                               className={`flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer transition-colors ${
                                 isActiveCanvas
-                                  ? 'bg-[#282C25] dark:bg-[#282B24] text-white font-medium shadow-xs border border-transparent dark:border-[#3A3D33]'
-                                  : 'text-[#4A4B45] dark:text-[#D4D1C7] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                                  ? 'bg-sthira-primary text-sthira-on-primary font-medium shadow-xs border border-transparent dark:border-sthira-border-strong'
+                                  : 'text-sthira-text-muted dark:text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text'
                               }`}
                             >
                               <LayoutGrid className="w-3 h-3 shrink-0" />
@@ -895,11 +906,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                           return (
                             <div
                               key={page.id}
-                              onClick={() => onOpenArtifact(page.id, proj.id)}
+                              {...navigationRowProps}
+                      onClick={() => onOpenArtifact(page.id, proj.id)}
                               className={`group/page flex items-center justify-between px-2 py-1 rounded-md cursor-pointer transition-colors relative ${
                                 isActivePage
-                                  ? 'bg-[#282C25] dark:bg-[#282B24] text-white font-semibold shadow-xs border border-transparent dark:border-[#3A3D33]'
-                                  : 'text-[#4A4B45] dark:text-[#D4D1C7] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs border border-transparent dark:border-sthira-border-strong'
+                                  : 'text-sthira-text-muted dark:text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text'
                               }`}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -917,7 +929,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                                       else if (e.key === 'Escape') setRenamingId(null);
                                     }}
                                     onBlur={() => commitRename(page.id, 'artifact')}
-                                    className="bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#383B32] text-[#1E201C] dark:text-white px-1 py-0.5 rounded text-[11px] w-full outline-hidden"
+                                    className="bg-sthira-surface border border-sthira-border text-sthira-text px-1 py-0.5 rounded text-[11px] w-full outline-hidden"
                                   />
                                 ) : (
                                   <span className="truncate text-[11px] flex items-center gap-1">
@@ -936,10 +948,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                                   data-testid={`pin-btn-${page.id}`}
                                   onClick={(e) => handleTogglePin(page.id, 'note', isPagePinned, e)}
                                   title={isPagePinned ? 'Unpin note' : 'Pin note'}
-                                  className={`p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] cursor-pointer transition-colors ${
+                                  className={`p-0.5 rounded hover:bg-sthira-surface-muted cursor-pointer transition-colors ${
                                     isPagePinned
                                       ? 'opacity-100 text-amber-600 dark:text-amber-400'
-                                      : 'opacity-0 group-hover/page:opacity-100 text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                                      : 'opacity-0 group-hover/page:opacity-100 text-sthira-text-muted hover:text-sthira-text'
                                   }`}
                                 >
                                   <Pin className={`w-3 h-3 ${isPagePinned ? 'rotate-45' : ''}`} />
@@ -982,7 +994,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                           type="button"
                           data-testid="btn-new-page-in-project"
                           onClick={(e) => handleCreatePageInProject(proj.id, e)}
-                          className="flex items-center gap-1.5 px-2 py-1 w-full text-[11px] text-[#8C8A82] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#EFECE4] dark:hover:bg-[#22241F] rounded-md transition-colors cursor-pointer"
+                          className="flex items-center gap-1.5 px-2 py-1 w-full text-[11px] text-sthira-text-subtle hover:text-sthira-text hover:bg-sthira-surface-muted rounded-md transition-colors cursor-pointer"
                         >
                           <Plus className="w-3 h-3" />
                           <span>New Page</span>
@@ -998,8 +1010,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
         {/* 2. NOTES & PAGES SECTION */}
         <div>
-          <div className="flex items-center justify-between px-2 pb-1.5">
-            <span className="text-[11px] font-bold text-[#8C8A82] dark:text-[#A8A59C] uppercase tracking-wider">
+          <div className="sidebar-group-heading">
+            <span className="text-[11px] font-bold text-sthira-text-subtle uppercase tracking-wider">
               Notes &amp; Pages
             </span>
             <div className="flex items-center gap-1.5">
@@ -1007,16 +1019,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 type="button"
                 data-testid="btn-view-all-notes"
                 onClick={() => onNavigateWorkspaceIndex?.('notes')}
-                className="text-[10px] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:underline cursor-pointer font-medium"
+                className="text-[10px] text-sthira-text-muted hover:text-sthira-text hover:underline cursor-pointer font-medium"
               >
-                View all →
+                View all
               </button>
               <button
                 type="button"
                 data-testid="btn-new-loose-note"
                 onClick={handleCreateLooseNote}
                 title="New Note"
-                className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+                className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -1024,7 +1036,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
 
           {((sidebarItems?.notes?.length ?? 0) === 0 && (tree?.unassociated_pages?.length ?? 0) === 0) ? (
-            <div className="px-2 py-2 text-[11px] text-[#8C8A82] dark:text-[#8E8C82] italic">
+            <div className="px-2 py-2 text-[11px] text-sthira-text-subtle italic">
               No notes yet
             </div>
           ) : (
@@ -1045,15 +1057,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 return (
                   <div
                     key={note.id}
-                    onClick={() => onOpenArtifact(note.id, note.project_id)}
+                    {...navigationRowProps}
+                      onClick={() => onOpenArtifact(note.id, note.project_id)}
                     className={`group/note flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                       isActive
-                        ? 'bg-[#282C25] dark:bg-[#282B24] text-white font-semibold shadow-xs border border-transparent dark:border-[#3A3D33]'
-                        : 'text-[#2E2F2B] dark:text-[#EDEAE2] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                        ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs border border-transparent dark:border-sthira-border-strong'
+                        : 'text-sthira-text hover:bg-sthira-surface-muted hover:text-sthira-text'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <FileText className="w-3.5 h-3.5 shrink-0 text-[#6E6D66] dark:text-[#A8A69E]" />
+                      <FileText className="w-3.5 h-3.5 shrink-0 text-sthira-text-muted" />
                       {renamingId === note.id ? (
                         <input
                           type="text"
@@ -1067,7 +1080,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                             else if (e.key === 'Escape') setRenamingId(null);
                           }}
                           onBlur={() => commitRename(note.id, 'artifact')}
-                          className="px-1.5 py-0.5 text-xs rounded border border-[#282C25] dark:border-[#9E9C93] bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] outline-none w-28"
+                          className="px-1.5 py-0.5 text-xs rounded border border-sthira-primary bg-sthira-surface text-sthira-text outline-none w-28"
                         />
                       ) : (
                         <span className="truncate text-xs flex items-center gap-1 font-medium">
@@ -1090,7 +1103,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       data-menu-container
                     >
                       {note.project_name && (
-                        <span className="text-[9px] px-1 py-0.2 rounded bg-[#E8E5DC]/60 dark:bg-[#252820] text-[#6E6D66] dark:text-[#A8A69E] truncate max-w-[70px]">
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-sthira-border/60 text-sthira-text-muted truncate max-w-[70px]">
                           {note.project_name}
                         </span>
                       )}
@@ -1101,10 +1114,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         data-testid={`pin-btn-${note.id}`}
                         onClick={(e) => handleTogglePin(note.id, 'note', isPinned, e)}
                         title={isPinned ? 'Unpin note' : 'Pin note'}
-                        className={`p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] cursor-pointer transition-colors ${
+                        className={`p-0.5 rounded hover:bg-sthira-surface-muted cursor-pointer transition-colors ${
                           isPinned
                             ? 'opacity-100 text-amber-600 dark:text-amber-400'
-                            : 'opacity-0 group-hover/note:opacity-100 text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                            : 'opacity-0 group-hover/note:opacity-100 text-sthira-text-muted hover:text-sthira-text'
                         }`}
                       >
                         <Pin className={`w-3 h-3 ${isPinned ? 'rotate-45' : ''}`} />
@@ -1145,25 +1158,27 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
         {/* 3. CUSTOM OBJECTS SECTION */}
         <div>
-          <div className="flex items-center justify-between px-2 pb-1.5">
-            <span className="text-[11px] font-bold text-[#8C8A82] dark:text-[#A8A59C] uppercase tracking-wider">
+          <div className="sidebar-group-heading">
+            <span className="text-[11px] font-bold text-sthira-text-subtle uppercase tracking-wider">
               Custom Objects
             </span>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 data-testid="btn-view-all-objects"
+                aria-label="View all custom objects"
+                title="View all custom objects"
                 onClick={() => onNavigateWorkspaceIndex?.('objects')}
-                className="text-[10px] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:underline cursor-pointer font-medium"
+                className="text-[10px] text-sthira-text-muted hover:text-sthira-text hover:underline cursor-pointer font-medium"
               >
-                View all →
+                <ArrowUpRight size={15} />
               </button>
               <button
                 type="button"
                 data-testid="btn-new-custom-object-type"
                 onClick={onOpenCreateObjectType}
                 title="New Object Type"
-                className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+                className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -1172,7 +1187,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 data-testid="btn-manage-object-types"
                 onClick={onOpenObjectTypeManager}
                 title="Manage Object Types & Templates"
-                className="p-0.5 rounded hover:bg-[#EFECE4] dark:hover:bg-[#22241F] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+                className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer"
               >
                 <Settings2 className="w-3.5 h-3.5" />
               </button>
@@ -1187,11 +1202,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 return (
                   <div
                     key={obj.id}
-                    onClick={() => onOpenArtifact(obj.id, obj.project_id)}
+                    {...navigationRowProps}
+                      onClick={() => onOpenArtifact(obj.id, obj.project_id)}
                     className={`group/obj flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                       isActive
-                        ? 'bg-[#282C25] dark:bg-[#282B24] text-white font-semibold shadow-xs border border-transparent dark:border-[#3A3D33]'
-                        : 'text-[#2E2F2B] dark:text-[#EDEAE2] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                        ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs border border-transparent dark:border-sthira-border-strong'
+                        : 'text-sthira-text hover:bg-sthira-surface-muted hover:text-sthira-text'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1211,7 +1227,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-[#E8E5DC]/60 dark:bg-[#252820] text-[#6E6D66] dark:text-[#A8A69E]">
+                      <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-sthira-border/60 text-sthira-text-muted">
                         {obj.object_type_name || 'Object'}
                       </span>
                       {/* Quiet pin button on hover */}
@@ -1220,10 +1236,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         data-testid={`pin-btn-${obj.id}`}
                         onClick={(e) => handleTogglePin(obj.id, 'object', isPinned, e)}
                         title={isPinned ? 'Unpin' : 'Pin'}
-                        className={`p-0.5 rounded hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] cursor-pointer transition-colors ${
+                        className={`p-0.5 rounded hover:bg-sthira-surface-muted cursor-pointer transition-colors ${
                           isPinned
                             ? 'opacity-100 text-amber-600 dark:text-amber-400'
-                            : 'opacity-0 group-hover/obj:opacity-100 text-[#8C8A82] hover:text-[#1E201C] dark:hover:text-white'
+                            : 'opacity-0 group-hover/obj:opacity-100 text-sthira-text-subtle hover:text-sthira-text'
                         }`}
                       >
                         <Pin className={`w-3 h-3 ${isPinned ? 'rotate-45' : ''}`} />
@@ -1233,7 +1249,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 );
               })
             ) : (!objectTypes || objectTypes.length === 0) ? (
-              <div className="px-2 py-1.5 text-[11px] text-[#8C8A82] dark:text-[#8E8C82] italic">
+              <div className="px-2 py-1.5 text-[11px] text-sthira-text-subtle italic">
                 No custom objects yet
               </div>
             ) : (
@@ -1244,11 +1260,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 return (
                   <div
                     key={ot.id}
+                    {...navigationRowProps}
                     onClick={() => onOpenObjectCollection?.(ot.id)}
                     className={`group/ot flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                       isActive
-                        ? 'bg-[#282C25] dark:bg-[#282B24] text-white font-semibold shadow-xs border border-transparent dark:border-[#3A3D33]'
-                        : 'text-[#2E2F2B] dark:text-[#EDEAE2] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white'
+                        ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs border border-transparent dark:border-sthira-border-strong'
+                        : 'text-sthira-text hover:bg-sthira-surface-muted hover:text-sthira-text'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
@@ -1271,7 +1288,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md ${
                           isActive
                             ? 'bg-white/20 text-white'
-                            : 'bg-[#EFECE4] dark:bg-[#22241F] text-[#6E6D66] dark:text-[#B5B2A8]'
+                            : 'bg-sthira-surface-muted text-sthira-text-muted'
                         }`}
                       >
                         {count}
@@ -1286,12 +1303,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       </div>
 
       {/* Bottom User / Settings Bar */}
-      <div className="p-3 border-t border-[#E8E5DC] dark:border-[#262822] flex items-center justify-between bg-[#EFECE4]/50 dark:bg-[#161714]/90">
+      <div className="sidebar-footer">
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={onOpenSettings}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer"
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>Settings</span>
@@ -1300,16 +1317,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <button
             type="button"
             onClick={onOpenAccount}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-[#62665D] dark:text-[#B1B5AB] hover:text-[#1E201C] dark:hover:text-white hover:bg-[#F1EEE6] dark:hover:bg-[#23251F] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer"
           >
             <User className="w-3.5 h-3.5" />
             <span>Account</span>
           </button>
         </div>
 
-        <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-[#62665D] dark:text-[#B1B5AB] font-medium select-none" title="All changes saved to local SQLite & filesystem vault">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#49583D] dark:bg-[#879E78]" />
-          <span className="hidden xl:inline">Local &amp; synced</span>
+        <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-sthira-text-muted font-medium select-none" title="Knowledge is stored in the local vault">
+          <HardDrive size={14} />
+          <span className="sidebar-local-label">Local vault</span>
         </div>
       </div>
       {/* Add To Project Modal */}
@@ -1344,17 +1361,28 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       <div
         data-testid="sidebar-resize-handle"
         role="separator"
+        aria-label="Sidebar width"
+        tabIndex={0}
+        aria-valuemin={200}
+        aria-valuemax={700}
+        aria-valuenow={sidebarWidth}
         aria-orientation="vertical"
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            setSidebarWidth((width) => Math.max(200, Math.min(700, width + (event.key === 'ArrowLeft' ? -8 : 8))));
+          } else if (event.key === 'Home') handleResetWidth();
+        }}
         onMouseDown={handleMouseDown}
         onDoubleClick={handleResetWidth}
         title="Drag to resize sidebar (Double-click to reset)"
         className={`absolute top-0 right-0 w-2 h-full cursor-col-resize z-40 transition-colors group ${
-          isDragging ? 'bg-[#282C25]/20 dark:bg-[#EDEAE2]/10' : 'hover:bg-[#E8E5DC]/80 dark:hover:bg-[#2C2E27]/80'
+          isDragging ? 'bg-sthira-primary/20' : 'hover:bg-sthira-border/80'
         }`}
       >
         <div
           className={`w-0.5 h-full mx-auto transition-colors ${
-            isDragging ? 'bg-[#282C25]/50 dark:bg-[#EDEAE2]/30' : 'group-hover:bg-[#8C8A82]/60 dark:group-hover:bg-[#7A786F]/60'
+            isDragging ? 'bg-sthira-primary/50' : 'group-hover:bg-sthira-text-subtle/60'
           }`}
         />
       </div>

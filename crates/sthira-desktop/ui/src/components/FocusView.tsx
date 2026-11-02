@@ -26,6 +26,8 @@ import {
   Zap,
   ChevronDown,
   ExternalLink,
+  BookOpen,
+  Lightbulb,
 } from 'lucide-react';
 import { RefineArtifactModal } from './RefineArtifactModal';
 import { ContextualResumePane } from './ContextualResumePane';
@@ -113,6 +115,14 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingDocument, setIsLoadingDocument] = useState(true);
+  const [isReviewLoading, setIsReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const loadRequestRef = useRef(0);
+  const briefProjectRef = useRef<string | null>(null);
   const [hoveredQuote, setHoveredQuote] = useState<string | null>(null);
   const [undoToast, setUndoToast] = useState<{ message: string; changeSetId: string } | null>(null);
 
@@ -147,11 +157,19 @@ export const FocusView: React.FC<FocusViewProps> = ({
         setIsDeriveMenuOpen(false);
       }
     };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsDeriveMenuOpen(false);
+        deriveMenuRef.current?.querySelector('button')?.focus();
+      }
+    };
     if (isDeriveMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
     };
   }, [isDeriveMenuOpen]);
 
@@ -160,6 +178,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     if (!currentArtId || isDeriving) return;
     setIsDeriveMenuOpen(false);
     setIsDeriving(true);
+    setActionError(null);
     try {
       const newArtId = await deriveArtifact(currentArtId, derivationType, null, activeModelId);
       if (newArtId && onOpenArtifact) {
@@ -167,6 +186,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
       }
     } catch (err) {
       console.error('Derivation failed:', err);
+      setActionError('Couldn’t derive a new artifact. Check the selected provider and try again.');
     } finally {
       setIsDeriving(false);
     }
@@ -229,10 +249,6 @@ export const FocusView: React.FC<FocusViewProps> = ({
   useEffect(() => {
     currentArtIdRef.current = context?.artifact?.id || artifactId || '';
   }, [context, artifactId]);
-
-  useEffect(() => {
-    currentProjectIdRef.current = projectId;
-  }, [projectId]);
 
   useEffect(() => {
     loadProjectData();
@@ -337,85 +353,105 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
   }, [editorContent, onContentUpdate]);
 
+  const installDocument = (ctx: ArtifactContext) => {
+    const nextTitle = ctx.artifact.title || '';
+    setContext(ctx);
+    setEditorContent(ctx.artifact.content_md);
+    setTitle(nextTitle);
+    currentContentRef.current = ctx.artifact.content_md;
+    currentTitleRef.current = nextTitle;
+    currentArtIdRef.current = ctx.artifact.id;
+    currentProjectIdRef.current = projectId || null;
+    lastSavedContentRef.current = ctx.artifact.content_md;
+    lastSavedTitleRef.current = nextTitle;
+    isInitialLoadedRef.current = true;
+    setSaveError(null);
+    setIsSaving(false);
+  };
+
   const loadProjectData = async () => {
+    const request = ++loadRequestRef.current;
+    setIsLoadingDocument(true);
+    setLoadError(null);
+    // Keep the old document's identity until its dirty text is safely persisted.
+    // Sidebar navigation can change Focus props without unmounting the editor.
+    if (isInitialLoadedRef.current && currentArtIdRef.current &&
+        (currentContentRef.current !== lastSavedContentRef.current || currentTitleRef.current !== lastSavedTitleRef.current)) {
+      const pendingContent = currentContentRef.current;
+      const pendingTitle = currentTitleRef.current;
+      try {
+        await saveArtifact(currentArtIdRef.current, pendingContent, pendingTitle || null, currentProjectIdRef.current || null);
+        if (request !== loadRequestRef.current) return;
+        lastSavedContentRef.current = pendingContent;
+        lastSavedTitleRef.current = pendingTitle;
+      } catch {
+        if (request === loadRequestRef.current) {
+          setLoadError('Couldn’t save the open document before switching. Your edits are still held here; try again.');
+          setIsLoadingDocument(false);
+        }
+        return;
+      }
+    }
+    isInitialLoadedRef.current = false;
     let loadedArtId = artifactId;
-
-    if (!loadedArtId && projectId && projectId !== 'default_project') {
+    let projectBrief: ResumeBrief | null = null;
+    const hasProject = projectId && projectId !== 'default_project';
+    // History is auxiliary: an unavailable timeline must not block editing.
+    setHistory(null);
+    if (hasProject) {
+      getProjectHistory(projectId).then((value) => {
+        if (request === loadRequestRef.current) setHistory(value);
+      }).catch((error) => console.warn('Project history unavailable', error));
       try {
-        const b = await getResumeBrief(projectId, 1);
-        setBrief(b);
-        if (b.primary_continuation_artifact_id) {
-          loadedArtId = b.primary_continuation_artifact_id;
-        }
-      } catch (err) {
-        console.warn('Brief not available for project', projectId, err);
+        projectBrief = await getResumeBrief(projectId, 1);
+        loadedArtId ||= projectBrief?.primary_continuation_artifact_id || undefined;
+      } catch (error) {
+        console.warn('Brief not available for project', projectId, error);
       }
     }
-
-    if (loadedArtId) {
-      try {
+    if (request !== loadRequestRef.current) return;
+    setBrief(projectBrief);
+    setIsExpandedReview(false);
+    setReviewError(null);
+    if (briefProjectRef.current !== (projectId || null)) {
+      briefProjectRef.current = projectId || null;
+      setIsBriefOpen(!projectBrief?.pane_hint || 'show' in projectBrief.pane_hint);
+    }
+    try {
+      if (loadedArtId) {
         const ctx = await getArtifactContext(loadedArtId);
-        setContext(ctx);
-        setEditorContent(ctx.artifact.content_md);
-        setTitle(ctx.artifact.title || '');
-        lastSavedContentRef.current = ctx.artifact.content_md;
-        lastSavedTitleRef.current = ctx.artifact.title || '';
-        isInitialLoadedRef.current = true;
-      } catch (err) {
-        console.error('Failed to load artifact context for', loadedArtId, err);
-      }
-    } else {
-      setContext({
-        artifact: {
-          id: '',
-          artifact_type: 'note',
-          authorship: 'user',
-          title: 'Untitled Note',
-          content_md: '# Untitled Note\n\n',
-          content_hash: '',
-          version: 1,
+        if (request !== loadRequestRef.current) return;
+        installDocument(ctx);
+      } else {
+        installDocument({
+          artifact: {
+            id: '', artifact_type: 'note', authorship: 'user', title: 'Untitled Note',
+            content_md: '# Untitled Note\n\n', content_hash: '', version: 1,
+            is_unfinished_draft: false, created_at: Date.now(), updated_at: Date.now(),
+          },
+          epistemic_nodes: [], pending_proposals: [], project_id: projectId || null,
           is_unfinished_draft: false,
-          created_at: Date.now(),
-          updated_at: Date.now(),
-        },
-        epistemic_nodes: [],
-        pending_proposals: [],
-        project_id: projectId || null,
-        is_unfinished_draft: false,
-      });
-      setEditorContent('# Untitled Note\n\n');
-      setTitle('Untitled Note');
-      lastSavedContentRef.current = '# Untitled Note\n\n';
-      lastSavedTitleRef.current = 'Untitled Note';
-      isInitialLoadedRef.current = true;
-    }
-
-    if (projectId && projectId !== 'default_project') {
-      try {
-        if (!brief) {
-          const b = await getResumeBrief(projectId, 1);
-          setBrief(b);
-        }
-        const h = await getProjectHistory(projectId);
-        setHistory(h);
-      } catch (err) {
-        console.warn('Auxiliary project history load warning:', err);
+        });
       }
-    } else {
-      setBrief(null);
-      setHistory(null);
+    } catch (error) {
+      console.error('Failed to load artifact context', error);
+      setLoadError('Couldn’t open this document. Your saved work is still in the vault.');
+    } finally {
+      if (request === loadRequestRef.current) setIsLoadingDocument(false);
     }
   };
 
   const handleSave = useCallback(async () => {
+    if (!isInitialLoadedRef.current) return false;
     const artId = context?.artifact?.id || artifactId || '';
     const currentT = currentTitleRef.current.trim() || context?.artifact?.title || null;
     const currentC = currentContentRef.current;
 
     setIsSaving(true);
     setSaveSuccess(false);
+    setSaveError(null);
     try {
-      const targetProjectId = projectId && projectId !== 'default_project' ? projectId : null;
+      const targetProjectId = currentProjectIdRef.current && currentProjectIdRef.current !== 'default_project' ? currentProjectIdRef.current : null;
       const updated = await saveArtifact(artId, currentC, currentT, targetProjectId);
       lastSavedContentRef.current = currentC;
       lastSavedTitleRef.current = updated.title || currentT || '';
@@ -441,8 +477,11 @@ export const FocusView: React.FC<FocusViewProps> = ({
       setSaveSuccess(true);
       if (onSave) onSave(updated);
       setTimeout(() => setSaveSuccess(false), 2500);
+      return true;
     } catch (err) {
       console.error('Failed to save artifact', err);
+      setSaveError('Couldn’t save your changes. Try saving again.');
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -462,7 +501,6 @@ export const FocusView: React.FC<FocusViewProps> = ({
       clearTimeout(autoSaveTimerRef.current);
     }
 
-    setIsSaving(true);
     autoSaveTimerRef.current = setTimeout(() => {
       handleSave();
     }, 600);
@@ -678,6 +716,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
       handleSave();
     } catch (err) {
       console.error('Inline AI streaming failed', err);
+      setActionError('The model stream stopped. Your current draft is still available.');
     } finally {
       setIsAiStreaming(false);
       setAiStreamingMessage(null);
@@ -814,13 +853,28 @@ export const FocusView: React.FC<FocusViewProps> = ({
       currentContentRef.current !== lastSavedContentRef.current ||
       currentTitleRef.current !== lastSavedTitleRef.current
     ) {
-      await handleSave();
+      if (!(await handleSave())) return;
     }
     onBack();
   };
 
+  const navigateToArtifact = async (aid: string) => {
+    if (currentContentRef.current !== lastSavedContentRef.current || currentTitleRef.current !== lastSavedTitleRef.current) {
+      if (!(await handleSave())) return;
+    }
+    if (onOpenArtifact) {
+      onOpenArtifact(aid, projectId || null);
+    } else {
+      try { installDocument(await getArtifactContext(aid)); }
+      catch { setSaveError('Couldn’t open the selected document. Your current document is still open.'); }
+    }
+    setIsHistoryOpen(false);
+  };
+
   const handleExpandReview = async () => {
-    if (!brief || !projectId || projectId === 'default_project') return;
+    if (!brief || !projectId || projectId === 'default_project' || isReviewLoading) return;
+    setIsReviewLoading(true);
+    setReviewError(null);
     try {
       const nextLevel = isExpandedReview ? 1 : 2;
       const b = await getResumeBrief(projectId, nextLevel);
@@ -828,6 +882,9 @@ export const FocusView: React.FC<FocusViewProps> = ({
       setIsExpandedReview(!isExpandedReview);
     } catch (err) {
       console.error('Failed to toggle expanded review', err);
+      setReviewError('Couldn’t load the review. Try again when the vault is available.');
+    } finally {
+      setIsReviewLoading(false);
     }
   };
 
@@ -874,132 +931,47 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  const sourceLinks = Array.from(editorContent.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g));
+  const sourceCount = new Set([context?.artifact?.source_url, ...sourceLinks.map((match) => match[2])].filter(Boolean)).size;
+  const projectLabel = projectId
+    ? brief?.active_working_breadcrumb?.replace(/^Project:\s*/i, '').split(/\s*[>›]\s*/)[0] || 'Project workspace'
+    : 'Notes';
+  const isDirty = editorContent !== lastSavedContentRef.current || title !== lastSavedTitleRef.current;
+
   return (
-    <div className="flex-1 h-full overflow-hidden bg-[#FAF8F3] dark:bg-[#121310] text-[#1E201C] dark:text-[#EDEAE2] flex flex-col font-sans">
-      {/* Context-Aware Top Navigation Header */}
-      <header className="w-full bg-[#FFFFFF] dark:bg-[#161714] border-b border-[#E8E5DC] dark:border-[#2C2E27] px-6 py-3 flex items-center justify-between shrink-0 z-40">
-        {/* Left: Breadcrumbs */}
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            type="button"
-            onClick={handleBack}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-xs font-semibold text-[#1E201C] dark:text-[#EDEAE2] transition-colors cursor-pointer shrink-0"
-            title="Return to Home"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Home</span>
+    <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-margin-open={showMargin}>
+      <header className="focus-header">
+        <nav className="focus-breadcrumbs" aria-label="Document location">
+          <button type="button" onClick={handleBack} className="focus-home-button" title="Return to Home" aria-label="Home"><ArrowLeft size={16} /><span>Home</span></button>
+          <span aria-hidden="true">/</span><span className="focus-project-breadcrumb" title={projectLabel}>{projectLabel}</span>
+          <span aria-hidden="true">/</span><span className="focus-current-breadcrumb" title={title}>{title || 'Untitled Note'}</span>
+        </nav>
+        <div className="focus-header-actions">
+          {onOpenSearch && <button type="button" onClick={onOpenSearch} className="focus-search-action focus-icon-button" aria-label="Search workspace" title="Search workspace"><Search size={16} /></button>}
+          <button type="button" className="focus-header-action" onClick={() => onOpenCanvas()} aria-label="Canvas" title="Open canvas"><LayoutGrid size={16} /><span>Canvas</span></button>
+          <button type="button" className="focus-header-action" onClick={() => setIsHistoryOpen(true)} disabled={!history} aria-label="History" title={history ? 'Project history' : 'History is available for project documents'}><History size={16} /><span>History</span></button>
+          <button type="button" className="focus-header-action" data-testid="btn-toggle-epistemic-margin" onClick={() => setShowMargin((shown) => !shown)} aria-expanded={showMargin} aria-controls="focus-evidence-margin" title="Toggle Epistemic Margin Sidebar" aria-label="Margin">
+            {showMargin ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}<span>Margin</span>
           </button>
-
-          <span className="text-[#8C8A82] dark:text-[#6E6D66] text-xs font-medium">/</span>
-
-          <span className="text-xs font-semibold text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors truncate max-w-40 sm:max-w-64">
-            {brief?.purpose ? brief.purpose.slice(0, 36) : (projectId ? 'Project Workspace' : 'Notes')}
-          </span>
-
-          <span className="text-[#8C8A82] dark:text-[#6E6D66] text-xs font-medium">/</span>
-
-          <span className="text-xs font-bold text-[#1E201C] dark:text-[#EDEAE2] truncate max-w-48 sm:max-w-80">
-            {title || context?.artifact.title || 'Untitled Note'}
-          </span>
-        </div>
-
-        {/* Right Controls */}
-        <div className="flex items-center gap-2">
-          {/* Search Trigger */}
-          <button
-            type="button"
-            onClick={onOpenSearch}
-            className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-xs text-[#6E6D66] dark:text-[#9E9C93] transition-colors cursor-pointer border border-[#E8E5DC]/80 dark:border-[#2C2E27]"
-            title="Command Palette (Cmd+K)"
-          >
-            <Search className="w-3.5 h-3.5" />
-            <span>Search...</span>
-            <kbd className="text-[10px] bg-white/70 dark:bg-[#1C1D19] px-1.5 py-0.5 rounded text-[#3A3B36] dark:text-[#D4D1C7] font-mono border border-[#E8E5DC] dark:border-[#2C2E27]">
-              ⌘K
-            </kbd>
-          </button>
-
-          {/* Canvas Button */}
-          <button
-            type="button"
-            onClick={() => onOpenCanvas()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-xs font-medium text-[#3A3B36] dark:text-[#D4D1C7] transition-colors cursor-pointer"
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Canvas</span>
-          </button>
-
-          {/* History Button */}
-          <button
-            type="button"
-            onClick={() => setIsHistoryOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-xs font-medium text-[#3A3B36] dark:text-[#D4D1C7] transition-colors cursor-pointer"
-          >
-            <History className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">History</span>
-          </button>
-
-          {/* Epistemic Margin Toggle */}
-          <button
-            type="button"
-            data-testid="btn-toggle-epistemic-margin"
-            onClick={() => setShowMargin(!showMargin)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
-              showMargin
-                ? 'bg-[#282C25] text-white dark:bg-[#EDEAE2] dark:text-[#121310] shadow-2xs'
-                : 'bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
-            }`}
-            title="Toggle Epistemic Margin Sidebar"
-          >
-            {showMargin ? (
-              <PanelRightClose className="w-3.5 h-3.5" />
-            ) : (
-              <PanelRightOpen className="w-3.5 h-3.5" />
-            )}
-            <span className="hidden sm:inline">📖 Margin</span>
-          </button>
-
-          {/* Theme Mode Toggle */}
           <ThemeToggle variant="icon" />
-
-          {/* Auto-Save Status Pill */}
-          <button
-            type="button"
-            data-testid="btn-save-artifact"
-            onClick={handleSave}
-            title="Auto-saving enabled. Click to sync immediately."
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#FAF9F5] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] text-xs font-medium transition-all cursor-pointer shadow-2xs hover:bg-[#EFECE4] dark:hover:bg-[#252820]"
-          >
-            {isSaving ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8C8A82] dark:text-[#6E6D66]" />
-                <span className="text-[#8C8A82] dark:text-[#6E6D66]">Saving...</span>
-              </>
-            ) : saveSuccess ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-emerald-700 dark:text-emerald-300 font-semibold">Saved</span>
-              </>
-            ) : (
-              <>
-                <Check className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#6E6D66]" />
-                <span className="text-[#6E6D66] dark:text-[#9E9C93]">Auto-saved</span>
-              </>
-            )}
+          <button type="button" data-testid="btn-save-artifact" className={`focus-save-status ${saveError ? 'focus-save-error' : ''}`} onClick={handleSave} disabled={isLoadingDocument || !!loadError || isSaving} title={saveError ? 'Retry saving your changes' : 'Changes save automatically. Click to save now.'}>
+            {isSaving ? <Loader2 size={15} className="animate-spin" /> : saveError ? <AlertTriangle size={15} /> : <Check size={15} />}
+            <span aria-live="polite">{saveError ? 'Save failed' : isSaving ? 'Saving...' : saveSuccess ? 'Saved' : isDirty ? 'Unsaved changes' : 'Auto-saved'}</span>
           </button>
         </div>
       </header>
 
       {/* Main Full-Height Workspace Body */}
-      <div className="flex-1 flex overflow-hidden w-full relative">
+      <div className="focus-workspace-body">
         {/* Generous Full-Height Document Canvas */}
-        <div className="flex-1 h-full overflow-y-auto bg-[#FAF8F3] dark:bg-[#121310]">
+        <div className="focus-document-scroll" data-testid="document-scroll-region">
           <div
             data-testid="editor-canvas"
-            className={`transition-all duration-200 ${
-              showMargin ? 'max-w-4xl lg:max-w-5xl' : 'flex-1 max-w-5xl mx-auto'
-            } px-12 py-10 min-h-full bg-white dark:bg-[#181915] border-x border-[#E8E5DC] dark:border-[#262822] flex flex-col shadow-2xs relative`}
+            className="focus-document-sheet flex-1 min-h-full relative"
           >
+            {actionError && <div className="focus-error focus-save-notice" role="alert"><span>{actionError}</span><button type="button" onClick={() => setActionError(null)}>Dismiss</button></div>}
+            {saveError && <div className="focus-error focus-save-notice" role="alert"><span>{saveError}</span><button type="button" onClick={handleSave}>Retry save</button></div>}
+            {isLoadingDocument ? <div className="focus-document-state" role="status"><Loader2 size={20} className="animate-spin" /> Opening document…</div> : loadError ? <div className="focus-document-state" role="alert"><AlertTriangle size={20} /><p>{loadError}</p><button type="button" className="sthira-button-secondary" onClick={loadProjectData}>Try again</button></div> : <>
             {/* Phase 19/20: Live Run Banner — the pipeline's real stages (research) or
                 the LLM token stream (plan) render here, inside the full-width center
                 document canvas. */}
@@ -1007,19 +979,9 @@ export const FocusView: React.FC<FocusViewProps> = ({
               <div
                 data-testid="document-run-banner"
                 data-run-kind={documentRun.kind}
-                className={`mb-6 rounded-2xl border px-4 py-3 flex items-start gap-3 text-xs shadow-2xs ${
-                  documentRun.status === 'error'
-                    ? 'bg-[#FDF3F2] dark:bg-[#2A1B1A] border-[#E7C9C6] dark:border-[#5A3A36] text-[#8C3B33] dark:text-[#E8A79E]'
-                    : documentRun.status === 'warning' ||
-                      (documentRun.status === 'done' &&
-                        (documentRun.mode === 'local_vault_only' ||
-                          documentRun.message.includes('Web search returned no results') ||
-                          documentRun.message.includes('local context')))
-                      ? 'bg-[#FFFBEB] dark:bg-[#2A2415] border-[#FDE68A] dark:border-[#53431D] text-[#92400E] dark:text-[#FCD34D]'
-                      : documentRun.status === 'done'
-                        ? 'bg-[#F1F7F0] dark:bg-[#1C261A] border-[#CCDCCC] dark:border-[#2E4A28] text-[#2D5A27] dark:text-[#88D080]'
-                        : 'bg-[#F7F5EF] dark:bg-[#1C1D19] border-[#E8E5DC] dark:border-[#2C2E27] text-[#3A3B36] dark:text-[#D4D1C7]'
-                }`}
+                data-run-status={documentRun.status}
+                data-run-local={documentRun.mode === 'local_vault_only' || documentRun.message.includes('local context') || documentRun.message.includes('Web search returned no results')}
+                className="focus-run-banner"
               >
                 {documentRun.status === 'running' ? (
                   <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
@@ -1079,12 +1041,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
             {documentRun?.status === 'running' && documentRun.streamedMarkdown && (
               <div
                 data-testid="document-live-stream"
-                className="mb-6 rounded-2xl border border-[#E8E5DC] dark:border-[#2C2E27] bg-[#FCFBF7] dark:bg-[#16170F] px-5 py-4 shadow-2xs"
+                className="focus-live-stream"
               >
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[#8C8A82] dark:text-[#6E6D66] mb-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-sthira-text-subtle mb-2">
                   Live stream
                 </div>
-                <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-[#1E201C] dark:text-[#EDEAE2] max-h-[50vh] overflow-y-auto">
+                <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-sthira-text max-h-[50vh] overflow-y-auto">
                   {documentRun.streamedMarkdown}
                 </pre>
               </div>
@@ -1092,29 +1054,17 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
             {/* Contextual Resume Brief */}
             {brief && (
-              <div className="mb-6">
+              <div className="focus-resume-region">
                 <ContextualResumePane
                   brief={brief}
                   isOpen={isBriefOpen}
                   onToggleOpen={() => setIsBriefOpen(!isBriefOpen)}
                   onExpandReview={handleExpandReview}
                   isExpandedReview={isExpandedReview}
-                  onSelectArtifact={(aid) => {
-                    getArtifactContext(aid).then((c) => {
-                      setContext(c);
-                      setEditorContent(c.artifact.content_md);
-                      setTitle(c.artifact.title || '');
-                    });
-                  }}
+                  isReviewLoading={isReviewLoading}
+                  reviewError={reviewError}
+                  onSelectArtifact={navigateToArtifact}
                 />
-              </div>
-            )}
-
-            {/* Anchored Quote Preview */}
-            {hoveredQuote && (
-              <div className="mb-4 bg-[#FAF8F3] dark:bg-[#1C261A] border border-[#CCDCCC] dark:border-[#2E4A28] rounded-xl px-4 py-2.5 text-xs text-[#2D5A27] dark:text-[#88D080] font-medium flex items-center gap-2 animate-in fade-in">
-                <Quote className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">Anchored Quote: &ldquo;{hoveredQuote}&rdquo;</span>
               </div>
             )}
 
@@ -1129,11 +1079,11 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       onOpenArtifact(context.artifact.derived_from_artifact_id, projectId || null);
                     }
                   }}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-[#F4F1EA] dark:bg-[#23261F] text-[#484B42] dark:text-[#C5C2B8] border border-[#E8E5DC] dark:border-[#2D3027] hover:bg-[#EAE6DD] dark:hover:bg-[#2E3129] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer group"
+                  className="focus-lineage inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-sthira-surface-muted text-sthira-text-muted border border-sthira-border hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer group"
                   title={`Navigate to parent artifact: ${context.derived_from_title || context.artifact.derived_from_artifact_id}`}
                 >
                   <span className="text-xs">🔗</span>
-                  <span className="font-semibold text-[#282C25] dark:text-[#EDEAE2]">Derived from:</span>
+                  <span className="font-semibold text-sthira-text">Derived from:</span>
                   <span className="underline decoration-stone-300 dark:decoration-stone-600 underline-offset-2 group-hover:decoration-stone-500">
                     {context.derived_from_title || 'Parent Note'}
                   </span>
@@ -1147,7 +1097,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
             )}
 
             {/* Document Title Header */}
-            <div className="pb-3 mb-5 border-b border-[#BE8B41]/25 dark:border-[#BE8B41]/20">
+            <div className="focus-title-header">
               <input
                 type="text"
                 data-testid="input-artifact-title"
@@ -1155,7 +1105,9 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 onChange={(e) => handleTitleChange(e.target.value)}
                 onBlur={handleSave}
                 placeholder="Document title..."
-                className="text-3xl sm:text-4xl font-editorial font-bold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] bg-transparent border-none outline-none w-full placeholder-[#A09D94] dark:placeholder-[#6E6D66]"
+                aria-label="Document title"
+                title={title}
+                className="text-3xl sm:text-4xl font-editorial font-bold tracking-tight text-sthira-text bg-transparent border-none outline-none w-full placeholder-sthira-text-subtle"
               />
             </div>
 
@@ -1170,13 +1122,13 @@ export const FocusView: React.FC<FocusViewProps> = ({
             )}
 
             {/* Notion-Style Formatting Toolbar & Rich Preview Toggle */}
-            <div className="flex items-center justify-between pb-3 mb-5 border-b border-[#ECE9E0] dark:border-[#262822] text-xs text-[#6E6D66] dark:text-[#9E9C93] gap-3 flex-wrap">
+            <div className="focus-format-toolbar">
               {/* Left: Quick Formatting Actions */}
-              <div className="flex items-center gap-1 flex-wrap p-1 rounded-xl bg-[#F7F5EF] dark:bg-[#1E201A] border border-[#E8E5DC] dark:border-[#2C2E27]">
+              <div className="focus-format-actions" role="group" aria-label="Markdown formatting">
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('bold')}
-                  className="p-1.5 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
                   title="Bold (Cmd+B)"
                 >
                   <Bold className="w-3.5 h-3.5" />
@@ -1184,16 +1136,16 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('italic')}
-                  className="p-1.5 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
                   title="Italic (Cmd+I)"
                 >
                   <Italic className="w-3.5 h-3.5" />
                 </button>
-                <div className="w-px h-4 bg-[#E0DCD3] dark:bg-[#2C2E27] mx-1" />
+                <div className="w-px h-4 bg-sthira-border-strong mx-1" />
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('h1')}
-                  className="px-2 py-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] font-semibold text-xs transition-colors cursor-pointer"
+                  className="px-2 py-1 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text font-semibold text-xs transition-colors cursor-pointer"
                   title="Heading 1"
                 >
                   H1
@@ -1201,7 +1153,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('h2')}
-                  className="px-2 py-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] font-semibold text-xs transition-colors cursor-pointer"
+                  className="px-2 py-1 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text font-semibold text-xs transition-colors cursor-pointer"
                   title="Heading 2"
                 >
                   H2
@@ -1209,7 +1161,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('todo')}
-                  className="p-1.5 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
                   title="Checklist Item"
                 >
                   <CheckSquare className="w-3.5 h-3.5" />
@@ -1217,7 +1169,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('code')}
-                  className="p-1.5 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
                   title="Code Block"
                 >
                   <CodeIcon className="w-3.5 h-3.5" />
@@ -1225,18 +1177,18 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('table')}
-                  className="p-1.5 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-sthira-surface-muted hover:text-sthira-text transition-colors cursor-pointer"
                   title="Markdown Table"
                 >
                   <TableIcon className="w-3.5 h-3.5" />
                 </button>
 
-                <div className="w-px h-4 bg-[#E0DCD3] dark:bg-[#2C2E27] mx-1" />
+                <div className="w-px h-4 bg-sthira-border-strong mx-1" />
 
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('slash')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#282C25] dark:text-[#EDEAE2] font-medium transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sthira-surface-muted hover:bg-sthira-surface-muted text-sthira-text font-medium transition-colors cursor-pointer"
                   title="Open Slash Command Popover"
                 >
                   <span className="font-mono font-bold">/</span>
@@ -1245,50 +1197,52 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
 
               {/* Right: Clean Binary Mode Switcher & Page Action Menu */}
-              <div className="flex items-center gap-2">
-                <div className="inline-flex p-0.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27]">
+              <div className="focus-document-actions">
+                <div role="group" aria-label="Document view" className="focus-view-modes inline-flex p-0.5 rounded-lg bg-sthira-surface-muted border border-sthira-border-strong">
                   <button
                     type="button"
                     data-testid="btn-toggle-edit-mode"
+                    aria-pressed={viewMode === 'edit'}
                     onClick={() => setViewMode('edit')}
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
                       viewMode === 'edit'
-                        ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                        : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                        ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
+                        : 'text-sthira-text-muted hover:text-sthira-text'
                     }`}
                     title="Edit Markdown (Cmd+E)"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
-                    <span>✏️ Edit</span>
+                    <span>Edit</span>
                   </button>
 
                   <button
                     type="button"
                     data-testid="btn-toggle-preview-mode"
+                    aria-pressed={viewMode === 'preview'}
                     onClick={() => setViewMode('preview')}
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
                       viewMode === 'preview'
-                        ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                        : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                        ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
+                        : 'text-sthira-text-muted hover:text-sthira-text'
                     }`}
                     title="Component-Decorated Rich Workspace (Cmd+E)"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>👁️ Preview</span>
+                    <span>Preview</span>
                   </button>
                 </div>
 
                 {/* Chained Synthesis: Refine & Derive Toolbar Actions */}
-                <div className="flex items-center gap-1.5">
+                <div className="focus-ai-actions">
                   <button
                     type="button"
                     data-testid="btn-refine-artifact"
                     onClick={() => setIsRefineModalOpen(true)}
                     disabled={!context?.artifact?.id && !artifactId}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2D3027] text-[#3C3F35] dark:text-[#EDEAE2] hover:bg-[#F4F1EA] dark:hover:bg-[#252821] hover:text-[#1E201C] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-sthira-surface border border-sthira-border text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                     title="Iteratively refine or re-research note with custom critique"
                   >
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <RefreshCw className="w-3.5 h-3.5 text-sthira-primary" />
                     <span>Refine</span>
                   </button>
 
@@ -1296,40 +1250,43 @@ export const FocusView: React.FC<FocusViewProps> = ({
                     <button
                       type="button"
                       data-testid="btn-derive-menu"
+                      aria-expanded={isDeriveMenuOpen}
+                      aria-controls="focus-derive-options"
                       onClick={() => setIsDeriveMenuOpen((v) => !v)}
                       disabled={(!context?.artifact?.id && !artifactId) || isDeriving}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2D3027] text-[#3C3F35] dark:text-[#EDEAE2] hover:bg-[#F4F1EA] dark:hover:bg-[#252821] hover:text-[#1E201C] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-sthira-surface border border-sthira-border text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                       title="Derive execution plan, discrete ideas, or task checklist"
                     >
                       {isDeriving ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
                       ) : (
-                        <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                        <Zap className="w-3.5 h-3.5 text-sthira-accent" />
                       )}
                       <span>Derive</span>
-                      <ChevronDown className="w-3 h-3 text-[#7D7A70] dark:text-[#9E9C93]" />
+                      <ChevronDown className="w-3 h-3 text-sthira-text-subtle" />
                     </button>
 
                     {isDeriveMenuOpen && (
                       <div
                         data-testid="derive-dropdown-menu"
-                        className="absolute right-0 top-full mt-1.5 w-60 bg-[#FAF8F5] dark:bg-[#1C1E18] border border-[#E8E5DC] dark:border-[#2D3027] rounded-xl shadow-lg py-1.5 z-40 animate-in fade-in duration-100 flex flex-col"
+                        id="focus-derive-options"
+                        className="absolute right-0 top-full mt-1.5 w-60 bg-sthira-surface-raised border border-sthira-border rounded-xl shadow-lg py-1.5 z-40 animate-in fade-in duration-100 flex flex-col"
                       >
-                        <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#7D7A70] dark:text-[#9E9C93] border-b border-[#E8E5DC] dark:border-[#2D3027] mb-1">
+                        <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-sthira-text-subtle border-b border-sthira-border mb-1">
                           Derive Chained Artifact
                         </div>
                         <button
                           type="button"
                           data-testid="btn-derive-plan"
                           onClick={() => handleDerive('plan_from_research')}
-                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer group"
                         >
-                          <span className="text-sm">📋</span>
+                          <BookOpen size={16} />
                           <div className="flex flex-col">
                             <span className="font-medium group-hover:text-emerald-700 dark:group-hover:text-emerald-400">
                               Derive Execution Plan
                             </span>
-                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                            <span className="text-[10px] text-sthira-text-subtle">
                               Synthesizes phased implementation milestones
                             </span>
                           </div>
@@ -1339,14 +1296,14 @@ export const FocusView: React.FC<FocusViewProps> = ({
                           type="button"
                           data-testid="btn-derive-ideas"
                           onClick={() => handleDerive('extract_ideas')}
-                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer group"
                         >
-                          <span className="text-sm">💡</span>
+                          <Lightbulb size={16} />
                           <div className="flex flex-col">
                             <span className="font-medium group-hover:text-amber-700 dark:group-hover:text-amber-400">
                               Extract Discrete Ideas
                             </span>
-                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                            <span className="text-[10px] text-sthira-text-subtle">
                               Deconstructs into discrete hypothesis objects
                             </span>
                           </div>
@@ -1356,14 +1313,14 @@ export const FocusView: React.FC<FocusViewProps> = ({
                           type="button"
                           data-testid="btn-derive-tasks"
                           onClick={() => handleDerive('extract_tasks')}
-                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-[#282C25] dark:text-[#EDEAE2] hover:bg-[#EAE6DD] dark:hover:bg-[#282B23] transition-colors cursor-pointer group"
+                          className="flex items-center gap-2.5 px-3 py-2 text-left text-xs text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer group"
                         >
-                          <span className="text-sm">☑️</span>
+                          <CheckSquare size={16} />
                           <div className="flex flex-col">
                             <span className="font-medium group-hover:text-blue-700 dark:group-hover:text-blue-400">
                               Extract Action Checklist
                             </span>
-                            <span className="text-[10px] text-[#7D7A70] dark:text-[#9E9C93]">
+                            <span className="text-[10px] text-sthira-text-subtle">
                               Consolidated checklist of actionable tasks
                             </span>
                           </div>
@@ -1411,17 +1368,17 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
             {/* Inline AI Streaming Status Banner */}
             {isAiStreaming && (
-              <div className="mb-4 p-3 rounded-xl bg-[#F6F4FF] dark:bg-[#1C162E] border border-[#E0D7FA] dark:border-[#382E59] text-xs text-purple-900 dark:text-purple-200 flex items-center justify-between animate-pulse">
+              <div className="focus-inline-stream">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400 animate-spin" />
+                  <Sparkles className="w-4 h-4 text-sthira-primary animate-spin" />
                   <span className="font-semibold">{aiStreamingMessage || 'Generating with active model...'}</span>
                 </div>
-                <span className="text-[10px] text-purple-700 dark:text-purple-300 font-mono">streaming tokens</span>
+                <span className="text-[10px] text-sthira-text-muted font-mono">streaming tokens</span>
               </div>
             )}
 
             {/* Main Canvas Body: Live Edit vs Component-Decorated Rich Preview */}
-            <div className="flex-1 flex flex-col min-h-[520px] relative">
+            <div className="focus-editor-body">
               {viewMode === 'edit' ? (
                 <div className="flex-1 flex flex-col relative">
                   <textarea
@@ -1430,8 +1387,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
                     value={editorContent}
                     onChange={(e) => handleEditorChange(e.target.value, e)}
                     onBlur={handleSave}
+                    aria-label="Document Markdown"
+                    spellCheck={false}
                     placeholder="Type '/' to insert blocks, record epistemic decisions, or invoke inline AI compute..."
-                    className="flex-1 w-full bg-transparent border-none outline-none resize-none font-mono text-sm leading-relaxed text-[#1E201C] dark:text-[#EDEAE2] placeholder-[#A09D94] dark:placeholder-[#6E6D66] min-h-[calc(100vh-140px)]"
+                    className="flex-1 w-full bg-transparent border-none outline-none resize-none font-mono text-sm leading-relaxed text-sthira-text placeholder-sthira-text-subtle min-h-[calc(100vh-140px)]"
                   />
 
                   {/* Caret-Positioned Notion-Style Slash Command Menu Popover */}
@@ -1477,9 +1436,11 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 </div>
               ) : (
                 /* Rich Component-Decorated Markdown Preview Canvas */
-                <div data-testid="rich-preview-canvas" className="flex-1 py-2 space-y-4">
+                <div data-testid="rich-preview-canvas" className="focus-preview">
                   <RichDocumentRenderer
                     content={editorContent}
+                    documentTitle={title}
+                    className="focus-prose"
                     projectId={projectId}
                     objectTypes={objectTypes}
                     onUpdateContent={(updated) => {
@@ -1508,6 +1469,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 </div>
               )}
             </div>
+            </>}
           </div>
         </div>
 
@@ -1515,24 +1477,35 @@ export const FocusView: React.FC<FocusViewProps> = ({
         {showMargin && (
           <aside
             data-testid="epistemic-margin-sidebar"
-            className="w-80 shrink-0 border-l border-[#E8E5DC] dark:border-[#262822] bg-[#FAF9F6] dark:bg-[#141512] h-full overflow-y-auto p-4 flex flex-col space-y-4 animate-in slide-in-from-right duration-150"
+            id="focus-evidence-margin"
+            aria-label="Epistemic margin"
+            className="focus-margin"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-[#E8E5DC] dark:border-[#262822]">
+            <div className="focus-margin-heading">
               <div className="flex items-center gap-2">
-                <Quote className="w-4 h-4 text-[#49583D] dark:text-[#879E78]" />
-                <h3 className="text-xs font-bold text-[#282C25] dark:text-[#EDEAE2] uppercase tracking-wider font-sans">
+                <Quote className="w-4 h-4 text-sthira-primary" />
+                <h3 className="text-xs font-bold text-sthira-text uppercase tracking-wider font-sans">
                   Epistemic Margin
                 </h3>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#EFECE4] dark:bg-[#22241F] text-[#49583D] dark:text-[#879E78] font-bold">
-                  {marginTab === 'insights' ? (context?.epistemic_nodes?.length || 0) : (context?.artifact?.source_url ? 1 : 0)}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sthira-surface-muted text-sthira-primary font-bold">
+                  {/* Anchored Quote Preview */}
+            {hoveredQuote && (
+              <div className="focus-quote-preview mb-4 bg-sthira-canvas border border-sthira-border-strong rounded-xl px-4 py-2.5 text-xs text-[#2D5A27] dark:text-[#88D080] font-medium flex items-center gap-2 animate-in fade-in">
+                <Quote className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Anchored Quote: &ldquo;{hoveredQuote}&rdquo;</span>
+              </div>
+            )}
+
+            {marginTab === 'insights' ? (context?.epistemic_nodes?.length || 0) : sourceCount}
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowMargin(false)}
-                  className="text-[#8C8A82] dark:text-[#6E6D66] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] p-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#252820] transition-colors cursor-pointer"
-                  title="Collapse Sidebar"
+                  className="text-sthira-text-subtle hover:text-sthira-text p-1 rounded-lg hover:bg-sthira-surface-muted transition-colors cursor-pointer"
+                  title="Close epistemic margin"
+                  aria-label="Close epistemic margin"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -1540,31 +1513,33 @@ export const FocusView: React.FC<FocusViewProps> = ({
             </div>
 
             {/* Segmented Control: Insights vs Sources (Matching Mockup 3) */}
-            <div className="flex p-0.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27] text-xs">
+            <div className="focus-margin-tabs" role="group" aria-label="Evidence view">
               <button
                 type="button"
                 data-testid="btn-margin-tab-insights"
+                aria-pressed={marginTab === 'insights'}
                 onClick={() => setMarginTab('insights')}
                 className={`flex-1 py-1 rounded-lg text-center font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   marginTab === 'insights'
-                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                    : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                    ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
+                    : 'text-sthira-text-muted hover:text-sthira-text'
                 }`}
               >
-                <Sparkles className="w-3 h-3 text-[#49583D] dark:text-[#879E78]" />
+                <Sparkles className="w-3 h-3 text-sthira-primary" />
                 <span>Insights</span>
               </button>
               <button
                 type="button"
                 data-testid="btn-margin-tab-sources"
+                aria-pressed={marginTab === 'sources'}
                 onClick={() => setMarginTab('sources')}
                 className={`flex-1 py-1 rounded-lg text-center font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   marginTab === 'sources'
-                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] font-semibold shadow-2xs'
-                    : 'text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
+                    ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
+                    : 'text-sthira-text-muted hover:text-sthira-text'
                 }`}
               >
-                <Globe className="w-3 h-3 text-[#49583D] dark:text-[#879E78]" />
+                <Globe className="w-3 h-3 text-sthira-primary" />
                 <span>Sources</span>
               </button>
             </div>
@@ -1577,21 +1552,24 @@ export const FocusView: React.FC<FocusViewProps> = ({
                     {context.epistemic_nodes.map((node) => (
                       <div
                         key={node.id}
+                        tabIndex={0}
+                        onFocus={() => setHoveredQuote(node.quote || null)}
+                        onBlur={() => setHoveredQuote(null)}
                         onMouseEnter={() => setHoveredQuote(node.quote || null)}
                         onMouseLeave={() => setHoveredQuote(null)}
-                        className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs hover:border-[#CCDCCC] dark:hover:border-[#2E4A28] hover:shadow-2xs transition-all"
+                        className="focus-evidence-card bg-sthira-surface border border-sthira-border rounded-xl p-3 text-xs hover:border-sthira-border-strong hover:shadow-2xs transition-all"
                       >
                         <div className="flex items-center justify-between mb-1.5">
                           <EpistemicBadge origin={node.origin} />
-                          <span className="text-[10px] text-[#6E6D66] dark:text-[#9E9C93] font-medium capitalize">
+                          <span className="text-[10px] text-sthira-text-muted font-medium capitalize">
                             {node.node_type}
                           </span>
                         </div>
-                        <p className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] mb-1">
+                        <p className="font-semibold text-sthira-text mb-1">
                           {node.statement}
                         </p>
                         {node.quote && (
-                          <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] italic bg-[#FAF8F3] dark:bg-[#161714] p-2 rounded-lg border border-[#ECE9E0] dark:border-[#262822] mt-1.5">
+                          <p className="text-[11px] text-sthira-text-muted italic bg-sthira-canvas p-2 rounded-lg border border-sthira-border mt-1.5">
                             &ldquo;{node.quote}&rdquo;
                           </p>
                         )}
@@ -1599,16 +1577,16 @@ export const FocusView: React.FC<FocusViewProps> = ({
                     ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-4 text-center">
-                    <Info className="w-4 h-4 mx-auto mb-2 text-[#8C8A82] dark:text-[#6E6D66]" />
-                    Type <span className="font-mono font-semibold text-[#1E201C] dark:text-[#EDEAE2]">/decision</span> or write notes to register verified decisions in the knowledge graph.
+                  <div className="text-xs text-sthira-text-muted leading-relaxed bg-sthira-surface border border-sthira-border rounded-xl p-4 text-center">
+                    <Info className="w-4 h-4 mx-auto mb-2 text-sthira-text-subtle" />
+                    No extracted claims for this document yet. Recorded statements and their provenance will appear here.
                   </div>
                 )}
 
                 {/* Ambient Graph Proposals */}
                 {context?.pending_proposals && context.pending_proposals.length > 0 && (
-                  <div className="pt-2 border-t border-[#E8E5DC] dark:border-[#262822] space-y-3">
-                    <h4 className="text-xs font-bold text-[#6E6D66] dark:text-[#9E9C93] uppercase tracking-wider flex items-center gap-1.5">
+                  <div className="pt-2 border-t border-sthira-border space-y-3">
+                    <h4 className="text-xs font-bold text-sthira-text-muted uppercase tracking-wider flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-[#8C6D1F] dark:text-[#D4A738]" />
                       Ambient Proposals
                     </h4>
@@ -1627,18 +1605,18 @@ export const FocusView: React.FC<FocusViewProps> = ({
               /* Sources Tab Content */
               <div className="space-y-3">
                 {context?.artifact?.source_url ? (
-                  <div className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs space-y-1.5 shadow-2xs">
+                  <div className="bg-sthira-surface border border-sthira-border rounded-xl p-3 text-xs space-y-1.5 shadow-2xs">
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] uppercase font-bold text-[#49583D] dark:text-[#879E78] tracking-wider">
+                      <span className="text-[10px] uppercase font-bold text-sthira-primary tracking-wider">
                         Primary Source
                       </span>
-                      <ExternalLink className="w-3 h-3 text-[#8C8A82]" />
+                      <ExternalLink className="w-3 h-3 text-sthira-text-subtle" />
                     </div>
                     <a
                       href={context.artifact.source_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="font-medium text-[#1E201C] dark:text-[#EDEAE2] hover:underline break-all block"
+                      className="font-medium text-sthira-text hover:underline break-all block"
                     >
                       {context.artifact.source_url}
                     </a>
@@ -1646,11 +1624,11 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 ) : null}
 
                 {(() => {
-                  const linkMatches = Array.from(editorContent.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g));
+                  const linkMatches = sourceLinks;
                   if (!context?.artifact?.source_url && linkMatches.length === 0) {
                     return (
-                      <div className="text-xs text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-4 text-center">
-                        <Globe className="w-4 h-4 mx-auto mb-2 text-[#8C8A82] dark:text-[#6E6D66]" />
+                      <div className="text-xs text-sthira-text-muted leading-relaxed bg-sthira-surface border border-sthira-border rounded-xl p-4 text-center">
+                        <Globe className="w-4 h-4 mx-auto mb-2 text-sthira-text-subtle" />
                         No external sources linked yet. External citations or web search references will appear here.
                       </div>
                     );
@@ -1660,19 +1638,19 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       {linkMatches.map((match, i) => (
                         <div
                           key={i}
-                          className="bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3 text-xs shadow-2xs hover:border-[#CCDCCC] dark:hover:border-[#2E4A28] transition-all"
+                          className="bg-sthira-surface border border-sthira-border rounded-xl p-3 text-xs shadow-2xs hover:border-sthira-border-strong transition-all"
                         >
                           <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] truncate">
+                            <span className="font-semibold text-sthira-text truncate">
                               {match[1]}
                             </span>
-                            <ExternalLink className="w-3 h-3 text-[#8C8A82] shrink-0" />
+                            <ExternalLink className="w-3 h-3 text-sthira-text-subtle shrink-0" />
                           </div>
                           <a
                             href={match[2]}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[11px] text-[#49583D] dark:text-[#879E78] hover:underline truncate block"
+                            className="text-[11px] text-sthira-primary hover:underline truncate block"
                           >
                             {match[2]}
                           </a>
@@ -1693,13 +1671,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
           history={history}
           isOpen={isHistoryOpen}
           onClose={() => setIsHistoryOpen(false)}
-          onSelectArtifact={(aid) => {
-            getArtifactContext(aid).then((c) => {
-              setContext(c);
-              setEditorContent(c.artifact.content_md);
-              setIsHistoryOpen(false);
-            });
-          }}
+          onSelectArtifact={navigateToArtifact}
         />
       )}
 

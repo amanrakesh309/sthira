@@ -138,15 +138,38 @@ export interface ResumeBrief {
 export interface NarrativeSegment {
   content: string;
   is_ai_interpretation: boolean;
+  origin?: EpistemicOrigin;
+  evidence_ids?: string[];
 }
 
 export interface Milestone {
+  id?: string;
   seq: number;
   occurred_at: number;
   title: string;
   attribution: 'you_recorded' | 'supported_by_source' | 'sthira_inferred';
   milestone_type: string;
   artifact_id?: string | null;
+  description?: string;
+  evidence_ids?: string[];
+}
+
+/** Serialized by the existing Rust history module, before UI normalization. */
+export interface ProjectHistoryDto {
+  segments: {
+    attribution: 'user_recorded' | 'source_backed' | 'ai_interpretation';
+    text: string;
+    evidence_ids: string[];
+  }[];
+  milestones: {
+    id: string;
+    timestamp_ms: number;
+    milestone_type: string;
+    attribution: 'user_recorded' | 'source_backed' | 'ai_interpretation';
+    title: string;
+    description: string;
+    evidence_ids: string[];
+  }[];
 }
 
 export interface ProjectHistory {

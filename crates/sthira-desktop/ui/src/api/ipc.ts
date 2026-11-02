@@ -9,6 +9,7 @@ import type {
   OperationalMode,
   PlanProposedAction,
   ProjectHistory,
+  ProjectHistoryDto,
   ProviderEntry,
   ProviderModelEntry,
   ResumeBrief,
@@ -152,7 +153,32 @@ export async function getResumePaneHint(projectId: string): Promise<ResumePaneHi
 
 export async function getProjectHistory(projectId: string): Promise<ProjectHistory> {
   if (isTauri) {
-    return await invoke<ProjectHistory>('cmd_get_project_history', { projectId });
+    const data = await invoke<ProjectHistoryDto | ProjectHistory>('cmd_get_project_history', { projectId });
+    // Keep the existing view model for callers while honoring Rust's actual DTO.
+    if ('narrative_segments' in data) return data;
+    return {
+      project_id: projectId,
+      narrative_segments: (data.segments || []).map((segment) => ({
+        content: segment.text,
+        is_ai_interpretation: segment.attribution === 'ai_interpretation',
+        origin: segment.attribution === 'ai_interpretation' ? 'ai_inferred' : segment.attribution,
+        evidence_ids: segment.evidence_ids,
+      })),
+      milestones: (data.milestones || []).map((milestone, index) => ({
+        id: milestone.id,
+        seq: index + 1,
+        occurred_at: milestone.timestamp_ms,
+        title: milestone.title,
+        description: milestone.description,
+        attribution: milestone.attribution === 'user_recorded' ? 'you_recorded'
+          : milestone.attribution === 'source_backed' ? 'supported_by_source' : 'sthira_inferred',
+        milestone_type: milestone.milestone_type,
+        evidence_ids: milestone.evidence_ids,
+        // Only substantive-edit evidence IDs are artifact IDs. Other milestone
+        // types reference purpose/proposal/epistemic records, not documents.
+        artifact_id: milestone.milestone_type === 'substantive_edit' ? milestone.evidence_ids[0] || null : null,
+      })),
+    };
   }
   return {
     project_id: projectId,

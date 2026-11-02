@@ -249,7 +249,7 @@ describe('Explicit Web Search Capability Detection & Badging', () => {
     expect(webSearchBtn).not.toBeDisabled();
 
     // Open model dropdown and select Unsupported model
-    const modelChip = screen.getByTitle('Switch Compute Model & Provider');
+    const modelChip = screen.getByTestId('home-model-selector');
     await user.click(modelChip);
 
     const unsupportedOption = screen.getByText('BGE-M3 Dense Offline');

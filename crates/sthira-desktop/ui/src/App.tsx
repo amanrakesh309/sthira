@@ -70,6 +70,7 @@ export const App: React.FC = () => {
   const [activeFlow, setActiveFlow] = useState<{ mode: FlowMode; initialPrompt?: string } | null>(null);
 
   const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
+  const [homeLoadStatus, setHomeLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [homeState, setHomeState] = useState<HomeStateView>({
     projects: [],
     recent_items: [],
@@ -83,10 +84,12 @@ export const App: React.FC = () => {
         listObjectTypes(),
       ]);
       setHomeState(state);
+      setHomeLoadStatus('ready');
       setObjectTypes(types);
       setTreeRefreshTrigger((prev) => prev + 1);
     } catch (err) {
       console.error('Failed to load home state', err);
+      setHomeLoadStatus('error');
     }
   };
 
@@ -380,7 +383,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#F5F3EC] dark:bg-[#121310] text-[#1E201C] dark:text-[#EDEAE2]">
+    <div className="sthira-shell flex h-screen w-screen overflow-hidden">
       {/* Step 2: Left Hierarchy Sidebar */}
       <LeftSidebar
         activeProjectId={activeProjectId}
@@ -393,6 +396,7 @@ export const App: React.FC = () => {
           setActiveProjectId(null);
           setActiveArtifactId(null);
           setActiveObjectTypeId(null);
+          loadState();
         }}
         onNavigateGraph={() => {
           setCurrentView('graph');
@@ -426,11 +430,12 @@ export const App: React.FC = () => {
           into this container. */}
       <main
         data-testid="center-workspace"
-        className={`flex-1 h-full min-w-0 ${currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'} bg-[#FAF8F3] dark:bg-[#121310] flex flex-col relative`}
+        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
       >
         {currentView === 'home' && (
           <HomeView
             homeState={homeState}
+            loadStatus={homeLoadStatus}
             onOpenProject={handleOpenProject}
             onOpenArtifact={handleOpenArtifact}
             onOpenCanvas={handleOpenCanvas}

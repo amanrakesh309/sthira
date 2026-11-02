@@ -1,168 +1,97 @@
 import React from 'react';
-import {
-  ChevronUp,
-  Clock,
-  Sparkles,
-  Maximize2,
-  Minimize2,
-  CheckCircle2,
-} from 'lucide-react';
-import type { ResumeBrief } from '../types/sthira';
+import { ArrowRight, ChevronUp, Clock, Sparkles, Maximize2, Minimize2, FileText, Loader2 } from 'lucide-react';
+import type { BriefClaim, ResumeBrief } from '../types/sthira';
 
 interface ContextualResumePaneProps {
   brief: ResumeBrief;
   onExpandReview?: () => void;
   isExpandedReview?: boolean;
+  isReviewLoading?: boolean;
+  reviewError?: string | null;
   onSelectArtifact?: (artifactId: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
 }
 
+const words = (text: string) => text.trim().split(/\s+/).filter(Boolean);
+const shorten = (text: string, limit: number) => {
+  const parts = words(text);
+  return parts.length > limit ? `${parts.slice(0, Math.max(1, limit)).join(' ')}…` : text;
+};
+const originLabel = (claim: BriefClaim) => ({
+  user_recorded: 'Recorded', source_backed: 'Source-backed', ai_inferred: 'AI inference',
+}[claim.origin] || 'Unclassified');
+
 export const ContextualResumePane: React.FC<ContextualResumePaneProps> = ({
-  brief,
-  onExpandReview,
-  isExpandedReview = false,
-  onSelectArtifact,
-  isOpen,
-  onToggleOpen,
+  brief, onExpandReview, isExpandedReview = false, isReviewLoading = false,
+  reviewError, onSelectArtifact, isOpen, onToggleOpen,
 }) => {
+  const breadcrumb = shorten(brief.active_working_breadcrumb || 'Active thread', 8);
   if (!isOpen) {
-    return (
-      <button
-        type="button"
-        onClick={onToggleOpen}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F1EEE6] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2A2C25] text-[#1E201C] dark:text-[#EDEAE2] text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-      >
-        <Sparkles className="w-3.5 h-3.5 text-[#49583D] dark:text-[#879E78]" />
-        <span>Resume Brief</span>
-      </button>
-    );
+    return <button type="button" className="focus-brief-collapsed" onClick={onToggleOpen} aria-expanded={false}>
+      <Sparkles size={16} /><span>Resume Brief</span><span className="focus-brief-collapsed-context">{breadcrumb}</span>
+    </button>;
   }
 
+  const progress = brief.recent_progress || [];
+  const conflicts = brief.conflicting_decisions || [];
+  // Reserve space for continuation and provenance. Count visible labels too, so
+  // long backend text cannot turn Level 1 into an unbounded summary panel.
+  const claims = isExpandedReview ? progress : progress.slice(0, 2);
+  const visibleConflicts = isExpandedReview ? conflicts : conflicts.slice(0, 1);
+  const allClaims = [...claims, ...visibleConflicts];
+  const fixedCopy = `Contextual Resume Brief ${breadcrumb} ${onExpandReview ? 'Expand Review' : ''} Purpose Recent grounded findings ${visibleConflicts.length ? 'Conflicting decisions' : ''} ${brief.continuation_point ? `Continuation ${brief.primary_continuation_artifact_id && onSelectArtifact ? 'Resume' : ''}` : ''} ${claims.length === 0 ? 'No progress recorded yet.' : ''} ${allClaims.map((claim) => `${originLabel(claim)} ${(claim.artifact_ids?.length && onSelectArtifact) ? 'Source' : ''}`).join(' ')}`;
+  const contentBudget = Math.max(12, 75 - words(fixedCopy).length);
+  const purpose = isExpandedReview ? (brief.purpose || 'No purpose recorded.') : shorten(brief.purpose || 'No purpose recorded.', Math.min(14, Math.floor(contentBudget / 3)));
+  const continuation = brief.continuation_point
+    ? isExpandedReview ? brief.continuation_point : shorten(brief.continuation_point, Math.min(16, Math.floor(contentBudget / 3)))
+    : null;
+  let remaining = contentBudget - words(purpose).length - words(continuation || '').length;
+  const claimTexts = allClaims.map((claim, index) => {
+    if (isExpandedReview) return claim.text;
+    const text = shorten(claim.text, Math.max(1, Math.floor(remaining / (allClaims.length - index))));
+    remaining -= words(text).length;
+    return text;
+  });
+
+  const renderClaim = (claim: BriefClaim, index: number) => (
+    <li key={`${claim.text}-${index}`} className="focus-brief-claim">
+      <span className="focus-brief-claim-text">{claimTexts[index]}</span>
+      <span className="focus-brief-provenance" title={claim.rendering?.replace(/_/g, ' ')}>{originLabel(claim)}</span>
+      {onSelectArtifact && (isExpandedReview ? claim.artifact_ids || [] : (claim.artifact_ids || []).slice(0, 1)).map((id, sourceIndex) => (
+        <button type="button" key={id} className="focus-brief-source" onClick={() => onSelectArtifact(id)} aria-label={`Open source ${sourceIndex + 1} for ${claim.text}`}>
+          <FileText size={13} />{isExpandedReview ? `Source ${sourceIndex + 1}` : 'Source'}
+        </button>
+      ))}
+    </li>
+  );
+
   return (
-    <div className="bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl shadow-xs p-5 w-full relative overflow-hidden transition-colors">
-      {/* Decorative corner curve */}
-      <div
-        className="absolute -bottom-8 -right-8 w-28 h-28 rounded-full bg-[#FAF8F3] dark:bg-[#23251F] opacity-60 pointer-events-none"
-        aria-hidden="true"
-      />
-
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3.5 border-b border-[#E8E5DC]/80 dark:border-[#2C2E27]">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-[#EEF1E8] dark:bg-[#283427] text-[#49583D] dark:text-[#879E78] flex items-center justify-center">
-            <Sparkles className="w-4 h-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold font-editorial text-[#1E201C] dark:text-[#EDEAE2]">
-              {isExpandedReview ? 'Expanded Review (Level 2)' : 'Contextual Resume Brief'}
-            </h3>
-            <p className="text-[11px] text-[#73766D] dark:text-[#8C8F85]">
-              {brief.active_working_breadcrumb || 'Active Thread'}
-            </p>
-          </div>
+    <section className={`focus-brief ${isExpandedReview ? 'focus-brief-expanded' : ''}`} data-testid="contextual-resume-pane" aria-label={isExpandedReview ? 'Expanded project review' : 'Contextual resume brief'}>
+      <div className="focus-brief-heading">
+        <span className="focus-brief-icon"><Sparkles size={18} /></span>
+        <div className="focus-brief-heading-copy">
+          <h2>{isExpandedReview ? 'Expanded Review (Level 2)' : 'Contextual Resume Brief'}</h2>
+          <p title={brief.active_working_breadcrumb}>{breadcrumb}</p>
         </div>
-
-        <div className="flex items-center gap-2">
-          {onExpandReview && (
-            <button
-              type="button"
-              onClick={onExpandReview}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-[#F1EEE6] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-xs font-medium text-[#1E201C] dark:text-[#EDEAE2] transition-colors cursor-pointer"
-            >
-              {isExpandedReview ? (
-                <>
-                  <Minimize2 className="w-3 h-3" />
-                  <span>Compact</span>
-                </>
-              ) : (
-                <>
-                  <Maximize2 className="w-3 h-3" />
-                  <span>Expand Review</span>
-                </>
-              )}
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={onToggleOpen}
-            aria-label="Collapse Brief"
-            className="text-[#73766D] dark:text-[#8C8F85] hover:text-[#1E201C] dark:hover:text-white p-1 rounded-lg hover:bg-[#F1EEE6] dark:hover:bg-[#22241F] transition-colors cursor-pointer"
-          >
-            <ChevronUp className="w-4 h-4" />
-          </button>
+        {onExpandReview && <button type="button" className="focus-brief-review" onClick={onExpandReview} disabled={isReviewLoading}>
+          {isReviewLoading ? <Loader2 size={14} className="animate-spin" /> : isExpandedReview ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          {isReviewLoading ? 'Loading review…' : isExpandedReview ? 'Compact' : 'Expand Review'}
+        </button>}
+        <button type="button" className="focus-icon-button" onClick={onToggleOpen} aria-label="Collapse Brief" aria-expanded={true}><ChevronUp size={16} /></button>
+      </div>
+      {reviewError && <p className="focus-error" role="alert">{reviewError}</p>}
+      <div className="focus-brief-columns">
+        <div className="focus-brief-purpose"><h3>Purpose</h3><p>{purpose}</p></div>
+        <div className="focus-brief-progress"><h3>Recent grounded findings</h3>
+          {claims.length > 0 ? <ul>{claims.map(renderClaim)}</ul> : <p className="focus-empty-copy">No progress recorded yet.</p>}
+          {visibleConflicts.length > 0 && <div className="focus-brief-conflicts"><h3>Conflicting decisions</h3><ul>{visibleConflicts.map((claim, index) => renderClaim(claim, claims.length + index))}</ul></div>}
         </div>
       </div>
-
-      {/* Content: 2-Column Responsive Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-        {/* Purpose */}
-        <div>
-          <span className="text-[10px] font-bold text-[#73766D] dark:text-[#8C8F85] uppercase tracking-wider block mb-1">
-            Purpose
-          </span>
-          <p className="text-xs sm:text-sm text-[#1E201C] dark:text-[#EDEAE2] leading-relaxed font-normal">
-            {brief.purpose || 'Working document for active investigation and research.'}
-          </p>
-        </div>
-
-        {/* Recent Grounded Findings */}
-        <div>
-          <span className="text-[10px] font-bold text-[#73766D] dark:text-[#8C8F85] uppercase tracking-wider block mb-1.5">
-            Recent Grounded Findings
-          </span>
-          {(!brief.recent_progress || brief.recent_progress.length === 0) ? (
-            <p className="text-xs text-[#73766D] dark:text-[#8C8F85] italic">
-              No previous claims recorded yet.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {brief.recent_progress.slice(0, 3).map((claim, idx) => (
-                <div key={idx} className="flex items-start gap-2 text-xs leading-relaxed">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[#49583D] dark:text-[#879E78] shrink-0 mt-0.5" />
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[#1E201C] dark:text-[#EDEAE2]">
-                      {claim.text}
-                    </span>
-                    {claim.artifact_ids.length > 0 && onSelectArtifact && (
-                      <button
-                        type="button"
-                        onClick={() => onSelectArtifact(claim.artifact_ids[0])}
-                        className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-[#49583D] dark:text-[#879E78] hover:underline"
-                      >
-                        [source]
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Continuation Point Bottom Row */}
-      {brief.continuation_point && (
-        <div className="mt-4 pt-3.5 border-t border-[#E8E5DC]/80 dark:border-[#2C2E27] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
-          <div className="flex items-center gap-2 text-xs text-[#62665D] dark:text-[#B1B5AB]">
-            <Clock className="w-3.5 h-3.5 text-[#49583D] dark:text-[#879E78] shrink-0" />
-            <span>
-              Next step: <strong className="text-[#1E201C] dark:text-[#EDEAE2] font-semibold">{brief.continuation_point}</strong>
-            </span>
-          </div>
-          {brief.primary_continuation_artifact_id && onSelectArtifact && (
-            <button
-              type="button"
-              onClick={() => onSelectArtifact(brief.primary_continuation_artifact_id!)}
-              className="px-3 py-1 rounded-xl bg-[#49583D] dark:bg-[#2F3E28] hover:bg-[#39472F] text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors self-start sm:self-auto cursor-pointer shadow-2xs"
-            >
-              <span>Resume</span>
-              <span>→</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+      {continuation && <div className="focus-brief-continuation">
+        <Clock size={16} /><p><span>Continuation: </span>{continuation}</p>
+        {brief.primary_continuation_artifact_id && onSelectArtifact && <button type="button" className="sthira-button-primary" onClick={() => onSelectArtifact(brief.primary_continuation_artifact_id!)}>Resume <ArrowRight size={15} /></button>}
+      </div>}
+    </section>
   );
 };

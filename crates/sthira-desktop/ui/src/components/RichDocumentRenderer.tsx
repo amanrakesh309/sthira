@@ -17,6 +17,8 @@ import type { ObjectType } from '../types/sthira';
 
 export interface RichDocumentRendererProps {
   content: string;
+  /** Focus already renders an editable title; suppress only a matching first H1. */
+  documentTitle?: string;
   projectId?: string | null;
   objectTypes?: ObjectType[];
   onUpdateContent?: (newContent: string) => void;
@@ -277,6 +279,7 @@ const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
 // ---------------------------------------------------------------------------
 export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
   content,
+  documentTitle,
   projectId: _projectId,
   objectTypes = [],
   onUpdateContent,
@@ -396,7 +399,7 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
           // -----------------------------------------------------------------
           // 2. Headings with refined Warm Stone typography
           // -----------------------------------------------------------------
-          h1: ({ children }) => (
+          h1: ({ children, node }) => node?.position?.start.line === 1 && documentTitle?.trim() === extractText(children).trim() ? null : (
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1E201C] dark:text-[#EDEAE2] mt-8 mb-4 pb-2 border-b border-[#ECE9E0] dark:border-[#2C2E27]">
               {children}
             </h1>
@@ -465,6 +468,7 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
                 >
                   <input
                     type="checkbox"
+                    aria-label={extractText(labelNode).trim() || 'Task'}
                     checked={checked}
                     onChange={() => handleToggleTask(stringContent, checked)}
                     className="mt-1 h-4 w-4 rounded border-[#C8C5BC] dark:border-[#423F3A] text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0"
@@ -500,7 +504,7 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
               return (
                 <div
                   data-testid="interactive-epistemic-decision-callout"
-                  className="my-5 p-4 rounded-2xl border-l-4 border-emerald-500 bg-[#EBF2EA] dark:bg-[#1A261D] shadow-2xs flex flex-col sm:flex-row items-start justify-between gap-4 transition-all"
+                  className="rich-decision-callout my-5 p-4 rounded-2xl border-l-4 border-emerald-500 bg-[#EBF2EA] dark:bg-[#1A261D] shadow-2xs flex flex-col sm:flex-row items-start justify-between gap-4 transition-all"
                 >
                   <div className="flex-1 space-y-1.5">
                     <div className="flex items-center gap-2">
