@@ -12,6 +12,7 @@ import { ObjectTypeBuilderModal } from './components/objects/ObjectTypeBuilderMo
 import { ObjectTypeManagerModal } from './components/objects/ObjectTypeManagerModal';
 import { GraphView } from './views/GraphView';
 import { WorkspaceIndexView } from './views/WorkspaceIndexView';
+import { ProjectOverviewView, DEFAULT_PROJECT_BROWSE } from './views/ProjectOverviewView';
 import { ExplorePlanView } from './views/ExplorePlanView';
 import {
   getHomeState,
@@ -38,6 +39,7 @@ export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<
     | 'home'
     | 'focus'
+    | 'project'
     | 'canvas'
     | 'objects'
     | 'graph'
@@ -50,6 +52,7 @@ export const App: React.FC = () => {
       const v = params.get('view');
       if (v === 'workspace_index' || v === 'all_files' || v === 'all-files') return 'workspace_index';
       if (v === 'focus') return 'focus';
+      if (v === 'project' && params.get('projectId')) return 'project';
       if (v === 'graph') return 'graph';
       if (v === 'objects') return 'objects';
       if (v === 'explore_plan') return 'explore_plan';
@@ -65,7 +68,10 @@ export const App: React.FC = () => {
     return 'all';
   });
   const [explorePlanTab, setExplorePlanTab] = useState<ExplorePlanTab>('research');
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('view') === 'project' ? new URLSearchParams(window.location.search).get('projectId') : null);
+  const [overviewProjectId, setOverviewProjectId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('projectId'));
+  const [projectReturnId, setProjectReturnId] = useState<string | null>(null);
+  const [projectBrowse, setProjectBrowse] = useState(DEFAULT_PROJECT_BROWSE);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
   const [activeObjectTypeId, setActiveObjectTypeId] = useState<string | null>(null);
@@ -153,12 +159,17 @@ export const App: React.FC = () => {
   }, []);
 
   const handleOpenProject = (projectId: string) => {
+    if (overviewProjectId !== projectId) setProjectBrowse(DEFAULT_PROJECT_BROWSE);
+    setOverviewProjectId(projectId);
+    setProjectReturnId(null);
     setActiveProjectId(projectId);
     setActiveArtifactId(null);
-    setCurrentView('focus');
+    setActiveCanvasId(null);
+    setCurrentView('project');
   };
 
   const handleOpenArtifact = (artifactId: string, projectId?: string | null) => {
+    setProjectReturnId(null);
     setActiveArtifactId(artifactId);
     if (projectId) {
       setActiveProjectId(projectId);
@@ -177,12 +188,14 @@ export const App: React.FC = () => {
   };
 
   const handleOpenCanvas = (canvasId?: string, projectId?: string) => {
+    setProjectReturnId(null);
     if (projectId) setActiveProjectId(projectId);
     setActiveCanvasId(canvasId || null);
     setCurrentView('canvas');
   };
 
   const handleOpenObjectCollection = (typeId: string) => {
+    setProjectReturnId(null);
     setActiveObjectTypeId(typeId);
     setCurrentView('objects');
   };
@@ -202,11 +215,13 @@ export const App: React.FC = () => {
   };
 
   const handleNavigateWorkspaceIndex = (tab?: WorkspaceIndexTab) => {
+    setProjectReturnId(null);
     setWorkspaceIndexTab(tab || 'all');
     setCurrentView('workspace_index');
   };
 
   const handleNavigateExplorePlan = (tab?: ExplorePlanTab) => {
+    setProjectReturnId(null);
     setActiveProjectId(null);
     setActiveArtifactId(null);
     setActiveCanvasId(null);
@@ -416,6 +431,7 @@ export const App: React.FC = () => {
         activeObjectTypeId={activeObjectTypeId}
         currentView={currentView}
         onNavigateHome={() => {
+          setProjectReturnId(null);
           setCurrentView('home');
           setActiveProjectId(null);
           setActiveArtifactId(null);
@@ -423,6 +439,7 @@ export const App: React.FC = () => {
           loadState();
         }}
         onNavigateGraph={() => {
+          setProjectReturnId(null);
           setCurrentView('graph');
           setActiveArtifactId(null);
           setActiveObjectTypeId(null);
@@ -454,7 +471,7 @@ export const App: React.FC = () => {
           into this container. */}
       <main
         data-testid="center-workspace"
-        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'graph' || currentView === 'canvas' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
+        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'project' || currentView === 'graph' || currentView === 'canvas' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
       >
         {currentView === 'home' && (
           <HomeView
@@ -489,11 +506,30 @@ export const App: React.FC = () => {
           />
         )}
 
+        {currentView === 'project' && overviewProjectId && <ProjectOverviewView
+          key={overviewProjectId}
+          projectId={overviewProjectId}
+          initialBrowse={projectBrowse}
+          onBrowseChange={setProjectBrowse}
+          refreshTrigger={treeRefreshTrigger}
+          onBack={() => handleNavigateWorkspaceIndex('projects')}
+          onOpenProject={handleOpenProject}
+          onOpenArtifact={(id, pid) => { handleOpenArtifact(id, pid); setProjectReturnId(overviewProjectId); }}
+          onOpenCanvas={(id, pid) => { handleOpenCanvas(id, pid); setProjectReturnId(overviewProjectId); }}
+          onWorkspaceMutated={loadState}
+        />}
+
         {currentView === 'focus' && (activeProjectId || activeArtifactId) && (
           <FocusView
             projectId={activeProjectId || undefined}
             artifactId={activeArtifactId || undefined}
+            backLabel={projectReturnId ? 'Project' : 'Home'}
             onBack={async () => {
+              if (projectReturnId) {
+                handleOpenProject(projectReturnId);
+                await loadState();
+                return;
+              }
               setCurrentView('home');
               setActiveArtifactId(null);
               setActiveProjectId(null);
@@ -502,7 +538,7 @@ export const App: React.FC = () => {
             }}
             onOpenCanvas={handleOpenCanvas}
             onOpenSearch={() => setIsSearchOpen(true)}
-            onOpenArtifact={handleOpenArtifact}
+            onOpenArtifact={(id: string, pid?: string | null) => { const origin = projectReturnId; handleOpenArtifact(id, pid); setProjectReturnId(origin); }}
             onOpenProject={handleOpenProject}
             onContentUpdate={() => {}}
             documentRun={
@@ -543,10 +579,11 @@ export const App: React.FC = () => {
             canvasId={activeCanvasId || undefined}
             projectId={activeProjectId || undefined}
             onBack={() => {
+              if (projectReturnId) { handleOpenProject(projectReturnId); return; }
               setCurrentView('home');
               setActiveArtifactId(null);
             }}
-            onOpenArtifact={handleOpenArtifact}
+            onOpenArtifact={(id) => { const origin = projectReturnId; handleOpenArtifact(id); setProjectReturnId(origin); }}
           />
         )}
 

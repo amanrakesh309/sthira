@@ -115,7 +115,7 @@ describe('Workspace Organization Refactor', () => {
   // -------------------------------------------------------------------------
   // 2. Pin / Unpin Toggle Calls IPC
   // -------------------------------------------------------------------------
-  it('hover pin toggle button invokes cmd_toggle_pin IPC and updates local state', async () => {
+  it('project overflow pin action invokes cmd_toggle_pin IPC and updates local state', async () => {
     vi.mocked(ipc.getWorkspaceTree).mockResolvedValue({ projects: [], unassociated_pages: [] });
     vi.mocked(ipc.listObjectTypes).mockResolvedValue([]);
     vi.mocked(ipc.getObjectTypeCounts).mockResolvedValue({});
@@ -144,7 +144,8 @@ describe('Workspace Organization Refactor', () => {
       />
     );
 
-    const pinBtn = await screen.findByTestId('pin-btn-proj-unpinned');
+    fireEvent.click(await screen.findByTestId('btn-project-menu-proj-unpinned'));
+    const pinBtn = await screen.findByTestId('btn-pin-project-proj-unpinned');
     expect(pinBtn).toBeInTheDocument();
 
     fireEvent.click(pinBtn);

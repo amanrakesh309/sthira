@@ -35,7 +35,7 @@
 .sidebar-tree [role="button"] button { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; justify-content: center; }
 .sidebar-tree [role="button"] button[title="Pin note"] { display: none; }
 .sidebar-tree [role="button"]:is(:hover, :focus-within) button[title="Pin note"] { display: inline-flex; }
-.sidebar-tree [role="button"] > [data-project-actions] { display: none; }
+.sidebar-tree [role="button"] > [data-project-actions] { display: flex; }
 .sidebar-tree [role="button"]:is(:hover, :focus-within) > [data-project-actions] { display: flex; }
 .sidebar-tree button[title^="Pin"], .sidebar-tree button[title^="Unpin"] { min-height: 40px; min-width: 40px; }
 .sidebar-footer { padding: 8px 12px; border-top: 1px solid var(--sthira-border); display: flex; align-items: center; justify-content: space-between; gap: 4px; }

@@ -71,6 +71,7 @@ interface FocusViewProps {
   projectId?: string | null;
   artifactId?: string;
   onBack: () => void;
+  backLabel?: string;
   onOpenCanvas: (canvasId?: string) => void;
   onOpenSearch?: () => void;
   onContentUpdate?: (content: string) => void;
@@ -92,6 +93,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
   projectId,
   artifactId,
   onBack,
+  backLabel = 'Home',
   onOpenSearch,
   onContentUpdate,
   onSave,
@@ -833,7 +835,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-margin-open={showMargin} data-connections-open={showConnections && !!connectionEntity} data-connection-preview={connectionPreview}>
       <header className="focus-header">
         <nav className="focus-breadcrumbs" aria-label="Document location">
-          <button type="button" onClick={handleBack} className="focus-home-button" title="Return to Home" aria-label="Home"><ArrowLeft size={16} /><span>Home</span></button>
+          <button type="button" onClick={handleBack} className="focus-home-button" title={`Return to ${backLabel}`} aria-label={backLabel}><ArrowLeft size={16} /><span>{backLabel}</span></button>
           <span aria-hidden="true">/</span><span className="focus-project-breadcrumb" title={projectLabel}>{projectLabel}</span>
           <span aria-hidden="true">/</span><span className="focus-current-breadcrumb" title={title}>{title || 'Untitled Note'}</span>
         </nav>

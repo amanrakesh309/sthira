@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod connections;
+pub mod projects;
 pub mod events;
 pub mod scheduler;
 pub mod seed;
@@ -7,6 +8,7 @@ pub mod state;
 
 pub use commands::*;
 pub use connections::*;
+pub use projects::*;
 pub use events::spawn_event_bridge;
 pub use scheduler::{spawn_scheduled_topic_scheduler, ScheduledTopicReadyEvent};
 pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
@@ -14,6 +16,7 @@ pub use state::AppState;
 
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
+        projects::cmd_get_project_overview,
         connections::cmd_get_workspace_entity,
         connections::cmd_search_connection_targets,
         connections::cmd_get_workspace_connections,

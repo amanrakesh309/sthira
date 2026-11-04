@@ -818,3 +818,26 @@ export interface WorkspaceConnection {
   relationship?: 'references' | 'derived_from';
 }
 
+export type ProjectItemRole = 'member' | 'reference' | 'backlink';
+export interface ProjectContentItem {
+  id: string;
+  kind: 'artifact' | 'project' | 'canvas';
+  title: string;
+  item_type: 'note' | 'source' | 'snippet' | 'object' | 'canvas' | 'project';
+  description: string;
+  project_id: string | null;
+  object_type_id: string | null;
+  object_type_name: string | null;
+  icon: string | null;
+  color: string | null;
+  created_at: number;
+  updated_at: number;
+  is_draft: boolean;
+  roles: ProjectItemRole[];
+  item_count: number | null;
+}
+export interface ProjectOverviewData {
+  project: { id: string; name: string; purpose: string; status: 'active' | 'paused' | 'archived'; created_at: number; last_substantive_at: number };
+  items: ProjectContentItem[];
+}
+

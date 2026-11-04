@@ -56,6 +56,7 @@ interface LeftSidebarProps {
   currentView:
     | 'home'
     | 'focus'
+    | 'project'
     | 'canvas'
     | 'objects'
     | 'graph'
@@ -725,7 +726,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               }))).slice(0, 7).map((proj) => {
                 const isExpanded = !!expandedProjects[proj.id];
                 const isActiveProj =
-                  currentView === 'focus' && activeProjectId === proj.id && !activeArtifactId;
+                  (currentView === 'project' || currentView === 'focus') && activeProjectId === proj.id && !activeArtifactId;
                 const isPinned = proj.is_pinned ?? !!pinnedIds[proj.id];
                 const treeProj = (tree?.projects || []).find((p) => p.id === proj.id);
 
@@ -734,6 +735,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     {/* Project Header Row */}
                     <div
                       {...navigationRowProps}
+                      aria-label={`Open project ${proj.title}`}
+                      aria-current={isActiveProj ? 'page' : undefined}
                       onClick={() => onOpenProject(proj.id)}
                       className={`group flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                         isActiveProj
@@ -791,35 +794,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         )}
                       </div>
 
-                      {/* Right hover actions: Pin toggle, + New Page, Settings 3-Dots */}
+                      {/* Reserve a stable menu target so hovering cannot shift the project name. */}
                       <div
                         className="flex items-center gap-1 shrink-0 relative"
                         data-project-actions
                         data-menu-container
                       >
-                        <button
-                          type="button"
-                          data-testid={`pin-btn-${proj.id}`}
-                          onClick={(e) => handleTogglePin(proj.id, 'project', isPinned, e)}
-                          title={isPinned ? 'Unpin project' : 'Pin project'}
-                          className={`p-0.5 rounded hover:bg-sthira-surface-muted cursor-pointer transition-colors ${
-                            isPinned
-                              ? 'opacity-100 text-amber-600 dark:text-amber-400'
-                              : 'opacity-0 group-hover:opacity-100 text-sthira-text-subtle hover:text-sthira-text'
-                          }`}
-                        >
-                          <Pin className={`w-3 h-3 ${isPinned ? 'rotate-45' : ''}`} />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(e) => handleCreatePageInProject(proj.id, e)}
-                          title="New page in this project"
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text cursor-pointer transition-opacity"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
-
                         <button
                           type="button"
                           data-testid={`btn-project-menu-${proj.id}`}
@@ -844,6 +824,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                             >
                               <Pin className="w-3.5 h-3.5 text-sthira-text-subtle" />
                               <span>{isPinned ? 'Unpin from Top' : 'Pin to Top'}</span>
+                            </button>
+                            <button type="button" onClick={(event) => { setOpenMenuId(null); void handleCreatePageInProject(proj.id, event); }} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-sthira-canvas text-left text-sthira-text-muted">
+                              <Plus className="w-3.5 h-3.5" /><span>New page</span>
                             </button>
                             <button
                               type="button"

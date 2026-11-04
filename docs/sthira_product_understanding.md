@@ -137,6 +137,7 @@ An interactive 2D force-directed physics graph view (`GraphView`):
 - **Interactive Controls:** Smooth pan, mouse-wheel zoom, drag-to-pin simulation, entity filter pills, real-time search query isolation, and floating details cards with direct jump-to-editor actions.
 
 ### 4.5 Workspace Navigation Shell (Sidebar & Center Workspace)
+- **Project Overview:** Opening a project shows its saved brief, status, counts, attached pages/objects, saved canvases, and directly referenced entities or backlinks. Search, type/relationship filters, sorting, pagination, and list/grid layouts organize the contents. Selecting an item opens it in the center workspace; the Project back action restores the overview's browse state. Add existing reuses artifacts without copying their content or history. Opening a project does not automatically select its first note or generate a resume brief.
 - **Left Hierarchy Sidebar:** Collapsible navigation tree with customizable width (persisted to `localStorage`). Displays:
   - **Top Navigation:** `📁 All Files` (master directory of all items with Scope Filter and Sort) and `🧭 Explore & Plan` (unified research, planning, trackers, and digests hub).
   - **Projects Tree:** Expandable project folders with child pages, canvases, and `+ New Page` actions. Capped at 7 items with pinning (`📌`).

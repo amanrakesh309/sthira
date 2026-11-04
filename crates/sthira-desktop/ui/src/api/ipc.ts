@@ -52,17 +52,43 @@ const fallbackHomeState: HomeStateView = {
 };
 
 const mockArtifactStore = new Map<string, { artifact: Artifact; project_id?: string | null }>();
+const browserProjectAttachments = new Map<string, Set<string>>();
+const browserHasProject = (artifactId: string, projectId: string) => mockArtifactStore.get(artifactId)?.project_id === projectId || !!browserProjectAttachments.get(artifactId)?.has(projectId);
+const browserArtifactProject = (artifactId: string, original?: string | null) => original || [...(browserProjectAttachments.get(artifactId) || [])].sort()[0] || null;
+
+export function getBrowserProjectItems(): import('../types/sthira').ProjectContentItem[] {
+  const artifacts: import('../types/sthira').ProjectContentItem[] = [...mockArtifactStore.values()].map(({ artifact, project_id }) => ({
+    id: artifact.id, kind: 'artifact' as const, title: artifact.title || 'Untitled page', item_type: artifact.artifact_type,
+    description: artifact.content_md, project_id: browserArtifactProject(artifact.id, project_id), object_type_id: null, object_type_name: null,
+    icon: null, color: null, created_at: artifact.created_at, updated_at: artifact.updated_at, is_draft: artifact.is_unfinished_draft,
+    roles: [], item_count: null,
+  }));
+  const projects: import('../types/sthira').ProjectContentItem[] = fallbackHomeState.projects.map((project) => ({
+    id: project.id, kind: 'project', title: project.name, item_type: 'project', description: project.purpose, project_id: null,
+    object_type_id: null, object_type_name: null, icon: null, color: null, created_at: project.last_substantive_at,
+    updated_at: project.last_substantive_at, is_draft: false, roles: [], item_count: project.item_count,
+  }));
+  return [...artifacts, ...projects];
+}
+
+export function getBrowserProjectOverview(projectId: string): import('../types/sthira').ProjectOverviewData {
+  const project = fallbackHomeState.projects.find((item) => item.id === projectId);
+  if (!project) throw new Error('This project is no longer available.');
+  const items = getBrowserProjectItems().filter((item) => item.kind === 'artifact' && browserHasProject(item.id, projectId)).map((item) => ({ ...item, project_id: projectId, roles: ['member' as const] }));
+  return { project: { id: project.id, name: project.name, purpose: project.purpose, status: 'active',
+    created_at: project.last_substantive_at, last_substantive_at: Math.max(project.last_substantive_at, ...items.map((item) => item.updated_at)) }, items };
+}
 
 /** Exposes only actual browser-session items to the reference picker. */
 export function getBrowserConnectionItems(): import('../types/sthira').WorkspaceEntityDetail[] {
   const artifacts = [...mockArtifactStore.values()].map(({ artifact, project_id }) => ({
-    entity: { kind: 'artifact' as const, id: artifact.id, title: artifact.title || 'Untitled page', type_label: artifact.artifact_type === 'source' ? 'Source' : 'Page', project_id: project_id || null },
+    entity: { kind: 'artifact' as const, id: artifact.id, title: artifact.title || 'Untitled page', type_label: artifact.artifact_type === 'source' ? 'Source' : 'Page', project_id: browserArtifactProject(artifact.id, project_id) },
     content_md: artifact.content_md, description: '', members: [],
   }));
   return [...artifacts, ...fallbackHomeState.projects.map((project) => ({
     entity: { kind: 'project' as const, id: project.id, title: project.name, type_label: 'Project', project_id: null },
     content_md: '', description: project.purpose,
-    members: artifacts.filter((item) => item.entity.project_id === project.id).map((item) => item.entity),
+    members: artifacts.filter((item) => browserHasProject(item.entity.id, project.id)).map((item) => item.entity),
   }))];
 }
 
@@ -932,9 +958,11 @@ export async function getWorkspaceTree(): Promise<WorkspaceTree> {
   if (isTauri) {
     return await invoke<WorkspaceTree>('cmd_get_workspace_tree');
   }
+  const pages = [...mockArtifactStore.values()].map(({ artifact }) => ({ id: artifact.id, title: artifact.title || 'Untitled page', artifact_type: artifact.artifact_type, is_draft: artifact.is_unfinished_draft, updated_at: artifact.updated_at }));
   return {
-    projects: [],
-    unassociated_pages: [],
+    projects: fallbackHomeState.projects.map((project) => ({ id: project.id, name: project.name, purpose: project.purpose,
+      pages: pages.filter((page) => browserHasProject(page.id, project.id)), canvases: [], updated_at: project.last_substantive_at })),
+    unassociated_pages: pages.filter((page) => !mockArtifactStore.get(page.id)?.project_id && !browserProjectAttachments.get(page.id)?.size),
   };
 }
 
@@ -953,14 +981,16 @@ export async function createProject(
       throw err;
     }
   }
-  return {
-    id: 'mock-proj-' + Date.now(),
+  const project = {
+    id: 'mock-proj-' + crypto.randomUUID(),
     name,
     purpose: purpose || `Project ${name}`,
     pages: [],
     canvases: [],
     updated_at: Date.now(),
   };
+  fallbackHomeState.projects.unshift({ id: project.id, name, purpose: project.purpose, category: 'Active', icon_type: 'folder', item_count: 0, last_substantive_at: project.updated_at });
+  return project;
 }
 
 export async function createPage(projectId?: string | null, title?: string): Promise<Artifact> {
@@ -1461,7 +1491,11 @@ export async function linkArtifactToProject(
       projectId,
       project_id: projectId,
     });
+    return;
   }
+  if (!mockArtifactStore.has(artifactId) || !fallbackHomeState.projects.some((project) => project.id === projectId)) throw new Error('The item or project is no longer available.');
+  const projects = browserProjectAttachments.get(artifactId) || new Set<string>();
+  projects.add(projectId); browserProjectAttachments.set(artifactId, projects);
 }
 
 /** Reassigns a note from one project to another in a single transaction. */

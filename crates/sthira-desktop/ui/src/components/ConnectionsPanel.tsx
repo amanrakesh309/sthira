@@ -15,11 +15,12 @@ interface Props {
   onInsertLink?: (entity: WorkspaceEntity) => void;
   requestedPreview?: { entity: EntityRef; sequence: number } | null;
   onPreviewChange: (open: boolean) => void;
+  onConnectionsChange?: () => void;
 }
 
 type Frame = { entity: EntityRef; title: string; scroll: number };
 
-export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scope, onScopeChange, onClose, onOpenFull, onInsertLink, requestedPreview, onPreviewChange }) => {
+export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scope, onScopeChange, onClose, onOpenFull, onInsertLink, requestedPreview, onPreviewChange, onConnectionsChange }) => {
   const [trail, setTrail] = useState<Frame[]>([]);
   const [detail, setDetail] = useState<WorkspaceEntityDetail | null>(null);
   const [links, setLinks] = useState<WorkspaceConnection[]>([]);
@@ -118,6 +119,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
       if (!alive.current || navigationKey.current !== sourceKey) return;
       if (insert) onInsertLink?.(target);
       setPicker(false); setQuery(''); setRefresh((value) => value + 1); setRemoved(null);
+      onConnectionsChange?.();
       addButton.current?.focus();
     } catch { setActionError('Couldn’t create the connection. Your page has not changed. Try again.'); }
     finally { setBusy(false); }
@@ -125,14 +127,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
   const remove = async (link: WorkspaceConnection) => {
     if (busy) return;
     setBusy(true); setActionError(null);
-    try { await deleteWorkspaceConnection(link.id); setRemoved(link); setRefresh((value) => value + 1); }
+    try { await deleteWorkspaceConnection(link.id); setRemoved(link); setRefresh((value) => value + 1); onConnectionsChange?.(); }
     catch { setActionError('Couldn’t remove this connection. Try again.'); }
     finally { setBusy(false); }
   };
   const undo = async () => {
     if (!removed || busy) return;
     setBusy(true); setActionError(null);
-    try { await createWorkspaceConnection(removed.source, removed.target); setRemoved(null); setRefresh((value) => value + 1); }
+    try { await createWorkspaceConnection(removed.source, removed.target); setRemoved(null); setRefresh((value) => value + 1); onConnectionsChange?.(); }
     catch { setActionError('Couldn’t restore the connection. Try again.'); }
     finally { setBusy(false); }
   };
