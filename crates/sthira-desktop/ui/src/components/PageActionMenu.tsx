@@ -46,6 +46,7 @@ interface PageActionMenuProps {
   triggerTestId?: string;
   /** When provided, a `Rename` item is rendered (the parent owns inline-rename state). */
   onRename?: () => void;
+  onOpenEvidence?: () => void;
   /**
    * When provided, `Link to Project...` delegates to the parent (e.g. LeftSidebar's
    * existing `AddToProjectModal`) instead of rendering the built-in picker.
@@ -95,6 +96,7 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
   align = 'right',
   triggerTestId,
   onRename,
+  onOpenEvidence,
   onLinkProjectRequested,
   onChanged,
   onOpenArtifact,
@@ -198,6 +200,7 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
 
   const renderRoot = () => (
     <>
+      {onOpenEvidence && <div className="py-1"><button type="button" className={itemClass} onClick={() => { close(); onOpenEvidence(); }}><Search className="w-3.5 h-3.5" /><span>Sources &amp; insights</span></button></div>}
       {/* Group 1: Project Management */}
       <div className="py-1">
         <div className="px-3 py-1 text-[10px] font-bold text-[#8C8A82] dark:text-[#7A786F] uppercase tracking-wider">

@@ -1,3 +1,4 @@
+import { editorMarkdown, setEditorMarkdown } from './editor-helpers';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -51,7 +52,7 @@ describe('Focus composition and document safety', () => {
   it('bounds Level 1 copy and exposes all Level 2 findings, conflicts and source links', async () => {
     const user = userEvent.setup();
     render(<FocusView {...props()} />);
-    await screen.findByRole('textbox', { name: 'Document Markdown' });
+    await screen.findByRole('textbox', { name: 'Document content' });
     const compact = screen.getByTestId('contextual-resume-pane');
     expect((compact.textContent || '').trim().split(/\s+/).length).toBeLessThanOrEqual(75);
     expect(within(compact).getByText('AI inference')).toBeInTheDocument();
@@ -75,7 +76,7 @@ describe('Focus composition and document safety', () => {
     vi.mocked(ipc.getResumeBrief).mockResolvedValue({ ...brief, pane_hint: { collapse: { reason: 'active_session' } } });
     const user = userEvent.setup();
     render(<FocusView {...props()} />);
-    await screen.findByRole('textbox', { name: 'Document Markdown' });
+    await screen.findByRole('textbox', { name: 'Document content' });
     expect(screen.queryByTestId('contextual-resume-pane')).not.toBeInTheDocument();
     expect(screen.queryByTestId('epistemic-margin-sidebar')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Resume Brief/ }));
@@ -87,24 +88,24 @@ describe('Focus composition and document safety', () => {
     const user = userEvent.setup();
     render(<FocusView {...props()} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t open this document');
-    expect(screen.queryByTestId('textarea-editor')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('document-editor')).not.toBeInTheDocument();
     expect(ipc.saveArtifact).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('textbox', { name: 'Document Markdown' })).toHaveValue('# Alpha\n\nOriginal draft.');
+    expect(await screen.findByRole('textbox', { name: 'Document content' })).toHaveTextContent('Original draft.');
   });
 
   it('keeps dirty text on save failure and retries the same artifact/project', async () => {
     const user = userEvent.setup();
     const handlers = props();
     render(<FocusView {...handlers} />);
-    const editor = await screen.findByRole('textbox', { name: 'Document Markdown' });
-    fireEvent.change(editor, { target: { value: '# Alpha\n\nUnsaved local text.' } });
+    const editor = await screen.findByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, '# Alpha\n\nUnsaved local text.');
     vi.mocked(ipc.saveArtifact).mockRejectedValue(new Error('Disk unavailable'));
     fireEvent.blur(editor);
     await screen.findByRole('button', { name: 'Retry save' });
     await user.click(screen.getByRole('button', { name: 'Home' }));
     expect(handlers.onBack).not.toHaveBeenCalled();
-    expect(editor).toHaveValue('# Alpha\n\nUnsaved local text.');
+    expect(editorMarkdown(editor)).toBe('Unsaved local text.');
     vi.mocked(ipc.saveArtifact).mockImplementation(save);
     await user.click(screen.getByRole('button', { name: 'Retry save' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
@@ -114,8 +115,8 @@ describe('Focus composition and document safety', () => {
   it('saves dirty text under the old project before a sidebar document switch', async () => {
     const handlers = props();
     const { rerender } = render(<FocusView {...handlers} />);
-    const editor = await screen.findByRole('textbox', { name: 'Document Markdown' });
-    fireEvent.change(editor, { target: { value: '# Alpha\n\nChanges before switching.' } });
+    const editor = await screen.findByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, '# Alpha\n\nChanges before switching.');
     rerender(<FocusView {...handlers} artifactId="beta" projectId="project-b" />);
     await waitFor(() => expect(screen.getByTestId('input-artifact-title')).toHaveValue('Beta'));
     expect(ipc.saveArtifact).toHaveBeenCalledWith('alpha', '# Alpha\n\nChanges before switching.', 'Alpha', 'project-a');
@@ -126,8 +127,9 @@ describe('Focus composition and document safety', () => {
     const user = userEvent.setup();
     vi.mocked(ipc.getArtifactContext).mockResolvedValue({ ...context(), artifact: { ...context().artifact, source_url: 'https://example.com/primary', content_md: '# Alpha\n\n[One](https://example.com/one) [Again](https://example.com/one)' } });
     render(<FocusView {...props()} />);
-    await screen.findByRole('textbox', { name: 'Document Markdown' });
-    await user.click(screen.getByTestId('btn-toggle-epistemic-margin'));
+    await screen.findByRole('textbox', { name: 'Document content' });
+    await user.click(screen.getByRole('button', { name: 'Page actions' }));
+    await user.click(screen.getByRole('button', { name: 'Sources & insights' }));
     await user.click(screen.getByTestId('btn-margin-tab-sources'));
     const margin = screen.getByTestId('epistemic-margin-sidebar');
     expect(within(margin).getByText('2')).toBeInTheDocument();

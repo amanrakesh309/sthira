@@ -14,6 +14,8 @@ import {
 import { EpistemicBadge } from './EpistemicBadge';
 import { EmbeddedObjectCard, type EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 import type { ObjectType } from '../types/sthira';
+import type { EntityRef } from '../types/sthira';
+import { parseEntityHref } from '../api/connections';
 
 export interface RichDocumentRendererProps {
   content: string;
@@ -25,6 +27,7 @@ export interface RichDocumentRendererProps {
   onUpdateObject?: (updated: EmbeddedObjectData) => void;
   onRecordDecision?: (decisionText: string) => void;
   className?: string;
+  onOpenEntity?: (entity: EntityRef) => void;
 }
 
 // Helper to recursively extract plain text from nested React nodes
@@ -286,6 +289,7 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
   onUpdateObject,
   onRecordDecision,
   className = '',
+  onOpenEntity,
 }) => {
   // Pre-process: Clean orphaned bullets and tab-separated tables into clean GFM
   const processedContent = useMemo(() => {
@@ -603,7 +607,10 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
           // Horizontal Rules & Inline Formatting
           // -----------------------------------------------------------------
           hr: () => <hr className="my-6 border-t border-[#E8E5DC] dark:border-[#2C2E27]" />,
-          a: ({ href, children }) => (
+          a: ({ href, children }) => {
+            const entity = parseEntityHref(href);
+            if (entity && onOpenEntity) return <button type="button" className="connection-inline-link" onClick={() => onOpenEntity(entity)}>{children}</button>;
+            return (
             <a
               href={href}
               target="_blank"
@@ -612,7 +619,8 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
             >
               {children}
             </a>
-          ),
+          );
+          },
           strong: ({ children }) => (
             <strong className="font-bold text-[#1E201C] dark:text-[#EDEAE2]">{children}</strong>
           ),

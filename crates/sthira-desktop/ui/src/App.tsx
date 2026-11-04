@@ -503,6 +503,7 @@ export const App: React.FC = () => {
             onOpenCanvas={handleOpenCanvas}
             onOpenSearch={() => setIsSearchOpen(true)}
             onOpenArtifact={handleOpenArtifact}
+            onOpenProject={handleOpenProject}
             onContentUpdate={() => {}}
             documentRun={
               documentRun &&

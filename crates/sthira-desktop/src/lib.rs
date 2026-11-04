@@ -1,10 +1,12 @@
 pub mod commands;
+pub mod connections;
 pub mod events;
 pub mod scheduler;
 pub mod seed;
 pub mod state;
 
 pub use commands::*;
+pub use connections::*;
 pub use events::spawn_event_bridge;
 pub use scheduler::{spawn_scheduled_topic_scheduler, ScheduledTopicReadyEvent};
 pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
@@ -12,6 +14,11 @@ pub use state::AppState;
 
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
+        connections::cmd_get_workspace_entity,
+        connections::cmd_search_connection_targets,
+        connections::cmd_get_workspace_connections,
+        connections::cmd_create_workspace_connection,
+        connections::cmd_delete_workspace_connection,
         commands::cmd_route_input,
         commands::cmd_apply_plan,
         commands::cmd_get_home_state,

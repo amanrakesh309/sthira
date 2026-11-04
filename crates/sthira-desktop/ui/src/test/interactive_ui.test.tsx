@@ -1,5 +1,6 @@
+import { setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FocusView } from '../components/FocusView';
 import { LeftSidebar } from '../components/LeftSidebar';
@@ -94,15 +95,15 @@ describe('Autonomous Interactive UI Test Harness', () => {
     );
 
     // Wait for the editor to load the initial content
-    const editor = await screen.findByTestId('textarea-editor');
+    const editor = await screen.findByTestId('document-editor');
     expect(editor).toBeInTheDocument();
     await waitFor(() => {
-      expect(editor).toHaveValue('# Initial Title\n\nOriginal draft text.');
+      expect(editor).toHaveTextContent('Original draft text.');
     });
 
     // Clear and type new content
-    await user.clear(editor);
-    await user.type(editor, '# Updated Test Note\n\nAutonomous testing content verification.');
+    fireEvent.change(screen.getByLabelText('Document title'), { target: { value: 'Updated Test Note' } });
+    setEditorMarkdown(editor, '# Updated Test Note\n\nAutonomous testing content verification.');
 
     // Click Save button
     const saveButton = screen.getByTestId('btn-save-artifact');

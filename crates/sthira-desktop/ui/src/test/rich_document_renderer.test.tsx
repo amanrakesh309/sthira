@@ -201,7 +201,7 @@ Some additional context notes below.
   // -------------------------------------------------------------------------
   // 5. FocusView Binary Segmented Control & Cmd/Ctrl + E Shortcut
   // -------------------------------------------------------------------------
-  it('FocusView toggles cleanly between Edit and Preview via segmented control and Cmd+E shortcut', async () => {
+  it('FocusView renders formatted editable content in one document without mode toggles', async () => {
     vi.mocked(ipc.getArtifactContext).mockResolvedValue({
       artifact: {
         id: 'art-arch-1',
@@ -248,42 +248,16 @@ Some additional context notes below.
 
     // Initial state: Edit mode with textarea
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    // 1. Click Preview mode segmented button
-    const previewBtn = screen.getByTestId('btn-toggle-preview-mode');
-    fireEvent.click(previewBtn);
-
-    // Assert Preview mode canvas is active, textarea is gone
-    expect(screen.queryByTestId('textarea-editor')).toBeNull();
-    expect(screen.getByTestId('rich-preview-canvas')).toBeInTheDocument();
-    expect(screen.getByTestId('interactive-comparison-table-container')).toBeInTheDocument();
-
-    // 2. Click Edit mode segmented button
-    const editBtn = screen.getByTestId('btn-toggle-edit-mode');
-    fireEvent.click(editBtn);
-
-    // Assert Edit mode canvas is restored
-    expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
-    expect(screen.queryByTestId('rich-preview-canvas')).toBeNull();
-
-    // 3. Test Cmd + E keyboard shortcut
+    const editor = screen.getByTestId('document-editor');
+    expect(editor).toHaveAttribute('contenteditable', 'true');
+    expect(editor.querySelector('table')).toBeInTheDocument();
+    expect(screen.queryByTestId('btn-toggle-preview-mode')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('btn-toggle-edit-mode')).not.toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'e', metaKey: true });
+    expect(screen.getByTestId('document-editor')).toBe(editor);
 
-    // Should toggle to Preview mode
-    await waitFor(() => {
-      expect(screen.getByTestId('rich-preview-canvas')).toBeInTheDocument();
-      expect(screen.queryByTestId('textarea-editor')).toBeNull();
-    });
-
-    // 4. Test Ctrl + E keyboard shortcut (Windows/Linux)
-    fireEvent.keyDown(window, { key: 'e', ctrlKey: true });
-
-    // Should toggle back to Edit mode
-    await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
-      expect(screen.queryByTestId('rich-preview-canvas')).toBeNull();
-    });
   });
 });

@@ -7,6 +7,12 @@
 
 ---
 
+## Feature addition — 5 November 2026
+
+The note workspace now uses one formatted, editable Markdown-backed document instead of Edit / Preview modes. Derive saves the current draft and exposes automatic source/backlinks through persisted lineage. The duplicate theme control and Canvas/Margin header controls are removed; Spatial canvas lives in sidebar navigation, and note-specific evidence opens through Page actions → Sources & insights. See [note-editor validation](visual-audit/note-editor-validation.md) for the audit, 167 frontend / 126 Rust test results, screenshots and limits. These owner-requested changes supersede the original binary-mode reference behavior.
+
+Explicit workspace connections now link pages, projects and typed objects (including source/snippet artifacts). The document workspace includes a Connections rail, outgoing references and backlinks, a searchable picker, optional inline links, nested in-place reference previews with Back navigation, project/page connection scopes, and unlink with Undo. References persist in SQLite and appear in the Knowledge Graph. See [feature notes](workspace-connections.md) and [validation](visual-audit/connections-validation.md) for exact behavior, tests, screenshots and limits. This addition does not change the pending visual scopes listed below.
+
 ## Current visual-fidelity status — 3 November 2026
 
 The original phase table below records the earlier styling pass. Its “Completed” labels must not be interpreted as completion of screenshot-based corrections.

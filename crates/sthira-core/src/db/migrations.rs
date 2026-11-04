@@ -200,6 +200,14 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         }
     }
 
+    // Also runs for a fresh vault, after its canonical schema is installed.
+    if user_version < 12 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("workspace_links.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 12;")?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 

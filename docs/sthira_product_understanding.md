@@ -111,18 +111,18 @@ A flexible spatial canvas lets users arrange notes, sources, text cards, and fra
 
 ### 4.3 Focus — Go deep
 A distraction-free, full-width canvas for reading, writing, and synthesizing within a document or project:
-- **Full-Width Canvas & Collapsible Epistemic Margin:** The Epistemic Margin is collapsed by default (`showMargin: false`) allowing the editor canvas to expand to full width (`flex-1 max-w-5xl mx-auto`). The top toolbar button `[ 📖 Margin ]` toggles the margin open and closed on demand.
-- **Clean Binary Workspace Toggle:** Seamlessly switch between `[ ✏️ Edit ]` (distraction-free Markdown editor with caret-positioned `/` slash menu) and `[ 👁️ Preview ]` (Component-Decorated Rich Workspace) via the top-right toolbar or the `Cmd/Ctrl + E` keyboard shortcut.
-- **Component-Decorated Rich Document Renderer:** The preview renders standard Markdown decorated with interactive components:
-  - **Interactive Comparison Tables:** Rich Warm Stone matrix with real-time row filtering and a 1-click `[📋 Copy Table]` clipboard button.
+- **Document Context:** Connections opens linked pages, projects and objects beside the original note. Note-specific claims, provenance and citations remain available through **Page actions → Sources & insights**. Spatial canvas is available from sidebar navigation; the note header contains History, Connections and save status. Theme controls remain in the sidebar and Settings.
+- **Single Rich Editing Surface:** Read and edit formatted text, headings, lists, checklists, tables, links and code on one page. The local Tiptap / ProseMirror editor stores Markdown and preserves slash commands, templates, embedded objects and autosave. Separate Edit / Preview modes and their Cmd/Ctrl+E toggle have been removed.
+- **Rich Documents and Reference Previews:** The editable document and read-only reference renderer provide:
+  - **Tables:** Editable Markdown-backed tables in notes. Read-only reference previews retain comparison-table filtering and Copy Table.
   - **Interactive Checklists:** Styled checkboxes (`- [ ]` / `- [x]`) that can be clicked to toggle state, automatically auto-saving back to the document via debounced save.
   - **Epistemic Decision Callouts:** Styled callouts with solid Sage borders, Soft Sand backgrounds, and an inline `[Add to Decisions]` action chip.
   - **Embedded Custom Objects:** Fenced `sthira-object` blocks render as warm stone cards displaying live property pills synced to SQLite.
-  - **Mermaid Diagrams:** Fenced `mermaid` blocks dynamically execute diagrams with Warm Stone theme colors.
+  - **Code and Diagrams:** Fenced blocks preserve their language and body; embedded object/diagram views use the existing renderer.
 - **Interactive Document Property Header:** Displayed directly beneath the page title for typed objects (`Idea`, `Task`, `Decision`, `Source`, custom schemas) with live-editable property pills that persist immediately to SQLite.
 - **Targeted Re-Research & Note Derivation (Chained Synthesis):**
   - **`[ 🔄 Refine ]` Modal:** Iteratively refines an existing note with user critique and optional web search. Snapshots the prior version in a reversible `ChangeSet` for **1-click undo**.
-  - **`[ ⚡ Derive ▾ ]` Dropdown:** Derives structured child artifacts (`📋 Derive Execution Plan`, `💡 Extract Discrete Ideas`, `☑️ Extract Action Checklist`) with parent-child lineage tracking.
+  - **`[ ⚡ Derive ▾ ]` Dropdown:** Derives structured child artifacts (`📋 Derive Execution Plan`, `💡 Extract Discrete Ideas`, `☑️ Extract Action Checklist`) with parent-child lineage tracking. The latest draft is saved first; source and child automatically appear in Connections and the Knowledge Graph, including previously derived notes.
   - **Lineage Header Chip:** Derived notes render a prominent header chip: `🔗 Derived from: [Parent Artifact Title]`, allowing 1-click navigation back to the source note.
 - **Center-Workspace Streaming Banner:** Research and Plan generators stream live stage updates (`searching` $\rightarrow$ `scraped` $\rightarrow$ `synthesizing` $\rightarrow$ `done`) and tokens directly inside the center document canvas.
 - **Debounced Auto-Save (600ms):** Commits edits to both SQLite and disk on typing settle, input blur, and view navigation with a live status pill (`Saving...` $\rightarrow$ `Saved` $\rightarrow$ `Auto-saved`).
@@ -260,7 +260,7 @@ Enables structured knowledge entities alongside freeform Markdown:
   - **Sthira Epistemic & Object Blocks:** `/decision` (registers `UserRecorded` decision node), `/question`, `/idea`, `/task`, plus all user-registered custom types.
   - **Inline AI Assistant:** `/plan <goal>`, `/research <topic>`, `/expand` stream real model completions directly into the document at the cursor position.
 - **Formatting Toolbar:** Quick-access toolbar at the top of the canvas provides one-click formatting (`B`, `I`, `H1`, `H2`, `Checklist`, `Code`, `Table`, `/ Insert Block`).
-- **Binary Mode Toggle (`Cmd+E`):** Seamlessly switches between raw Markdown editing and `RichDocumentRenderer` where tables are searchable/copyable, checklists are interactively clickable and auto-save back to the document, decision callouts render with Sage badges, and Mermaid diagrams execute dynamically.
+- **Unified Rich Editor:** A single formatted, editable document replaces the binary mode toggle. Markdown remains the storage format; checklists, tables, code, inline links, embedded objects and decision actions work without switching modes. `RichDocumentRenderer` remains the read-only reference renderer.
 
 ### 8.11 Unified "Explore & Plan" Hub (`ExplorePlanView`) & Center-Workspace Streaming
 - **Permanent Elimination of the Right Mode Rail:** All research, planning, and synthesis stream directly inside the center document workspace (`FocusView`), completely replacing cramped side drawers.

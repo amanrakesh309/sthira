@@ -1,3 +1,4 @@
+import { setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -167,14 +168,13 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
 
     // 1. Wait for document and object types to load
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    const textarea = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
+    const textarea = screen.getByTestId('document-editor') as HTMLElement;
 
     // 2. Type '/' to trigger the slash command popover menu
-    fireEvent.change(textarea, { target: { value: '# Lab Notebook\n\n/' } });
-    (textarea as any).selectionStart = textarea.value.length;
+    setEditorMarkdown(textarea, '# Lab Notebook\n\n/');
     fireEvent.select(textarea);
 
     // 3. Assert /experiment appears under Custom & Typed Objects
@@ -217,8 +217,7 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
     });
 
     // 9. Switch to Rich Preview mode
-    const previewBtn = screen.getByTestId('btn-toggle-preview-mode');
-    await user.click(previewBtn);
+    expect(screen.queryByTestId('btn-toggle-preview-mode')).not.toBeInTheDocument();
 
     // 10. Assert the embedded object card renders in Rich Preview
     await waitFor(() => {

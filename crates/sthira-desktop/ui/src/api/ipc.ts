@@ -53,6 +53,19 @@ const fallbackHomeState: HomeStateView = {
 
 const mockArtifactStore = new Map<string, { artifact: Artifact; project_id?: string | null }>();
 
+/** Exposes only actual browser-session items to the reference picker. */
+export function getBrowserConnectionItems(): import('../types/sthira').WorkspaceEntityDetail[] {
+  const artifacts = [...mockArtifactStore.values()].map(({ artifact, project_id }) => ({
+    entity: { kind: 'artifact' as const, id: artifact.id, title: artifact.title || 'Untitled page', type_label: artifact.artifact_type === 'source' ? 'Source' : 'Page', project_id: project_id || null },
+    content_md: artifact.content_md, description: '', members: [],
+  }));
+  return [...artifacts, ...fallbackHomeState.projects.map((project) => ({
+    entity: { kind: 'project' as const, id: project.id, title: project.name, type_label: 'Project', project_id: null },
+    content_md: '', description: project.purpose,
+    members: artifacts.filter((item) => item.entity.project_id === project.id).map((item) => item.entity),
+  }))];
+}
+
 export async function routeInput(raw: string): Promise<RouterPlan> {
   if (isTauri) {
     return await invoke<RouterPlan>('cmd_route_input', { raw });

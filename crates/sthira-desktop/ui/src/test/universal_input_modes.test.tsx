@@ -1,3 +1,4 @@
+import { editorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -373,8 +374,8 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
       expect(titleInput.value).toBe('Quick thought on architecture');
     });
 
-    const editor = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
-    expect(editor.value).toContain('Quick thought on architecture');
+    const editor = screen.getByTestId('document-editor') as HTMLElement;
+    expect(editorMarkdown(editor)).toContain('Quick thought on architecture');
 
     // Breadcrumb should display "Notes", NOT "Project Workspace"
     expect(screen.getByText('Notes')).toBeInTheDocument();

@@ -1,3 +1,4 @@
+import { setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -327,12 +328,11 @@ describe('Object Type & Template Management System', () => {
     render(<FocusView artifactId="art-doc-2" onBack={vi.fn()} onOpenCanvas={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    const textarea = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: '# Idea Lab\n\n/' } });
-    (textarea as any).selectionStart = textarea.value.length;
+    const textarea = screen.getByTestId('document-editor') as HTMLElement;
+    setEditorMarkdown(textarea, '# Idea Lab\n\n/');
     fireEvent.select(textarea);
 
     await waitFor(() => {

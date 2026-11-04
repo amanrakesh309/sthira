@@ -1,3 +1,4 @@
+import { setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -105,9 +106,8 @@ describe('Phase 9.3: Title Persistence, Deletion Semantics & Knowledge Graph Tes
     await user.type(titleInput, 'Advanced Neural Architecture');
 
     // Edit content
-    const editor = screen.getByTestId('textarea-editor');
-    await user.clear(editor);
-    await user.type(editor, '# Advanced Neural Architecture\n\nRefined content specification.');
+    const editor = screen.getByTestId('document-editor');
+    setEditorMarkdown(editor, '# Advanced Neural Architecture\n\nRefined content specification.');
 
     // Save
     const saveBtn = screen.getByTestId('btn-save-artifact');

@@ -1,3 +1,4 @@
+import { editorMarkdown, setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -258,7 +259,6 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
   // Test 3: Debounced Auto-Save in FocusView
   // -------------------------------------------------------------------------
   it('automatically auto-saves content without requiring manual save button click', async () => {
-    const user = userEvent.setup();
 
     mockInvoke.mockImplementation(async (cmd: string, args: any) => {
       if (cmd === 'cmd_get_artifact_context') {
@@ -321,11 +321,11 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
       />
     );
 
-    const editor = await screen.findByTestId('textarea-editor');
+    const editor = await screen.findByTestId('document-editor');
     expect(editor).toBeInTheDocument();
 
     // Type new text into editor
-    await user.type(editor, ' Adding automatic thoughts.');
+    setEditorMarkdown(editor, editorMarkdown(editor) + ' Adding automatic thoughts.');
 
     // Auto-save triggers after debounce (600ms) without any manual save button click
     await waitFor(
@@ -462,17 +462,19 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
     );
 
     const titleInput = await screen.findByTestId('input-artifact-title');
-    const editor = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
+    const editor = screen.getByTestId('document-editor') as HTMLElement;
 
     expect(titleInput).toHaveValue('Initial Note Title');
-    expect(editor.value).toContain('# Initial Note Title');
+    expect(editorMarkdown(editor)).toContain('Note content goes here.');
+    expect(editor.querySelector('h1')).toBeNull();
 
     // Type a new title in the title input field
     await user.clear(titleInput);
     await user.type(titleInput, 'Brand New Title');
 
     // Assert that editor line 1 immediately updated to match the new title
-    expect(editor.value).toContain('# Brand New Title');
+    expect(editorMarkdown(editor)).toContain('Note content goes here.');
+    expect(editor.querySelector('h1')).toBeNull();
     expect(onTitleUpdateMock).toHaveBeenCalledWith('art-rename-test', 'Brand New Title');
 
     // Auto-save triggers with the new title
@@ -494,8 +496,7 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
   // -------------------------------------------------------------------------
   // Test 6: Renaming line 1 heading in editor textarea updates title input field
   // -------------------------------------------------------------------------
-  it('editing line 1 heading in markdown editor immediately updates title input', async () => {
-    const user = userEvent.setup();
+  it('editing the single visible title updates the stored heading without a duplicate body title', async () => {
 
     mockInvoke.mockImplementation(async (cmd: string, _args: any) => {
       if (cmd === 'cmd_get_artifact_context') {
@@ -537,13 +538,13 @@ describe('Settings 3-Dots Menu, Auto-Save & Real-Time Title Updates', () => {
     );
 
     const titleInput = await screen.findByTestId('input-artifact-title');
-    const editor = screen.getByTestId('textarea-editor');
+    const editor = screen.getByTestId('document-editor');
 
     expect(titleInput).toHaveValue('Original Heading Title');
 
     // Change heading in markdown editor
-    await user.clear(editor);
-    await user.type(editor, '# Refactored Note Heading\n\nNew body lines.');
+    fireEvent.change(titleInput, { target: { value: 'Refactored Note Heading' } });
+    setEditorMarkdown(editor, 'New body lines.');
 
     // Assert that title input updated to the new heading
     await waitFor(() => {

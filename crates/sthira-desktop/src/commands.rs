@@ -1249,6 +1249,7 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
         "DELETE FROM canvas_layout_revisions;
          DELETE FROM canvas_items;
          DELETE FROM canvases;
+         DELETE FROM workspace_links;
          DELETE FROM artifact_links;
          DELETE FROM ai_proposals;
          DELETE FROM epistemic_nodes;
@@ -2290,6 +2291,10 @@ pub fn handle_delete_project(
                 .ok();
 
             let _ = writer.execute(
+                "DELETE FROM workspace_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
+                params![art.id],
+            );
+            let _ = writer.execute(
                 "DELETE FROM artifacts WHERE id = ?1;",
                 params![art.id],
             );
@@ -2327,6 +2332,10 @@ pub fn handle_delete_project(
     );
     let _ = writer.execute(
         "UPDATE events SET project_id = NULL WHERE project_id = ?1;",
+        params![project_id],
+    );
+    let _ = writer.execute(
+        "DELETE FROM workspace_links WHERE source_project_id = ?1 OR target_project_id = ?1;",
         params![project_id],
     );
     let _ = writer.execute(
@@ -2409,6 +2418,10 @@ pub fn handle_delete_artifact(
         )
         .ok();
 
+    let _ = writer.execute(
+        "DELETE FROM workspace_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
+        params![artifact_id],
+    );
     let _ = writer.execute(
         "DELETE FROM artifacts WHERE id = ?1;",
         params![artifact_id],
@@ -2592,7 +2605,16 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
     let mut link_stmt = reader
         .prepare(
             "SELECT source_artifact_id, target_artifact_id, relationship_type 
-             FROM artifact_links;",
+             FROM artifact_links
+             UNION ALL
+             SELECT COALESCE(source_artifact_id, source_project_id), COALESCE(target_artifact_id, target_project_id), 'references'
+             FROM workspace_links wl
+             WHERE (wl.source_artifact_id IS NULL OR EXISTS (SELECT 1 FROM artifacts a WHERE a.id = wl.source_artifact_id AND a.deleted_at IS NULL))
+               AND (wl.target_artifact_id IS NULL OR EXISTS (SELECT 1 FROM artifacts a WHERE a.id = wl.target_artifact_id AND a.deleted_at IS NULL))
+             UNION ALL
+             SELECT a.id, a.derived_from_artifact_id, 'derived_from' FROM artifacts a
+             JOIN artifacts parent ON parent.id = a.derived_from_artifact_id
+             WHERE a.deleted_at IS NULL AND parent.deleted_at IS NULL;",
         )
         .map_err(|e| e.to_string())?;
 

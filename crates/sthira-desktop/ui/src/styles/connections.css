@@ -1,0 +1,88 @@
+/* The connection rail shares the workspace's tactile paper and sage palette. */
+.focus-workspace[data-connections-open="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr) 320px; }
+.focus-workspace[data-connections-open="true"][data-connection-preview="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr) minmax(360px, 46%); }
+.connections-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--sthira-canvas); color: var(--sthira-text); border-left: 1px solid var(--sthira-border); font-family: var(--sthira-font-ui); font-size: 13px; }
+.connections-panel button { transition: background-color .15s, border-color .15s; }
+.connections-panel button:disabled { opacity: .55; cursor: default; }
+.connections-panel :is(button, input):focus-visible, .connection-inline-link:focus-visible { outline: 2px solid var(--sthira-primary); outline-offset: 3px; }
+.connections-heading { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 8px 16px; border-bottom: 1px solid var(--sthira-border); flex-shrink: 0; }
+.connections-heading > span { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+.connections-heading svg { color: var(--sthira-primary); flex-shrink: 0; }
+.connection-back { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-radius: 8px; }
+.connection-back:hover { background: var(--sthira-surface-muted); }
+.connections-scope { display: flex; gap: 4px; padding: 4px; margin: 16px 20px 0; background: var(--sthira-surface-muted); border: 1px solid var(--sthira-border); border-radius: 12px; flex-shrink: 0; }
+.connections-scope button { flex: 1; min-height: 40px; border-radius: 8px; color: var(--sthira-text-muted); }
+.connections-scope button[aria-pressed="true"] { background: var(--sthira-surface-raised); color: var(--sthira-primary); }
+.connections-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px 20px 32px; scrollbar-gutter: stable; }
+.connection-anchor { margin-bottom: 24px; min-width: 0; }
+.connection-eyebrow { color: var(--sthira-text-muted); font-size: 10px; font-weight: 600; letter-spacing: .1em; }
+.connection-anchor h2 { font: 500 24px/1.25 var(--sthira-font-editorial); margin: 10px 0 8px; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.connection-anchor p { color: var(--sthira-text-muted); font-size: 12px; line-height: 1.7; }
+.connection-anchor::after { content: ''; display: block; width: 28px; height: 2px; background: var(--sthira-accent); margin-top: 16px; }
+.connection-add { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 42px; border: 1px solid var(--sthira-border-strong); border-radius: 12px; background: var(--sthira-surface-raised); color: var(--sthira-primary); font-weight: 500; margin-bottom: 24px; }
+.connection-add:hover { background: var(--sthira-primary-tint); border-color: var(--sthira-primary); }
+.connection-group { margin-top: 24px; }
+.connection-group h3, .connection-document > h3 { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--sthira-text-muted); letter-spacing: .025em; margin-bottom: 12px; }
+.connection-group h3 > span, .connection-document h3 > span { margin-left: auto; padding: 2px 6px; border-radius: 6px; background: var(--sthira-surface-muted); }
+.connection-muted { color: var(--sthira-text-muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.connection-tree { padding-left: 15px; margin-left: 4px; border-left: 1px solid var(--sthira-border-strong); display: flex; flex-direction: column; gap: 10px; }
+.connection-tree > li { position: relative; display: flex; align-items: center; min-width: 0; gap: 2px; }
+.connection-tree > li::before { content: ''; width: 15px; height: 1px; background: var(--sthira-border-strong); position: absolute; left: -16px; top: 50%; }
+.connection-card { display: flex; flex: 1; align-items: center; gap: 10px; text-align: left; min-width: 0; min-height: 68px; padding: 12px; border: 1px solid var(--sthira-border); border-radius: 12px; background: var(--sthira-surface-raised); }
+.connection-card:hover { background: var(--sthira-primary-tint); border-color: var(--sthira-border-strong); }
+.connection-entity-icon { display: flex; align-items: center; justify-content: center; width: 30px; height: 34px; border-radius: 8px; background: var(--sthira-surface-muted); color: var(--sthira-primary); flex-shrink: 0; }
+.connection-card-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 4px; }
+.connection-card small { font-size: 10px; color: var(--sthira-text-muted); }
+.connection-card strong { font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.connection-card > svg { color: var(--sthira-text-muted); flex-shrink: 0; }
+.connection-unlink { display: flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; color: var(--sthira-text-muted); border-radius: 8px; }
+.connection-unlink:hover { color: var(--sthira-danger); background: var(--sthira-surface-muted); }
+.connection-picker { border: 1px solid var(--sthira-border-strong); background: var(--sthira-surface-raised); border-radius: 14px; padding: 12px; margin-top: -12px; }
+.connection-picker-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.connection-picker h3 { font-weight: 600; }
+.connection-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--sthira-border-strong); border-radius: 8px; background: var(--sthira-canvas); color: var(--sthira-text-muted); }
+.connection-search input { width: 100%; min-width: 0; min-height: 42px; background: transparent; color: var(--sthira-text); font-size: 12px; }
+.connection-search:focus-within { outline: 2px solid var(--sthira-primary); outline-offset: 2px; }
+.connection-search input:focus-visible { outline: none; }
+.connection-picker > p { margin-top: 10px; }
+.connection-results { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; margin-top: 12px; }
+.connection-results > li { padding-block: 4px; border-top: 1px solid var(--sthira-border); }
+.connection-results > li > button:first-child { width: 100%; display: flex; gap: 10px; align-items: center; padding: 10px 6px; min-height: 48px; text-align: left; border-radius: 8px; }
+.connection-results > li > button:hover { background: var(--sthira-surface-muted); }
+.connection-results button > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.connection-results strong { overflow-wrap: anywhere; font-size: 12px; font-weight: 500; }
+.connection-results small { color: var(--sthira-text-muted); font-size: 10px; }
+.connection-results svg { color: var(--sthira-primary); flex-shrink: 0; }
+.connection-insert { min-height: 40px; padding-inline: 10px; margin-left: 22px; text-decoration: underline; text-underline-offset: 3px; color: var(--sthira-primary); font-size: 11px; }
+.connection-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -12px 0 16px; font-size: 11px; color: var(--sthira-text-muted); }
+.connection-trail button { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 40px; padding: 0 4px; text-align: left; }
+.connection-trail button:hover { text-decoration: underline; }
+.connection-trail [aria-current] { color: var(--sthira-primary); }
+.connection-document { padding: 0 0 24px; border-bottom: 1px solid var(--sthira-border); margin-bottom: 24px; overflow-wrap: anywhere; }
+.connection-document .connection-prose { font-size: 14px; }
+.connection-document .connection-prose p { font-size: 14px; line-height: 1.75; }
+.connection-document .connection-prose :is(h1,h2,h3) { font-size: 22px; }
+.connection-project-purpose { font: 400 17px/1.6 var(--sthira-font-editorial); margin-bottom: 24px; }
+.connection-properties { padding: 12px 16px; margin-bottom: 24px; border: 1px solid var(--sthira-border); border-radius: 12px; background: var(--sthira-surface-raised); }
+.connection-properties > div { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1fr); gap: 16px; padding-block: 6px; font-size: 12px; line-height: 1.6; }
+.connection-properties dt { color: var(--sthira-text-muted); }
+.connection-properties dd { overflow-wrap: anywhere; }
+.connection-member { display: flex; gap: 10px; align-items: center; width: 100%; min-height: 56px; text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--sthira-border); }
+.connection-member:hover { background: var(--sthira-surface-muted); }
+.connection-member > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.connection-member small { display: block; margin-top: 4px; color: var(--sthira-text-muted); font-size: 10px; }
+.connection-open-full { display: flex; align-items: center; gap: 6px; min-height: 40px; color: var(--sthira-primary); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; margin-top: 8px; }
+.connection-inline-link { display: inline; color: var(--sthira-primary); font-weight: 500; text-decoration: underline; text-decoration-color: var(--sthira-border-strong); text-underline-offset: 4px; border-radius: 3px; padding-inline: 2px; background: var(--sthira-primary-tint); overflow-wrap: anywhere; }
+.connections-footer { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--sthira-border); font-size: 10px; color: var(--sthira-text-muted); flex-shrink: 0; }
+.connection-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 160px; gap: 16px; color: var(--sthira-text-muted); text-align: center; line-height: 1.7; }
+.connection-state button, .connection-notice button { color: var(--sthira-primary); min-height: 40px; text-decoration: underline; }
+.connection-error { color: var(--sthira-danger); font-size: 12px; line-height: 1.7; margin-bottom: 16px; }
+.connection-notice { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 16px; border: 1px solid var(--sthira-border); border-radius: 10px; background: var(--sthira-primary-tint); font-size: 12px; }
+@container focus (max-width: 1000px) {
+  .focus-workspace[data-connections-open="true"] .focus-workspace-body,
+  .focus-workspace[data-connections-open="true"][data-connection-preview="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr); }
+  .connections-panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); z-index: 36; box-shadow: var(--sthira-shadow-popover); }
+}
+@container focus (min-width: 1001px) {
+  .focus-workspace[data-connections-open="true"] .focus-document-sheet { padding-inline: 24px; }
+}

@@ -1,3 +1,4 @@
+import { editorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { App } from '../App';
@@ -204,9 +205,9 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
     expect(screen.getByTestId('btn-dismiss-document-run')).toBeInTheDocument();
 
     await waitFor(() => {
-      const editor = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
-      expect(editor.value).toContain('## Synthesis');
-      expect(editor.value).toContain('[Source 1]');
+      const editor = screen.getByTestId('document-editor') as HTMLElement;
+      expect(editorMarkdown(editor)).toContain('## Synthesis');
+      expect(editor).toHaveTextContent('Source 1');
     });
   });
 

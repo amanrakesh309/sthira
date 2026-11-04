@@ -469,7 +469,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
           ctx.font = '10px Inter, system-ui, sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          const textWidth = ctx.measureText(edge.relationship).width;
+          const relationshipLabel = edge.relationship.replace(/_/g, ' ');
+          const textWidth = ctx.measureText(relationshipLabel).width;
 
           ctx.fillStyle = isDark ? '#1C1D19' : '#FAF8F3';
           drawRoundRect(ctx, edgeMidX - textWidth / 2 - 5, edgeMidY - 8, textWidth + 10, 16, 4);
@@ -479,7 +480,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
           ctx.stroke();
 
           ctx.fillStyle = isDark ? '#EDEAE2' : '#3A3B36';
-          ctx.fillText(edge.relationship, edgeMidX, edgeMidY);
+          ctx.fillText(relationshipLabel, edgeMidX, edgeMidY);
         }
 
         ctx.restore();

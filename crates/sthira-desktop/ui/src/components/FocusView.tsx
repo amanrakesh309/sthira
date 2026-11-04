@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Sparkles,
   History,
-  LayoutGrid,
   Check,
   Quote,
   Search,
@@ -13,10 +12,6 @@ import {
   CheckSquare,
   Code as CodeIcon,
   Table as TableIcon,
-  Eye,
-  Edit3,
-  PanelRightClose,
-  PanelRightOpen,
   Info,
   X,
   Globe,
@@ -28,7 +23,11 @@ import {
   ExternalLink,
   BookOpen,
   Lightbulb,
+  Link2,
 } from 'lucide-react';
+import { ConnectionsPanel } from './ConnectionsPanel';
+import { entityHref } from '../api/connections';
+import type { EntityRef, WorkspaceEntity } from '../types/sthira';
 import { RefineArtifactModal } from './RefineArtifactModal';
 import { ContextualResumePane } from './ContextualResumePane';
 import { ProjectHistoryDrawer } from './ProjectHistoryDrawer';
@@ -37,13 +36,11 @@ import { UndoToast } from './UndoToast';
 import { EpistemicBadge } from './EpistemicBadge';
 import { SlashCommandMenu, type SlashCommandItem } from './SlashCommandMenu';
 import type { DocumentRunState } from '../types/sthira';
-import { ThemeToggle } from './ThemeToggle';
 import { QuickObjectCreatorCard } from './objects/QuickObjectCreatorCard';
 import { TemplateSelectorPopover } from './objects/TemplateSelectorPopover';
 import { DocumentPropertyHeader } from './objects/DocumentPropertyHeader';
 import { PageActionMenu } from './PageActionMenu';
-import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
-import { RichDocumentRenderer } from './RichDocumentRenderer';
+import { DocumentEditor, type DocumentEditorHandle, type DocumentFormat } from './DocumentEditor';
 import {
   getArtifactContext,
   getResumeBrief,
@@ -81,6 +78,7 @@ interface FocusViewProps {
   onTitleUpdate?: (artifactId: string, newTitle: string) => void;
   /** Phase 17: used by the Page Action Menu to redirect context (e.g. after duplicating). */
   onOpenArtifact?: (artifactId: string, projectId?: string | null) => void;
+  onOpenProject?: (projectId: string) => void;
   realtimeTitleUpdate?: { id: string; title: string } | null;
   /**
    * Phase 19/20: live streaming run (research pipeline stages or plan tokens) to render
@@ -94,12 +92,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
   projectId,
   artifactId,
   onBack,
-  onOpenCanvas,
   onOpenSearch,
   onContentUpdate,
   onSave,
   onTitleUpdate,
   onOpenArtifact,
+  onOpenProject,
   realtimeTitleUpdate,
   documentRun,
   onDismissDocumentRun,
@@ -122,28 +120,30 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const loadRequestRef = useRef(0);
+  const saveRequestRef = useRef(0);
   const briefProjectRef = useRef<string | null>(null);
   const [hoveredQuote, setHoveredQuote] = useState<string | null>(null);
   const [undoToast, setUndoToast] = useState<{ message: string; changeSetId: string } | null>(null);
 
-  // Layout & Clean Binary Mode State ([ ✏️ Edit ] ⟷ [ 👁️ Preview ])
+  // Auxiliary document context stays separate from the editable page.
   const [showMargin, setShowMargin] = useState(false);
+  const [showConnections, setShowConnections] = useState(() => window.innerWidth >= 1280);
+  const [connectionScope, setConnectionScope] = useState<'page' | 'project'>('page');
+  const [connectionPreview, setConnectionPreview] = useState(false);
+  const [requestedPreview, setRequestedPreview] = useState<{ entity: EntityRef; sequence: number } | null>(null);
+  const connectionsButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setConnectionScope('page'); setRequestedPreview(null); setConnectionPreview(false); }, [artifactId, projectId]);
+  const openReference = (entity: EntityRef) => {
+    setShowConnections(true); setShowMargin(false);
+    setRequestedPreview({ entity, sequence: Date.now() });
+  };
+  const closeConnections = () => {
+    setShowConnections(false); setConnectionPreview(false); setRequestedPreview(null);
+    connectionsButtonRef.current?.focus();
+  };
   const [marginTab, setMarginTab] = useState<'insights' | 'sources'>('insights');
-  const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [activeModelName, setActiveModelName] = useState('Active Model');
   const [activeModelId, setActiveModelId] = useState<string | undefined>(undefined);
-
-  // Global Cmd/Ctrl + E Shortcut to Toggle Between Edit and Preview
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
-        e.preventDefault();
-        setViewMode((prev) => (prev === 'edit' ? 'preview' : 'edit'));
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   // Chained Synthesis: Refine & Derive State
   const [isRefineModalOpen, setIsRefineModalOpen] = useState(false);
@@ -179,16 +179,18 @@ export const FocusView: React.FC<FocusViewProps> = ({
     setIsDeriveMenuOpen(false);
     setIsDeriving(true);
     setActionError(null);
+    const sourceRequest = loadRequestRef.current;
     try {
+      if (!(await handleSave())) return;
       const newArtId = await deriveArtifact(currentArtId, derivationType, null, activeModelId);
-      if (newArtId && onOpenArtifact) {
+      if (newArtId && onOpenArtifact && sourceRequest === loadRequestRef.current) {
         onOpenArtifact(newArtId, projectId || null);
       }
     } catch (err) {
       console.error('Derivation failed:', err);
-      setActionError('Couldn’t derive a new artifact. Check the selected provider and try again.');
+      if (sourceRequest === loadRequestRef.current) setActionError('Couldn’t derive a new artifact. Check the selected provider and try again.');
     } finally {
-      setIsDeriving(false);
+      if (sourceRequest === loadRequestRef.current) setIsDeriving(false);
     }
   };
 
@@ -227,8 +229,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
   // Inline AI streaming state
   const [isAiStreaming, setIsAiStreaming] = useState(false);
   const [aiStreamingMessage, setAiStreamingMessage] = useState<string | null>(null);
+  useEffect(() => {
+    setIsDeriving(false); setIsDeriveMenuOpen(false); setIsAiStreaming(false); setAiStreamingMessage(null);
+    setInlineObjectCreator(null); setTemplateSelector(null); setSlashMenu((prev) => ({ ...prev, isOpen: false }));
+  }, [artifactId, projectId]);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const documentEditorRef = useRef<DocumentEditorHandle>(null);
   const isInitialLoadedRef = useRef(false);
   const lastSavedContentRef = useRef('');
   const lastSavedTitleRef = useRef('');
@@ -444,8 +450,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const handleSave = useCallback(async () => {
     if (!isInitialLoadedRef.current) return false;
     const artId = context?.artifact?.id || artifactId || '';
+    if (artId && currentArtIdRef.current && currentArtIdRef.current !== artId) return false;
     const currentT = currentTitleRef.current.trim() || context?.artifact?.title || null;
     const currentC = currentContentRef.current;
+    const saveRequest = ++saveRequestRef.current;
+    const documentRequest = loadRequestRef.current;
+    const isCurrentSave = () => saveRequest === saveRequestRef.current && documentRequest === loadRequestRef.current && (!artId || currentArtIdRef.current === artId);
 
     setIsSaving(true);
     setSaveSuccess(false);
@@ -453,6 +463,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     try {
       const targetProjectId = currentProjectIdRef.current && currentProjectIdRef.current !== 'default_project' ? currentProjectIdRef.current : null;
       const updated = await saveArtifact(artId, currentC, currentT, targetProjectId);
+      if (!isCurrentSave()) return false;
       lastSavedContentRef.current = currentC;
       lastSavedTitleRef.current = updated.title || currentT || '';
       if (currentTitleRef.current === currentT) {
@@ -460,6 +471,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
       }
       try {
         const ctx = await getArtifactContext(updated.id);
+        if (!isCurrentSave()) return false;
         setContext(ctx);
       } catch {
         setContext((prev) =>
@@ -479,11 +491,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
       setTimeout(() => setSaveSuccess(false), 2500);
       return true;
     } catch (err) {
+      if (!isCurrentSave()) return false;
       console.error('Failed to save artifact', err);
       setSaveError('Couldn’t save your changes. Try saving again.');
       return false;
     } finally {
-      setIsSaving(false);
+      if (isCurrentSave()) setIsSaving(false);
     }
   }, [context, artifactId, projectId, onSave]);
 
@@ -502,7 +515,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
 
     autoSaveTimerRef.current = setTimeout(() => {
-      handleSave();
+      void handleSave();
     }, 600);
 
     return () => {
@@ -574,7 +587,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
-  const handleEditorChange = (newC: string, e?: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleEditorChange = (newC: string) => {
     setEditorContent(newC);
     currentContentRef.current = newC;
 
@@ -597,27 +610,6 @@ export const FocusView: React.FC<FocusViewProps> = ({
       }
     }
 
-    // Caret tracking for Slash Command Menu
-    if (e && textareaRef.current) {
-      const caret = textareaRef.current.selectionStart;
-      const textBefore = newC.slice(0, caret);
-      const currentLine = textBefore.split('\n').pop() || '';
-      const slashMatch = currentLine.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/);
-
-      if (slashMatch) {
-        const query = slashMatch[1];
-        const lineCount = textBefore.split('\n').length;
-        const top = Math.min(lineCount * 22 + 60, 480);
-        setSlashMenu({
-          isOpen: true,
-          filterQuery: query,
-          position: { top, left: 40 },
-          caretIndex: caret,
-        });
-      } else {
-        setSlashMenu((prev) => (prev.isOpen ? { ...prev, isOpen: false } : prev));
-      }
-    }
   };
 
   // Phase 16: Begin typed-object creation. When more than one template exists for the
@@ -663,39 +655,15 @@ export const FocusView: React.FC<FocusViewProps> = ({
       return;
     }
 
-    const caret = slashMenu.caretIndex || (textareaRef.current ? textareaRef.current.selectionStart : editorContent.length);
-    const before = editorContent.slice(0, caret);
-    const after = editorContent.slice(caret);
-
-    const lastSlashIdx = before.lastIndexOf('/');
-    const cleanBefore = lastSlashIdx >= 0 ? before.slice(0, lastSlashIdx) : before;
-
-    const newContent = `${cleanBefore}${item.template}${after}`;
-    setEditorContent(newContent);
-    currentContentRef.current = newContent;
-
-    if (item.id === 'decision') {
-      handleSave();
-    }
-
-    setTimeout(() => {
-      if (textareaRef.current) {
-        const newCaret = cleanBefore.length + item.template.length;
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(newCaret, newCaret);
-      }
-    }, 50);
+    documentEditorRef.current?.insertMarkdown(item.template, true);
+    if (item.id === 'decision') void handleSave();
   };
 
   // Inline AI Generator
   const handleRunInlineAi = async (mode: 'plan' | 'research' | 'expand') => {
-    const caret = slashMenu.caretIndex || (textareaRef.current ? textareaRef.current.selectionStart : editorContent.length);
-    const before = editorContent.slice(0, caret);
-    const after = editorContent.slice(caret);
-
-    const lastSlashIdx = before.lastIndexOf('/');
-    const cleanBefore = lastSlashIdx >= 0 ? before.slice(0, lastSlashIdx) : before;
-
+    const insertion = documentEditorRef.current?.startInsertion();
+    const sourceId = currentArtIdRef.current;
+    const sourceRequest = loadRequestRef.current;
     const topic = title.trim() || 'Software Architecture & Planning';
     const actionLabel = mode === 'plan' ? 'Generating Plan' : mode === 'research' ? 'Researching Findings' : 'Expanding Section';
 
@@ -708,25 +676,22 @@ export const FocusView: React.FC<FocusViewProps> = ({
       await streamAdaptiveRun(topic, mode === 'expand' ? 'act' : mode, activeModelId, (chunk) => {
         if (chunk.type === 'text_token') {
           accumulatedTokens += chunk.payload;
-          const liveContent = `${cleanBefore}\n\n${accumulatedTokens}\n\n${after}`;
-          setEditorContent(liveContent);
-          currentContentRef.current = liveContent;
+          if (currentArtIdRef.current === sourceId && sourceRequest === loadRequestRef.current) insertion?.replace(accumulatedTokens);
         }
       });
-      handleSave();
+      if (sourceRequest === loadRequestRef.current) void handleSave();
     } catch (err) {
       console.error('Inline AI streaming failed', err);
-      setActionError('The model stream stopped. Your current draft is still available.');
+      if (sourceRequest === loadRequestRef.current) setActionError('The model stream stopped. Your current draft is still available.');
     } finally {
-      setIsAiStreaming(false);
-      setAiStreamingMessage(null);
+      if (sourceRequest === loadRequestRef.current) { setIsAiStreaming(false); setAiStreamingMessage(null); }
     }
   };
 
   // Quick Object Creator Submission Handler
   const handleCreateAndInsertObject = async (objTitle: string, properties: Record<string, any>) => {
     if (!inlineObjectCreator) return;
-    const { objectType, caretIndex } = inlineObjectCreator;
+    const { objectType } = inlineObjectCreator;
     setInlineObjectCreator(null);
 
     try {
@@ -752,17 +717,8 @@ export const FocusView: React.FC<FocusViewProps> = ({
         2
       )}\n\`\`\`\n`;
 
-      const caret = caretIndex || (textareaRef.current ? textareaRef.current.selectionStart : editorContent.length);
-      const before = editorContent.slice(0, caret);
-      const after = editorContent.slice(caret);
-
-      const lastSlashIdx = before.lastIndexOf('/');
-      const cleanBefore = lastSlashIdx >= 0 ? before.slice(0, lastSlashIdx) : before;
-
-      const newContent = `${cleanBefore}${directive}${after}`;
-      setEditorContent(newContent);
-      currentContentRef.current = newContent;
-      handleSave();
+      documentEditorRef.current?.insertMarkdown(directive, true);
+      void handleSave();
 
       // 3. Refresh Left Sidebar object counts automatically
       window.dispatchEvent(new CustomEvent('sthira:refresh_objects'));
@@ -771,82 +727,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
-  // Embedded Object Live Property Updates
-  const handleUpdateEmbeddedObject = (updated: EmbeddedObjectData) => {
-    const regex = new RegExp(
-      `\`\`\`sthira-object\\s*\\n[\\s\\S]*?"artifact_id"\\s*:\\s*"${updated.artifact_id}"[\\s\\S]*?\\n\`\`\``,
-      'g'
-    );
-    const replacement = `\`\`\`sthira-object\n${JSON.stringify(updated, null, 2)}\n\`\`\``;
-    const newContent = editorContent.replace(regex, replacement);
-    if (newContent !== editorContent) {
-      setEditorContent(newContent);
-      currentContentRef.current = newContent;
-      handleSave();
-      window.dispatchEvent(new CustomEvent('sthira:refresh_objects'));
-    }
-  };
-
-  // Toolbar Formatting helper
-  const handleApplyFormat = (type: 'bold' | 'italic' | 'h1' | 'h2' | 'todo' | 'code' | 'table' | 'slash') => {
-    if (!textareaRef.current) return;
-    const start = textareaRef.current.selectionStart;
-    const end = textareaRef.current.selectionEnd;
-    const selected = editorContent.substring(start, end);
-
-    let insertion = '';
-    let cursorOffset = 0;
-
-    switch (type) {
-      case 'bold':
-        insertion = `**${selected || 'bold text'}**`;
-        cursorOffset = insertion.length;
-        break;
-      case 'italic':
-        insertion = `*${selected || 'italic text'}*`;
-        cursorOffset = insertion.length;
-        break;
-      case 'h1':
-        insertion = `\n# ${selected || 'Heading 1'}\n`;
-        cursorOffset = insertion.length;
-        break;
-      case 'h2':
-        insertion = `\n## ${selected || 'Heading 2'}\n`;
-        cursorOffset = insertion.length;
-        break;
-      case 'todo':
-        insertion = `\n- [ ] ${selected || 'Action item'}\n`;
-        cursorOffset = insertion.length;
-        break;
-      case 'code':
-        insertion = `\n\`\`\`rust\n${selected || '// Implementation'}\n\`\`\`\n`;
-        cursorOffset = insertion.length;
-        break;
-      case 'table':
-        insertion = `\n| Criteria | Option A | Option B |\n| :--- | :--- | :--- |\n| Metric | High | Medium |\n`;
-        cursorOffset = insertion.length;
-        break;
-      case 'slash':
-        setSlashMenu({
-          isOpen: true,
-          filterQuery: '',
-          position: { top: 120, left: 60 },
-          caretIndex: start,
-        });
-        return;
-    }
-
-    const nextContent = editorContent.slice(0, start) + insertion + editorContent.slice(end);
-    setEditorContent(nextContent);
-    currentContentRef.current = nextContent;
-
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(start + cursorOffset, start + cursorOffset);
-      }
-    }, 50);
-  };
+  const handleApplyFormat = (format: DocumentFormat) => documentEditorRef.current?.format(format);
 
   const handleBack = async () => {
     if (
@@ -937,9 +818,19 @@ export const FocusView: React.FC<FocusViewProps> = ({
     ? brief?.active_working_breadcrumb?.replace(/^Project:\s*/i, '').split(/\s*[>›]\s*/)[0] || 'Project workspace'
     : 'Notes';
   const isDirty = editorContent !== lastSavedContentRef.current || title !== lastSavedTitleRef.current;
+  const connectionArtifactId = artifactId || context?.artifact?.id;
+  const connectionProjectId = projectId && projectId !== 'default_project' ? projectId : null;
+  const connectionEntity: EntityRef | null = connectionScope === 'project' && connectionProjectId
+    ? { kind: 'project', id: connectionProjectId }
+    : connectionArtifactId ? { kind: 'artifact', id: connectionArtifactId }
+    : connectionProjectId ? { kind: 'project', id: connectionProjectId } : null;
+  const insertReference = (target: WorkspaceEntity) => {
+    if (!connectionArtifactId || currentArtIdRef.current !== connectionArtifactId) return;
+    documentEditorRef.current?.insertLink(target.title, entityHref(target));
+  };
 
   return (
-    <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-margin-open={showMargin}>
+    <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-margin-open={showMargin} data-connections-open={showConnections && !!connectionEntity} data-connection-preview={connectionPreview}>
       <header className="focus-header">
         <nav className="focus-breadcrumbs" aria-label="Document location">
           <button type="button" onClick={handleBack} className="focus-home-button" title="Return to Home" aria-label="Home"><ArrowLeft size={16} /><span>Home</span></button>
@@ -948,12 +839,8 @@ export const FocusView: React.FC<FocusViewProps> = ({
         </nav>
         <div className="focus-header-actions">
           {onOpenSearch && <button type="button" onClick={onOpenSearch} className="focus-search-action focus-icon-button" aria-label="Search workspace" title="Search workspace"><Search size={16} /></button>}
-          <button type="button" className="focus-header-action" onClick={() => onOpenCanvas()} aria-label="Canvas" title="Open canvas"><LayoutGrid size={16} /><span>Canvas</span></button>
           <button type="button" className="focus-header-action" onClick={() => setIsHistoryOpen(true)} disabled={!history} aria-label="History" title={history ? 'Project history' : 'History is available for project documents'}><History size={16} /><span>History</span></button>
-          <button type="button" className="focus-header-action" data-testid="btn-toggle-epistemic-margin" onClick={() => setShowMargin((shown) => !shown)} aria-expanded={showMargin} aria-controls="focus-evidence-margin" title="Toggle Epistemic Margin Sidebar" aria-label="Margin">
-            {showMargin ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}<span>Margin</span>
-          </button>
-          <ThemeToggle variant="icon" />
+          <button type="button" ref={connectionsButtonRef} className="focus-header-action" onClick={() => { if (showConnections) closeConnections(); else { setShowConnections(true); setShowMargin(false); } }} disabled={!connectionEntity} aria-label="Connections" aria-expanded={showConnections && !!connectionEntity} aria-controls="workspace-connections" title={connectionEntity ? 'Show connected pages, projects and objects' : 'Save this page to connect it'}><Link2 size={16} /><span>Connections</span></button>
           <button type="button" data-testid="btn-save-artifact" className={`focus-save-status ${saveError ? 'focus-save-error' : ''}`} onClick={handleSave} disabled={isLoadingDocument || !!loadError || isSaving} title={saveError ? 'Retry saving your changes' : 'Changes save automatically. Click to save now.'}>
             {isSaving ? <Loader2 size={15} className="animate-spin" /> : saveError ? <AlertTriangle size={15} /> : <Check size={15} />}
             <span aria-live="polite">{saveError ? 'Save failed' : isSaving ? 'Saving...' : saveSuccess ? 'Saved' : isDirty ? 'Unsaved changes' : 'Auto-saved'}</span>
@@ -1124,7 +1011,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
             {/* Notion-Style Formatting Toolbar & Rich Preview Toggle */}
             <div className="focus-format-toolbar">
               {/* Left: Quick Formatting Actions */}
-              <div className="focus-format-actions" role="group" aria-label="Markdown formatting">
+              <div className="focus-format-actions" role="group" aria-label="Document formatting">
                 <button
                   type="button"
                   onClick={() => handleApplyFormat('bold')}
@@ -1198,46 +1085,12 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
               {/* Right: Clean Binary Mode Switcher & Page Action Menu */}
               <div className="focus-document-actions">
-                <div role="group" aria-label="Document view" className="focus-view-modes inline-flex p-0.5 rounded-lg bg-sthira-surface-muted border border-sthira-border-strong">
-                  <button
-                    type="button"
-                    data-testid="btn-toggle-edit-mode"
-                    aria-pressed={viewMode === 'edit'}
-                    onClick={() => setViewMode('edit')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                      viewMode === 'edit'
-                        ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
-                        : 'text-sthira-text-muted hover:text-sthira-text'
-                    }`}
-                    title="Edit Markdown (Cmd+E)"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    <span>Edit</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    data-testid="btn-toggle-preview-mode"
-                    aria-pressed={viewMode === 'preview'}
-                    onClick={() => setViewMode('preview')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                      viewMode === 'preview'
-                        ? 'bg-sthira-surface text-sthira-text font-semibold shadow-2xs'
-                        : 'text-sthira-text-muted hover:text-sthira-text'
-                    }`}
-                    title="Component-Decorated Rich Workspace (Cmd+E)"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>Preview</span>
-                  </button>
-                </div>
-
                 {/* Chained Synthesis: Refine & Derive Toolbar Actions */}
                 <div className="focus-ai-actions">
                   <button
                     type="button"
                     data-testid="btn-refine-artifact"
-                    onClick={() => setIsRefineModalOpen(true)}
+                    onClick={async () => { if (await handleSave()) setIsRefineModalOpen(true); }}
                     disabled={!context?.artifact?.id && !artifactId}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-sthira-surface border border-sthira-border text-sthira-text-muted hover:bg-sthira-surface-muted hover:text-sthira-text transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                     title="Iteratively refine or re-research note with custom critique"
@@ -1334,6 +1187,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 {(context?.artifact?.id || artifactId) && (
                   <PageActionMenu
                     variant="toolbar"
+                    onOpenEvidence={() => { setShowMargin(true); closeConnections(); }}
                     artifactId={context?.artifact?.id || artifactId || ''}
                     artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
                     contentMd={editorContent}
@@ -1377,101 +1231,54 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
             )}
 
-            {/* Main Canvas Body: Live Edit vs Component-Decorated Rich Preview */}
             <div className="focus-editor-body">
-              {viewMode === 'edit' ? (
-                <div className="flex-1 flex flex-col relative">
-                  <textarea
-                    ref={textareaRef}
-                    data-testid="textarea-editor"
-                    value={editorContent}
-                    onChange={(e) => handleEditorChange(e.target.value, e)}
-                    onBlur={handleSave}
-                    aria-label="Document Markdown"
-                    spellCheck={false}
-                    placeholder="Type '/' to insert blocks, record epistemic decisions, or invoke inline AI compute..."
-                    className="flex-1 w-full bg-transparent border-none outline-none resize-none font-mono text-sm leading-relaxed text-sthira-text placeholder-sthira-text-subtle min-h-[calc(100vh-140px)]"
-                  />
-
-                  {/* Caret-Positioned Notion-Style Slash Command Menu Popover */}
-                  {slashMenu.isOpen && (
-                    <SlashCommandMenu
-                      filterQuery={slashMenu.filterQuery}
-                      customObjectTypes={objectTypes}
-                      onSelect={handleSelectSlashCommand}
-                      onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))}
-                      position={slashMenu.position}
-                      activeModelName={activeModelName}
-                    />
-                  )}
-
-                  {/* Phase 16: Template selector popover when multiple presets exist */}
-                  {templateSelector && templateSelector.isOpen && (
-                    <TemplateSelectorPopover
-                      objectType={templateSelector.objectType}
-                      position={templateSelector.position}
-                      onSelect={(templateId) => {
-                        setPendingTemplateId(templateId);
-                        setInlineObjectCreator({
-                          isOpen: true,
-                          objectType: templateSelector.objectType,
-                          position: templateSelector.position,
-                          caretIndex: templateSelector.caretIndex,
-                        });
-                        setTemplateSelector(null);
-                      }}
-                      onClose={() => setTemplateSelector(null)}
-                    />
-                  )}
-
-                  {/* Inline Quick Object Creator Card at Caret */}
-                  {inlineObjectCreator && inlineObjectCreator.isOpen && (
-                    <QuickObjectCreatorCard
-                      objectType={inlineObjectCreator.objectType}
-                      position={inlineObjectCreator.position}
-                      onSubmit={handleCreateAndInsertObject}
-                      onClose={() => setInlineObjectCreator(null)}
-                    />
-                  )}
-                </div>
-              ) : (
-                /* Rich Component-Decorated Markdown Preview Canvas */
-                <div data-testid="rich-preview-canvas" className="focus-preview">
-                  <RichDocumentRenderer
-                    content={editorContent}
-                    documentTitle={title}
-                    className="focus-prose"
-                    projectId={projectId}
-                    objectTypes={objectTypes}
-                    onUpdateContent={(updated) => {
-                      setEditorContent(updated);
-                      currentContentRef.current = updated;
-                      if (context?.artifact?.id || artifactId) {
-                        saveArtifact(context?.artifact?.id || artifactId || '', updated, title).catch(console.warn);
-                      }
-                    }}
-                    onUpdateObject={handleUpdateEmbeddedObject}
-                    onRecordDecision={async (decText) => {
-                      try {
-                        const cleanTitle = decText.slice(0, 60).replace(/[*_#`]/g, '').trim();
-                        await createTypedObject('system_decision', cleanTitle || 'Recorded Decision', {
-                          status: 'Recorded',
-                          rationale: decText,
-                        });
-                        window.dispatchEvent(new CustomEvent('sthira:refresh_objects'));
-                        setSaveSuccess(true);
-                        setTimeout(() => setSaveSuccess(false), 2000);
-                      } catch (err) {
-                        console.warn('Failed to record decision', err);
-                      }
-                    }}
-                  />
-                </div>
-              )}
+              <DocumentEditor
+                key={context?.artifact?.id || artifactId || 'draft'}
+                ref={documentEditorRef}
+                content={editorContent}
+                title={title}
+                objectTypes={objectTypes}
+                disabled={isAiStreaming}
+                onChange={handleEditorChange}
+                onBlur={() => { if (isDirty && !isLoadingDocument) void handleSave(); }}
+                onOpenEntity={openReference}
+                onSlash={(query, position) => setSlashMenu({ isOpen: query !== null, filterQuery: query || '', position, caretIndex: 0 })}
+                onRecordDecision={async (text) => {
+                  try {
+                    await createTypedObject('decision', text.slice(0, 60).replace(/[*_#`]/g, '').trim() || 'Recorded Decision', { status: 'Recorded', rationale: text });
+                    window.dispatchEvent(new CustomEvent('sthira:refresh_objects'));
+                  } catch { setActionError('Couldn’t record this decision. Your page is still saved.'); }
+                }}
+              />
+              {slashMenu.isOpen && <SlashCommandMenu filterQuery={slashMenu.filterQuery} customObjectTypes={objectTypes} onSelect={handleSelectSlashCommand} onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))} position={slashMenu.position} activeModelName={activeModelName} />}
+              {templateSelector?.isOpen && <TemplateSelectorPopover objectType={templateSelector.objectType} position={templateSelector.position} onSelect={(templateId) => {
+                setPendingTemplateId(templateId);
+                setInlineObjectCreator({ isOpen: true, objectType: templateSelector.objectType, position: templateSelector.position, caretIndex: 0 });
+                setTemplateSelector(null);
+              }} onClose={() => setTemplateSelector(null)} />}
+              {inlineObjectCreator?.isOpen && <QuickObjectCreatorCard objectType={inlineObjectCreator.objectType} position={inlineObjectCreator.position} onSubmit={handleCreateAndInsertObject} onClose={() => setInlineObjectCreator(null)} />}
             </div>
             </>}
           </div>
         </div>
+
+        {showConnections && connectionEntity && <ConnectionsPanel
+          key={`${connectionEntity.kind}-${connectionEntity.id}`}
+          entity={connectionEntity}
+          title={connectionEntity.kind === 'project' ? projectLabel : title || 'Untitled page'}
+          project={connectionProjectId && connectionArtifactId ? { id: connectionProjectId, title: projectLabel } : null}
+          scope={connectionScope}
+          onScopeChange={(scope) => { setConnectionScope(scope); setConnectionPreview(false); setRequestedPreview(null); }}
+          onClose={closeConnections}
+          onPreviewChange={setConnectionPreview}
+          requestedPreview={requestedPreview}
+          onInsertLink={!isLoadingDocument && !loadError ? insertReference : undefined}
+          onOpenFull={onOpenArtifact ? async (entity) => {
+            if (isDirty && !(await handleSave())) return;
+            if (entity.kind === 'project') onOpenProject?.(entity.id);
+            else onOpenArtifact(entity.id, entity.project_id);
+          } : undefined}
+        />}
 
         {/* Right Docked Collapsible Sidebar: Epistemic Margin */}
         {showMargin && (

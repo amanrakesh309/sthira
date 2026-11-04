@@ -70,18 +70,12 @@
 .focus-format-actions > button { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; justify-content: center; }
 .focus-format-actions > div { margin-inline: 4px; background: var(--sthira-border); }
 .focus-document-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.focus-view-modes { background: var(--sthira-surface-muted); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); }
-.focus-view-modes button { min-height: 40px; padding-inline: 12px; color: var(--sthira-text-muted); }
-.focus-view-modes button[aria-pressed="true"] { background: var(--sthira-surface); color: var(--sthira-text); box-shadow: 0 1px 3px color-mix(in srgb, var(--sthira-text) 8%, transparent); }
 .focus-ai-actions { display: flex; align-items: center; gap: 8px; }
 .focus-ai-actions > button, .focus-ai-actions > div > button { min-height: 40px; padding: 0 12px; font-size: 12px; border-radius: var(--sthira-radius-sm); }
 .focus-format-toolbar [aria-label="Page actions"] { min-height: 40px; min-width: 40px; color: var(--sthira-text-muted); }
 .focus-format-toolbar [data-testid="derive-dropdown-menu"] { max-width: calc(100cqw - 32px); background: var(--sthira-surface); border-color: var(--sthira-border); box-shadow: var(--sthira-shadow-popover); }
 .focus-format-toolbar [data-testid="derive-dropdown-menu"] button { min-height: 48px; }
 .focus-editor-body { flex: 1; display: flex; flex-direction: column; position: relative; min-height: 420px; min-width: 0; }
-.focus-editor-body textarea { font: 400 15px/1.8 var(--sthira-font-mono); color: var(--sthira-text); min-height: max(480px, calc(100vh - 300px)); max-width: var(--sthira-document-max); padding: 4px 0 24px; tab-size: 2; }
-.focus-editor-body textarea::placeholder { color: var(--sthira-text-subtle); }
-.focus-preview { flex: 1; min-width: 0; padding-top: 0; }
 .focus-prose { max-width: var(--sthira-document-max); font: 400 16px/1.7 var(--sthira-font-ui); color: var(--sthira-text); overflow-wrap: anywhere; }
 .focus-prose :is(p, li, li > div, blockquote) { font-size: 16px; line-height: 1.7; color: var(--sthira-text); }
 .focus-prose :is(p, ul, ol) { margin-block: 0 16px; }
@@ -206,3 +200,31 @@
 @media (prefers-reduced-motion: reduce) {
   .focus-workspace *, .focus-history-layer * { scroll-behavior: auto; animation-duration: .01ms; transition-duration: .01ms; }
 }
+
+/* One editable document, with Markdown remaining the durable storage format. */
+.document-rich-editor { min-height: max(420px, calc(100vh - 340px)); outline: none; padding: 4px 0 48px; white-space: pre-wrap; }
+.sthira-shell .document-rich-editor:focus-visible { outline: none; }
+.document-rich-editor > :first-child { margin-top: 0; }
+.document-rich-editor :is(ul, ol) { padding-left: 24px; }
+.document-rich-editor ul { list-style: disc; }
+.document-rich-editor ol { list-style: decimal; }
+.document-rich-editor ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.document-rich-editor li[data-checked] { display: flex; align-items: flex-start; gap: 10px; }
+.document-rich-editor li[data-checked] > label { display: flex; min-height: 28px; align-items: center; flex-shrink: 0; }
+.document-rich-editor li[data-checked] input { accent-color: var(--sthira-primary); width: 16px; height: 16px; }
+.document-rich-editor li[data-checked] > div { flex: 1; min-width: 0; }
+.document-rich-editor li > div > p { margin-bottom: 4px; }
+.document-rich-editor table { border-collapse: collapse; width: 100%; margin-block: 16px; table-layout: fixed; }
+.document-rich-editor :is(td, th) { border: 1px solid var(--sthira-border-strong); min-width: 60px; padding: 10px 12px; vertical-align: top; position: relative; }
+.document-rich-editor th { background: var(--sthira-surface-muted); font-weight: 600; }
+.document-rich-editor .selectedCell { background: var(--sthira-primary-tint); }
+.document-rich-editor blockquote { padding: 16px 20px; border-left: 3px solid var(--sthira-primary); border-radius: 0 12px 12px 0; margin-block: 20px; }
+.document-rich-editor pre { background: var(--sthira-surface-muted); border: 1px solid var(--sthira-border); border-radius: 12px; padding: 16px; }
+.document-rich-editor img { max-width: 100%; height: auto; }
+.document-rich-editor a[href^="#/sthira/"] { background: var(--sthira-primary-tint); border-radius: 3px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.document-rich-editor .document-raw-block { padding: 12px; font: 12px/1.7 var(--sthira-font-mono); background: var(--sthira-surface-muted); border: 1px solid var(--sthira-border); border-radius: 8px; }
+.document-rich-editor .ProseMirror-selectednode { outline: 2px solid var(--sthira-primary); outline-offset: 3px; }
+.sidebar-canvas-button[aria-current="page"] { background: var(--sthira-primary); color: var(--sthira-on-primary); }
+
+.document-rich-editor :is(td, th) p { margin: 0; }
+.document-rich-editor blockquote button { padding-inline: 12px; border-radius: 20px; font-size: 12px; }

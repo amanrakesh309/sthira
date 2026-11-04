@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FocusView } from '../components/FocusView';
 import * as ipc from '../api/ipc';
+import { setEditorMarkdown } from './editor-helpers';
 
 // Mock ipc calls
 vi.mock('../api/ipc', async (importOriginal) => {
@@ -213,6 +214,33 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
     await waitFor(() => {
       expect(onOpenArtifactSpy).toHaveBeenCalledWith('derived-new-plan-123', 'proj-1');
     });
+  });
+
+  it('waits for the current draft to save before deriving', async () => {
+    const user = userEvent.setup(); const onOpen = vi.fn();
+    const saved = (await ipc.getArtifactContext('test-art-1')).artifact;
+    let finishSave!: (artifact: typeof saved) => void;
+    vi.mocked(ipc.saveArtifact).mockReturnValueOnce(new Promise((resolve) => { finishSave = resolve; }));
+    render(<FocusView artifactId="test-art-1" onBack={vi.fn()} onOpenCanvas={vi.fn()} onOpenArtifact={onOpen} />);
+    const editor = await screen.findByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, 'Latest findings');
+    await user.click(screen.getByTestId('btn-derive-menu'));
+    await user.click(screen.getByTestId('btn-derive-plan'));
+    expect(ipc.deriveArtifact).not.toHaveBeenCalled();
+    expect(ipc.saveArtifact).toHaveBeenCalledWith('test-art-1', expect.stringContaining('Latest findings'), expect.anything(), null);
+    finishSave({ ...saved, content_md: 'Latest findings' });
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith('derived-new-plan-123', null));
+  });
+
+  it('keeps the current note open when saving before derivation fails', async () => {
+    const user = userEvent.setup(); const onOpen = vi.fn();
+    vi.mocked(ipc.saveArtifact).mockRejectedValueOnce(new Error('Disk unavailable'));
+    render(<FocusView artifactId="test-art-1" onBack={vi.fn()} onOpenCanvas={vi.fn()} onOpenArtifact={onOpen} />);
+    await screen.findByRole('textbox', { name: 'Document content' });
+    await user.click(screen.getByTestId('btn-derive-menu'));
+    await user.click(screen.getByTestId('btn-derive-plan'));
+    expect(await screen.findByText('Couldn’t save your changes. Try saving again.')).toBeInTheDocument();
+    expect(ipc.deriveArtifact).not.toHaveBeenCalled(); expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('Test C: Derived artifact renders parent lineage badge above document title and navigates on click', async () => {

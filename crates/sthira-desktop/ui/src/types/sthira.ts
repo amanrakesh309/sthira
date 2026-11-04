@@ -789,3 +789,32 @@ export function generateSmartGoalTitle(raw: string): string {
 }
 
 
+/** Objects, sources and snippets retain their artifact identity when linked. */
+export interface EntityRef {
+  kind: 'artifact' | 'project';
+  id: string;
+}
+
+export interface WorkspaceEntity extends EntityRef {
+  title: string;
+  type_label: string;
+  project_id: string | null;
+}
+
+export interface WorkspaceEntityDetail {
+  entity: WorkspaceEntity;
+  content_md: string;
+  description: string;
+  members: WorkspaceEntity[];
+  object_instance?: ObjectInstance | null;
+  object_type?: ObjectType | null;
+}
+
+export interface WorkspaceConnection {
+  id: string;
+  source: WorkspaceEntity;
+  target: WorkspaceEntity;
+  created_at: number;
+  relationship?: 'references' | 'derived_from';
+}
+

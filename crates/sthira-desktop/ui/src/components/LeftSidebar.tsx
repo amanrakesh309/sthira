@@ -450,6 +450,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <Share2 className="w-4 h-4" />
           </button>
 
+          <button type="button" data-testid="nav-canvas-collapsed" aria-current={currentView === 'canvas' ? 'page' : undefined} onClick={() => onOpenCanvas()} title="Spatial canvas" className="sidebar-canvas-button w-8 h-8 rounded-lg flex items-center justify-center text-sthira-text-muted hover:bg-sthira-surface-muted"><LayoutGrid className="w-4 h-4" /></button>
+
           {/* All Files Trigger */}
           <button
             type="button"
@@ -592,6 +594,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <Share2 className="w-4 h-4" />
           <span>Knowledge Graph</span>
         </button>
+
+        <button type="button" data-testid="nav-canvas" aria-current={currentView === 'canvas' ? 'page' : undefined} onClick={() => onOpenCanvas()} className="sidebar-nav-row sidebar-canvas-button w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sthira-text hover:bg-sthira-surface-muted"><LayoutGrid className="w-4 h-4" /><span>Spatial canvas</span></button>
 
         <button
           type="button"

@@ -1,3 +1,4 @@
+import { editorMarkdown, setEditorMarkdown } from './editor-helpers';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FocusView } from '../components/FocusView';
@@ -135,19 +136,12 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     // Issue 1: Verify Epistemic Margin right sidebar is collapsed/hidden by default
     expect(screen.queryByTestId('epistemic-margin-sidebar')).toBeNull();
 
-    // Test collapsible margin toggle button [ 📖 Margin ]
-    const toggleMarginBtn = screen.getByTestId('btn-toggle-epistemic-margin');
-    expect(toggleMarginBtn).toHaveTextContent('Margin');
-
-    // Click to open margin
-    fireEvent.click(toggleMarginBtn);
-    const marginSidebar = screen.getByTestId('epistemic-margin-sidebar');
-    expect(marginSidebar).toBeTruthy();
-    expect(marginSidebar).toHaveClass('focus-margin');
-    expect(toggleMarginBtn).toHaveAttribute('aria-expanded', 'true');
-
-    // Click again to close
-    fireEvent.click(toggleMarginBtn);
+    // Evidence remains accessible without a dedicated header control.
+    expect(screen.queryByTestId('btn-toggle-epistemic-margin')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Page actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sources & insights' }));
+    expect(screen.getByTestId('epistemic-margin-sidebar')).toHaveClass('focus-margin');
+    fireEvent.click(screen.getByRole('button', { name: 'Close epistemic margin' }));
     expect(screen.queryByTestId('epistemic-margin-sidebar')).toBeNull();
 
     // Issue 4: Verify toolbar action menu is a single button with Lucide icon and standard dimensions
@@ -174,19 +168,13 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    const textarea = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
+    const textarea = screen.getByTestId('document-editor') as HTMLElement;
 
     // Type a slash command: "/"
-    fireEvent.change(textarea, {
-      target: {
-        value: '# Title\n\n/',
-        selectionStart: 10,
-        selectionEnd: 10,
-      },
-    });
+    setEditorMarkdown(textarea, '# Title\n\n/');
 
     // Popover should appear
     await waitFor(() => {
@@ -200,8 +188,8 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
 
     // Verify decision block template was inserted into the editor content
     await waitFor(() => {
-      expect(textarea.value).toContain('Decision:');
-      expect(textarea.value).toContain('Rationale:');
+      expect(editorMarkdown(textarea)).toContain('Decision:');
+      expect(editorMarkdown(textarea)).toContain('Rationale:');
     });
   });
 
@@ -216,19 +204,13 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    const textarea = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
+    const textarea = screen.getByTestId('document-editor') as HTMLElement;
 
     // Type "/h" to filter
-    fireEvent.change(textarea, {
-      target: {
-        value: '# Notes\n\n/h',
-        selectionStart: 11,
-        selectionEnd: 11,
-      },
-    });
+    setEditorMarkdown(textarea, '# Notes\n\n/h');
 
     await waitFor(() => {
       expect(screen.getByTestId('slash-cmd-h1')).toBeInTheDocument();
@@ -237,11 +219,12 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     fireEvent.click(screen.getByTestId('slash-cmd-h1'));
 
     await waitFor(() => {
-      expect(textarea.value).toContain('# Notes\n\n# ');
+      expect(textarea.querySelector('h1')).toBeInTheDocument();
+      expect(editorMarkdown(textarea)).not.toContain('/h');
     });
   });
 
-  it('toggles to Rich Preview mode with clean rendered typography and interactive clickable checklist', async () => {
+  it('edits a formatted checklist directly without switching document modes', async () => {
     render(
       <FocusView
         artifactId="test-art-1"
@@ -252,38 +235,16 @@ describe('FocusView Layout & Notion-Style Slash Command Experience', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('textarea-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     });
 
-    // Toggle to Rich Preview mode
-    const previewBtn = screen.getByTestId('btn-toggle-preview-mode');
-    fireEvent.click(previewBtn);
-
-    // Verify rich preview canvas is rendered instead of textarea
-    expect(screen.queryByTestId('textarea-editor')).toBeNull();
-    const richCanvas = screen.getByTestId('rich-preview-canvas');
-    expect(richCanvas).toBeInTheDocument();
-
-    // Verify checklist checkboxes are rendered as real interactive HTML checkboxes
-    const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    expect(checkboxes.length).toBeGreaterThanOrEqual(2);
-    expect(checkboxes[0].checked).toBe(false);
-
-    // Click on the first checkbox
-    fireEvent.click(checkboxes[0]);
-
-    // Checkbox should now be checked (- [x] )
-    await waitFor(() => {
-      expect(checkboxes[0].checked).toBe(true);
-      expect(ipc.saveArtifact).toHaveBeenCalled();
-    });
-
-    // Toggle back to Live Edit mode
-    const editBtn = screen.getByTestId('btn-toggle-edit-mode');
-    fireEvent.click(editBtn);
+    expect(screen.queryByTestId('btn-toggle-preview-mode')).not.toBeInTheDocument();
+    expect(screen.getByTestId('document-editor')).toHaveAttribute('contenteditable', 'true');
+    const taskCheckbox = screen.getAllByRole('checkbox')[0];
+    fireEvent.click(taskCheckbox);
 
     // Textarea is restored and reflects the toggled checkbox (- [x] )
-    const textarea = screen.getByTestId('textarea-editor') as HTMLTextAreaElement;
-    expect(textarea.value).toContain('- [x] Define invariant schemas');
+    const textarea = screen.getByTestId('document-editor') as HTMLElement;
+    expect(editorMarkdown(textarea)).toContain('- [x] Define invariant schemas');
   });
 });
