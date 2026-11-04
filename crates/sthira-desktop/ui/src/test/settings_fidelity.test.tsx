@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ModelSettingsModal } from '../components/ModelSettingsModal';
+import { App } from '../App';
 import { ThemeProvider } from '../context/ThemeContext';
 
 const mockInvoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
 describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
@@ -235,5 +241,141 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
 
     fireEvent.click(cancelBtn);
     expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking Settings in LeftSidebar opens ModelSettingsModal without blanking page, and can be closed', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'cmd_get_home_state') {
+        return Promise.resolve({ projects: [], recent_items: [], loose_captures: [] });
+      }
+      if (cmd === 'cmd_get_workspace_tree') {
+        return Promise.resolve({ projects: [], unassociated_pages: [] });
+      }
+      if (cmd === 'cmd_get_sidebar_items') {
+        return Promise.resolve({ projects: [], notes: [], objects: [] });
+      }
+      if (cmd === 'cmd_list_object_types') return Promise.resolve([]);
+      if (cmd === 'cmd_get_provider_catalog') {
+        return Promise.resolve(sampleProviders);
+      }
+      if (cmd === 'cmd_get_search_providers') {
+        return Promise.resolve(sampleSearchProviders);
+      }
+      return Promise.resolve(null);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    // Initial state: modal is NOT in the document
+    expect(screen.queryByTestId('model-settings-modal')).not.toBeInTheDocument();
+
+    // Find and click the Settings button in LeftSidebar
+    const sidebarSettingsBtn = screen.getByRole('button', { name: /^settings$/i });
+    expect(sidebarSettingsBtn).toBeInTheDocument();
+    await user.click(sidebarSettingsBtn);
+
+    // Modal renders successfully with title and tabs without crashing or blanking page
+    await waitFor(() => {
+      expect(screen.getByTestId('model-settings-modal')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 2, name: /Model & Workspace Settings/i })).toBeInTheDocument();
+    });
+
+    // Close button dismisses the modal
+    const closeBtn = screen.getByRole('button', { name: /Close Settings/i });
+    await user.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('model-settings-modal')).not.toBeInTheDocument();
+    });
+
+    // Main workspace remains intact and rendered
+    expect(screen.getByTestId('center-workspace')).toBeInTheDocument();
+  });
+
+  it('clicking Model Settings chip on HomeView opens modal cleanly', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'cmd_get_home_state') {
+        return Promise.resolve({ projects: [], recent_items: [], loose_captures: [] });
+      }
+      if (cmd === 'cmd_get_workspace_tree') {
+        return Promise.resolve({ projects: [], unassociated_pages: [] });
+      }
+      if (cmd === 'cmd_get_sidebar_items') {
+        return Promise.resolve({ projects: [], notes: [], objects: [] });
+      }
+      if (cmd === 'cmd_list_object_types') return Promise.resolve([]);
+      if (cmd === 'cmd_get_provider_catalog') {
+        return Promise.resolve(sampleProviders);
+      }
+      if (cmd === 'cmd_get_search_providers') {
+        return Promise.resolve(sampleSearchProviders);
+      }
+      return Promise.resolve(null);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    const homeSettingsBtn = screen.getByTestId('home-model-chip');
+    expect(homeSettingsBtn).toBeInTheDocument();
+    await user.click(homeSettingsBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('model-settings-modal')).toBeInTheDocument();
+    });
+  });
+
+  it('persists 2-column layout and left guidance/navigation pane across all 4 tabs', async () => {
+    render(
+      <ThemeProvider>
+        <ModelSettingsModal isOpen={true} onClose={vi.fn()} onVaultMutated={vi.fn()} />
+      </ThemeProvider>
+    );
+
+    // Initial tab: models
+    expect(screen.getByTestId('quick-setup-models')).toHaveClass('active');
+    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
+
+    // 1. Switch to search via left pane
+    fireEvent.click(screen.getByTestId('quick-setup-search'));
+    expect(screen.getByTestId('quick-setup-search')).toHaveClass('active');
+    // Ensure left guidance and all quick setup buttons remain mounted!
+    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Web Search Providers/i })).toBeInTheDocument();
+
+    // 2. Switch to appearance via left pane
+    fireEvent.click(screen.getByTestId('quick-setup-appearance'));
+    expect(screen.getByTestId('quick-setup-appearance')).toHaveClass('active');
+    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Theme & Visual Appearance/i })).toBeInTheDocument();
+
+    // 3. Switch to vault via left pane
+    fireEvent.click(screen.getByTestId('quick-setup-vault'));
+    expect(screen.getByTestId('quick-setup-vault')).toHaveClass('active');
+    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Vault Invariants & Local Storage/i })).toBeInTheDocument();
+
+    // 4. Switch back to models via left pane
+    fireEvent.click(screen.getByTestId('quick-setup-models'));
+    expect(screen.getByTestId('quick-setup-models')).toHaveClass('active');
+    expect(screen.getByRole('heading', { name: /Connected Providers & Models/i })).toBeInTheDocument();
+    expect(screen.getByText('Your AI workspace, your way.')).toBeInTheDocument();
   });
 });

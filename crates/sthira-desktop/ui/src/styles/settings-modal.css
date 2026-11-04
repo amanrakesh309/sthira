@@ -298,6 +298,21 @@
   border-color: var(--sthira-border-strong);
 }
 
+.settings-quick-row.active {
+  background-color: var(--sthira-surface-muted);
+  border-color: var(--sthira-primary);
+  box-shadow: 0 0 0 1px var(--sthira-primary);
+}
+
+.settings-quick-row.active .settings-quick-title {
+  color: var(--sthira-primary);
+  font-weight: 700;
+}
+
+.settings-quick-row.active svg {
+  color: var(--sthira-primary);
+}
+
 .settings-quick-row-left {
   display: flex;
   align-items: center;

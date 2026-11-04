@@ -285,7 +285,9 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  const totalRegisteredModels = useMemo(() => {
+    return providers.reduce((sum, p) => sum + (p.models?.length || 0), 0);
+  }, [providers]);
 
   const handleToggleKeyVisibility = (providerId: string) => {
     setShowKeys((prev) => ({ ...prev, [providerId]: !prev[providerId] }));
@@ -618,9 +620,41 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     });
   };
 
-  const totalRegisteredModels = useMemo(() => {
-    return providers.reduce((sum, p) => sum + p.models.length, 0);
-  }, [providers]);
+  const guidanceInfo = useMemo(() => {
+    switch (activeTab) {
+      case 'search':
+        return {
+          icon: <Globe className="w-4 h-4" />,
+          title: 'Ground your research with live web context.',
+          desc: 'Configure search engines and headless scrapers to give models access to up-to-date web pages and citations.',
+          footer: `${searchProviders.length} ${searchProviders.length === 1 ? 'provider' : 'providers'} · ${searchProviders.filter((p) => p.is_enabled).length} active`,
+        };
+      case 'appearance':
+        return {
+          icon: <Sun className="w-4 h-4" />,
+          title: 'Craft your contemplative workspace.',
+          desc: 'Choose visual themes and color balance designed for deep reading, minimal glare, and epistemic clarity.',
+          footer: 'Warm Stone · Deep Obsidian · System',
+        };
+      case 'vault':
+        return {
+          icon: <Layers className="w-4 h-4" />,
+          title: 'Local-first storage & atomic safety.',
+          desc: 'SQLite database transactions adhere strictly to the 7-Layer Reversibility Protocol with atomic rollback guarantees.',
+          footer: '7-Layer Protocol · SQLite Engine',
+        };
+      case 'models':
+      default:
+        return {
+          icon: <Layers className="w-4 h-4" />,
+          title: 'Your AI workspace, your way.',
+          desc: 'Connect the model providers you use, choose your models, and set up a default for everyday work.',
+          footer: `${providers.length} ${providers.length === 1 ? 'provider' : 'providers'} · ${totalRegisteredModels} registered ${totalRegisteredModels === 1 ? 'model' : 'models'}`,
+        };
+    }
+  }, [activeTab, providers.length, totalRegisteredModels, searchProviders]);
+
+  if (!isOpen) return null;
 
   return (
     <div
@@ -715,101 +749,118 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
           </div>
         )}
 
-        {/* 3. Main Modal Body */}
-        {activeTab === 'models' && (
-          <div className="settings-body-grid">
-            {/* Left Guidance Column */}
-            <div className="settings-guidance-col">
-              <div className="settings-guidance-card">
-                {/* Subtle mountain wash in guidance card */}
-                <div className="settings-card-art" aria-hidden="true">
-                  <svg viewBox="0 0 240 70" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-25 dark:opacity-10">
-                    <path d="M0 70 Q60 40 120 50 T240 30 L240 70 Z" fill="#667A58" />
-                    <path d="M80 70 Q140 20 200 25 T240 15 L240 70 Z" fill="#49583D" />
-                  </svg>
-                </div>
-
-                <div className="settings-guidance-icon">
-                  <Layers className="w-4 h-4" />
-                </div>
-                <h3 className="settings-guidance-title">Your AI workspace, your way.</h3>
-                <p className="settings-guidance-desc">
-                  Connect the model providers you use, choose your models, and set up a default for everyday work.
-                </p>
-                <div className="mt-3 pt-3 border-t border-sthira-border/50 text-[11px] text-sthira-text-muted">
-                  {providers.length} {providers.length === 1 ? 'provider' : 'providers'} · {totalRegisteredModels} registered {totalRegisteredModels === 1 ? 'model' : 'models'}
-                </div>
-              </div>
-
-              <div className="settings-quick-setup">
-                <div className="settings-quick-label">Quick setup</div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('search')}
-                  className="settings-quick-row"
-                  data-testid="quick-setup-search"
-                >
-                  <div className="settings-quick-row-left">
-                    <Globe className="w-4 h-4 text-sthira-text-muted" />
-                    <div>
-                      <span className="settings-quick-title">Search Tools</span>
-                      <span className="settings-quick-sub">Add and configure search tools</span>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('appearance')}
-                  className="settings-quick-row"
-                  data-testid="quick-setup-appearance"
-                >
-                  <div className="settings-quick-row-left">
-                    <Sun className="w-4 h-4 text-sthira-text-muted" />
-                    <div>
-                      <span className="settings-quick-title">Theme &amp; Display</span>
-                      <span className="settings-quick-sub">Themes, look &amp; feel, and more</span>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('vault')}
-                  className="settings-quick-row"
-                  data-testid="quick-setup-vault"
-                >
-                  <div className="settings-quick-row-left">
-                    <Layers className="w-4 h-4 text-sthira-text-muted" />
-                    <div>
-                      <span className="settings-quick-title">Storage &amp; Vault</span>
-                      <span className="settings-quick-sub">Set up knowledge, files, and sync</span>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
-                </button>
-              </div>
-
-              {/* Botanical Leaf Art */}
-              <div className="settings-botanical-art hidden sm:flex" aria-hidden="true">
-                <svg viewBox="0 0 160 90" fill="none" className="w-28 h-auto opacity-35 dark:opacity-15 text-sthira-primary">
-                  <path d="M20 85 C40 55 80 40 140 20 C100 45 70 75 60 88" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                  <path d="M55 52 C75 35 110 32 135 22 C105 40 85 55 75 68" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M35 70 C50 55 75 50 95 45 C75 60 60 72 50 82" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        {/* 3. Main Modal Body (2-Column Grid Across All Tabs) */}
+        <div className="settings-body-grid">
+          {/* Left Guidance Column */}
+          <div className="settings-guidance-col">
+            <div className="settings-guidance-card">
+              {/* Subtle mountain wash in guidance card */}
+              <div className="settings-card-art" aria-hidden="true">
+                <svg viewBox="0 0 240 70" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-25 dark:opacity-10">
+                  <path d="M0 70 Q60 40 120 50 T240 30 L240 70 Z" fill="#667A58" />
+                  <path d="M80 70 Q140 20 200 25 T240 15 L240 70 Z" fill="#49583D" />
                 </svg>
+              </div>
+
+              <div className="settings-guidance-icon">
+                {guidanceInfo.icon}
+              </div>
+              <h3 className="settings-guidance-title">{guidanceInfo.title}</h3>
+              <p className="settings-guidance-desc">
+                {guidanceInfo.desc}
+              </p>
+              <div className="mt-3 pt-3 border-t border-sthira-border/50 text-[11px] text-sthira-text-muted">
+                {guidanceInfo.footer}
               </div>
             </div>
 
-            {/* Right Content Column */}
-            <div className="settings-content-col">
-              <div className="settings-section-header">
-                <h3 className="settings-section-title">Connected Providers &amp; Models</h3>
-                <p className="settings-section-sub">
-                  Add model providers, manage available models, and choose a default for your workspace.
-                </p>
-              </div>
+            <div className="settings-quick-setup">
+              <div className="settings-quick-label">Quick setup</div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('models')}
+                className={`settings-quick-row ${activeTab === 'models' ? 'active' : ''}`}
+                data-testid="quick-setup-models"
+              >
+                <div className="settings-quick-row-left">
+                  <Server className="w-4 h-4 text-sthira-text-muted" />
+                  <div>
+                    <span className="settings-quick-title">Connected Providers</span>
+                    <span className="settings-quick-sub">Manage AI models &amp; keys</span>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('search')}
+                className={`settings-quick-row ${activeTab === 'search' ? 'active' : ''}`}
+                data-testid="quick-setup-search"
+              >
+                <div className="settings-quick-row-left">
+                  <Globe className="w-4 h-4 text-sthira-text-muted" />
+                  <div>
+                    <span className="settings-quick-title">Search Tools</span>
+                    <span className="settings-quick-sub">Add and configure search tools</span>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('appearance')}
+                className={`settings-quick-row ${activeTab === 'appearance' ? 'active' : ''}`}
+                data-testid="quick-setup-appearance"
+              >
+                <div className="settings-quick-row-left">
+                  <Sun className="w-4 h-4 text-sthira-text-muted" />
+                  <div>
+                    <span className="settings-quick-title">Theme &amp; Display</span>
+                    <span className="settings-quick-sub">Themes, look &amp; feel, and more</span>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('vault')}
+                className={`settings-quick-row ${activeTab === 'vault' ? 'active' : ''}`}
+                data-testid="quick-setup-vault"
+              >
+                <div className="settings-quick-row-left">
+                  <Layers className="w-4 h-4 text-sthira-text-muted" />
+                  <div>
+                    <span className="settings-quick-title">Storage &amp; Vault</span>
+                    <span className="settings-quick-sub">Set up knowledge, files, and sync</span>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+              </button>
+            </div>
+
+            {/* Botanical Leaf Art */}
+            <div className="settings-botanical-art hidden sm:flex" aria-hidden="true">
+              <svg viewBox="0 0 160 90" fill="none" className="w-28 h-auto opacity-35 dark:opacity-15 text-sthira-primary">
+                <path d="M20 85 C40 55 80 40 140 20 C100 45 70 75 60 88" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M55 52 C75 35 110 32 135 22 C105 40 85 55 75 68" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M35 70 C50 55 75 50 95 45 C75 60 60 72 50 82" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Right Content Column */}
+          <div className="settings-content-col">
+            {activeTab === 'models' && (
+              <div className="space-y-6 animate-in fade-in duration-100">
+                <div className="settings-section-header">
+                  <h3 className="settings-section-title">Connected Providers &amp; Models</h3>
+                  <p className="settings-section-sub">
+                    Add model providers, manage available models, and choose a default for your workspace.
+                  </p>
+                </div>
 
               {/* Add New Provider Card Form */}
               {isAddingProvider && (
@@ -1371,18 +1422,17 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* 4. WEB SEARCH PROVIDERS TAB */}
-        {activeTab === 'search' && (
-          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs">
-            <div className="settings-section-header">
-              <h3 className="settings-section-title">Web Search Providers</h3>
-              <p className="settings-section-sub">
-                Configure external search engines and headless scrapers for research evidence grounding.
-              </p>
-            </div>
+          {/* 4. WEB SEARCH PROVIDERS TAB */}
+          {activeTab === 'search' && (
+            <div className="space-y-6 animate-in fade-in duration-100">
+              <div className="settings-section-header">
+                <h3 className="settings-section-title">Web Search Providers</h3>
+                <p className="settings-section-sub">
+                  Configure external search engines and headless scrapers for research evidence grounding.
+                </p>
+              </div>
 
             <div className="space-y-4">
               {searchProviders.map((provider) => {
@@ -1607,7 +1657,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
 
         {/* 5. APPEARANCE TAB */}
         {activeTab === 'appearance' && (
-          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs animate-in fade-in">
+          <div className="space-y-6 animate-in fade-in duration-100">
             <div className="settings-section-header">
               <h3 className="settings-section-title">Theme &amp; Visual Appearance</h3>
               <p className="settings-section-sub">
@@ -1652,7 +1702,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
 
         {/* 6. VAULT & STORAGE TAB */}
         {activeTab === 'vault' && (
-          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs animate-in fade-in">
+          <div className="space-y-6 animate-in fade-in duration-100">
             <div className="settings-section-header">
               <h3 className="settings-section-title">Vault Invariants &amp; Local Storage</h3>
               <p className="settings-section-sub">
@@ -1699,8 +1749,10 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             </div>
           </div>
         )}
+      </div>
+    </div>
 
-        {/* 7. Modal Footer with Cancel & Save Changes */}
+    {/* 7. Modal Footer with Cancel & Save Changes */}
         <div className="settings-footer">
           <button
             type="button"
