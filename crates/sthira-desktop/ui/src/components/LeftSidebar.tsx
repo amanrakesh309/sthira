@@ -1066,7 +1066,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <FileText className="w-3.5 h-3.5 shrink-0 text-sthira-text-muted" />
+                      <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-sthira-on-primary' : 'text-sthira-text-muted'}`} />
                       {renamingId === note.id ? (
                         <input
                           type="text"
@@ -1103,7 +1103,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       data-menu-container
                     >
                       {note.project_name && (
-                        <span className="text-[9px] px-1 py-0.2 rounded bg-sthira-border/60 text-sthira-text-muted truncate max-w-[70px]">
+                        <span className={`text-[11px] px-1 rounded truncate max-w-[70px] ${isActive ? 'text-sthira-on-primary' : 'bg-sthira-surface-muted text-sthira-text-muted'}`}>
                           {note.project_name}
                         </span>
                       )}

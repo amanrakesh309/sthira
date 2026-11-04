@@ -1,226 +1,73 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Calendar, Pencil } from 'lucide-react';
 import type { PropertyDefinition } from '../../types/sthira';
 
 interface PropertyFieldRendererProps {
   definition: PropertyDefinition;
   value: any;
-  onChange: (val: any) => void;
+  onChange: (value: any) => void;
   isReadOnly?: boolean;
   compact?: boolean;
 }
 
-export const PropertyFieldRenderer: React.FC<PropertyFieldRendererProps> = ({
-  definition,
-  value,
-  onChange,
-  isReadOnly = false,
-  compact = false,
-}) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [internalVal, setInternalVal] = useState(value ?? '');
-
-  useEffect(() => {
-    setInternalVal(value ?? '');
-  }, [value]);
-
-  const handleBlurOrCommit = () => {
-    setIsEditing(false);
-    if (internalVal !== value) {
-      onChange(internalVal);
+export function PropertyFieldRenderer({ definition, value, onChange, isReadOnly = false, compact = false }: PropertyFieldRendererProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? '');
+  const committed = useRef(value ?? '');
+  const skipCommit = useRef(false);
+  useEffect(() => { setDraft(value ?? ''); committed.current = value ?? ''; }, [value]);
+  const begin = () => { skipCommit.current = false; setEditing(true); };
+  const commit = () => {
+    setEditing(false);
+    if (skipCommit.current) { skipCommit.current = false; return; }
+    if (draft !== committed.current) { committed.current = draft; onChange(draft); }
+  };
+  const label = definition.label;
+  const text = value === undefined || value === null || value === '' ? '—' : String(value);
+  const inputKeys = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); skipCommit.current = true;
+      setDraft(value ?? ''); event.currentTarget.blur(); setEditing(false);
     }
   };
 
-  switch (definition.property_type) {
-    case 'boolean': {
-      const checked = Boolean(value);
-      return (
-        <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={checked}
-            disabled={isReadOnly}
-            onChange={(e) => onChange(e.target.checked)}
-            className="w-4 h-4 rounded border-[#D5D2C9] text-[#282C25] focus:ring-1 focus:ring-[#282C25] cursor-pointer accent-[#282C25]"
-          />
-          {!compact && (
-            <span className="text-xs text-[#52544D]">
-              {checked ? 'Yes' : 'No'}
-            </span>
-          )}
-        </label>
-      );
-    }
+  if (definition.property_type === 'boolean') return <label className="property-field property-checkbox">
+    <input type="checkbox" aria-label={label} checked={Boolean(value)} disabled={isReadOnly} onChange={event => onChange(event.target.checked)} />
+    {!compact && <span>{value ? 'Yes' : 'No'}</span>}
+  </label>;
 
-    case 'select': {
-      const options = definition.options || [];
-      const currentVal = value || '';
+  if (definition.property_type === 'select') return isReadOnly ? <span className="property-value">{text}</span> :
+    <select className="property-field property-select" aria-label={label} value={value || ''} disabled={isReadOnly}
+      onChange={event => onChange(event.target.value)}>
+      <option value="">Select…</option>{(definition.options || []).map(option => <option key={option} value={option}>{option}</option>)}
+    </select>;
 
-      const getOptionColor = (opt: string) => {
-        const lower = opt.toLowerCase();
-        if (['spark', 'exploring', 'low', 'unread'].includes(lower)) return 'bg-amber-100 text-amber-800 border-amber-200';
-        if (['validated', 'high', 'processed', 'done'].includes(lower)) return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-        if (['dormant', 'medium', 'reading'].includes(lower)) return 'bg-blue-100 text-blue-800 border-blue-200';
-        return 'bg-[#EFECE4] text-[#3A3B36] border-[#E8E5DC]';
-      };
-
-      if (isReadOnly) {
-        return (
-          <span
-            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getOptionColor(
-              currentVal
-            )}`}
-          >
-            {currentVal || '—'}
-          </span>
-        );
-      }
-
-      return (
-        <select
-          value={currentVal}
-          onChange={(e) => onChange(e.target.value)}
-          className={`text-xs px-2 py-1 rounded-md border font-medium cursor-pointer outline-none transition-colors ${getOptionColor(
-            currentVal
-          )}`}
-        >
-          <option value="">Select...</option>
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt.charAt(0).toUpperCase() + opt.slice(1)}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    case 'date': {
-      if (isReadOnly) {
-        return (
-          <span className="inline-flex items-center gap-1 text-xs text-[#52544D]">
-            <Calendar className="w-3 h-3 text-[#8C8A82]" />
-            {value ? String(value) : '—'}
-          </span>
-        );
-      }
-
-      return (
-        <div className="inline-flex items-center gap-1.5">
-          <input
-            type="date"
-            value={value ? String(value) : ''}
-            onChange={(e) => onChange(e.target.value)}
-            className="text-xs px-2 py-0.5 rounded border border-[#E8E5DC] bg-white text-[#1E201C] outline-none focus:border-[#282C25]"
-          />
-        </div>
-      );
-    }
-
-    case 'url': {
-      const urlStr = String(value || '');
-      if (!isEditing && urlStr) {
-        return (
-          <div className="inline-flex items-center gap-1.5 max-w-[200px] group">
-            <a
-              href={urlStr.startsWith('http') ? urlStr : `https://${urlStr}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs text-blue-600 hover:text-blue-800 underline truncate max-w-[170px]"
-              title={urlStr}
-            >
-              {urlStr.replace(/^https?:\/\//, '')}
-            </a>
-            {!isReadOnly && (
-              <button
-                type="button"
-                onClick={() => setIsEditing(true)}
-                className="opacity-0 group-hover:opacity-100 text-[#8C8A82] hover:text-[#1E201C] text-[10px] cursor-pointer"
-                title="Edit URL"
-              >
-                ✎
-              </button>
-            )}
-          </div>
-        );
-      }
-
-      if (isReadOnly) {
-        return <span className="text-xs text-[#8C8A82]">None</span>;
-      }
-
-      return (
-        <div className="inline-flex items-center gap-1">
-          <input
-            type="text"
-            value={internalVal}
-            placeholder="https://..."
-            onChange={(e) => setInternalVal(e.target.value)}
-            onBlur={handleBlurOrCommit}
-            onKeyDown={(e) => e.key === 'Enter' && handleBlurOrCommit()}
-            autoFocus={isEditing}
-            className="text-xs px-2 py-0.5 rounded border border-[#E8E5DC] bg-white text-[#1E201C] outline-none focus:border-[#282C25] w-full"
-          />
-        </div>
-      );
-    }
-
-    case 'number': {
-      if (isReadOnly) {
-        return (
-          <span className="text-xs font-mono text-[#1E201C]">
-            {value !== undefined && value !== null && value !== '' ? String(value) : '—'}
-          </span>
-        );
-      }
-
-      return (
-        <input
-          type="number"
-          value={internalVal}
-          onChange={(e) => setInternalVal(e.target.value)}
-          onBlur={handleBlurOrCommit}
-          onKeyDown={(e) => e.key === 'Enter' && handleBlurOrCommit()}
-          className="text-xs px-2 py-0.5 rounded border border-[#E8E5DC] bg-white font-mono text-[#1E201C] outline-none focus:border-[#282C25] w-20"
-        />
-      );
-    }
-
-    case 'text':
-    default: {
-      if (isReadOnly) {
-        return (
-          <span className="text-xs text-[#3A3B36] truncate max-w-[240px]" title={String(value || '')}>
-            {value ? String(value) : '—'}
-          </span>
-        );
-      }
-
-      if (!isEditing && compact) {
-        return (
-          <div
-            onClick={() => setIsEditing(true)}
-            className="text-xs text-[#3A3B36] truncate max-w-[240px] px-1 py-0.5 rounded hover:bg-[#EFECE4] cursor-text min-h-[20px]"
-            title="Click to edit"
-          >
-            {value ? String(value) : <span className="text-[#B0ACA2] italic">Empty</span>}
-          </div>
-        );
-      }
-
-      return (
-        <input
-          type="text"
-          value={internalVal}
-          onChange={(e) => setInternalVal(e.target.value)}
-          onBlur={handleBlurOrCommit}
-          onKeyDown={(e) => e.key === 'Enter' && handleBlurOrCommit()}
-          autoFocus={isEditing}
-          placeholder={`Enter ${definition.label.toLowerCase()}...`}
-          className="text-xs px-2 py-0.5 rounded border border-[#E8E5DC] bg-white text-[#1E201C] outline-none focus:border-[#282C25] w-full"
-        />
-      );
-    }
+  if (definition.property_type === 'multiselect') {
+    const selected: string[] = Array.isArray(value) ? value : [];
+    if (isReadOnly) return <span className="property-value">{selected.join(', ') || '—'}</span>;
+    return <details className="property-field property-multiselect"><summary aria-label={label}>{selected.join(', ') || 'Select…'}</summary>
+      <fieldset><legend className="sr-only">{label}</legend>{(definition.options || []).map(option => <label key={option}>
+        <input type="checkbox" checked={selected.includes(option)} onChange={event => onChange(event.target.checked ? [...selected, option] : selected.filter(v => v !== option))} />{option}
+      </label>)}</fieldset>
+    </details>;
   }
-};
+
+  if (definition.property_type === 'date') return isReadOnly ? <span className="property-value"><Calendar size={14} />{text}</span> :
+    <input className="property-field" aria-label={label} type="date" value={value ? String(value) : ''} onChange={event => onChange(event.target.value)} />;
+
+  if (definition.property_type === 'url' && !editing && value) return <span className="property-url">
+    <a href={/^https?:\/\//i.test(String(value)) ? String(value) : `https://${value}`} target="_blank" rel="noreferrer" title={String(value)}>{String(value).replace(/^https?:\/\//, '')}</a>
+    {!isReadOnly && <button type="button" className="directory-icon-button" aria-label={`Edit ${label}`} onClick={begin}><Pencil size={14} /></button>}
+  </span>;
+
+  if (isReadOnly) return <span className="property-value" title={text}>{text}</span>;
+  if (definition.property_type !== 'number' && definition.property_type !== 'url' && compact && !editing) return <button type="button" className="property-field property-inline-edit" onClick={begin} aria-label={`Edit ${label}`} title={text}>{text === '—' ? 'Empty' : text}</button>;
+
+  return <input className={`property-field ${definition.property_type === 'number' ? 'property-number' : ''}`} aria-label={label}
+    type={definition.property_type === 'number' ? 'number' : 'text'} value={draft}
+    autoFocus={editing} placeholder={definition.property_type === 'url' ? 'https://…' : `Enter ${label.toLowerCase()}…`}
+    onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={inputKeys} />;
+}
 
 export default PropertyFieldRenderer;

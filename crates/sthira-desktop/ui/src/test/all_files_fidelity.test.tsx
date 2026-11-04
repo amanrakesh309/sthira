@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { WorkspaceIndexView } from '../views/WorkspaceIndexView';
 import * as ipc from '../api/ipc';
 import type { WorkspaceIndexData, ObjectType } from '../types/sthira';
@@ -148,7 +148,7 @@ describe('All Files Fidelity and Interaction Tests', () => {
     );
 
     expect(await screen.findByRole('heading', { level: 1, name: /All Files/i })).toBeInTheDocument();
-    expect(screen.getByText('WORKSPACE')).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByTestId('search-input')).toBeInTheDocument();
 
     // Verify tabs with real counts
@@ -233,6 +233,7 @@ describe('All Files Fidelity and Interaction Tests', () => {
   });
 
   it('supports search input, live filtering, and clear button', async () => {
+    vi.mocked(ipc.getWorkspaceIndex).mockImplementation(async (_tab, search) => ({ ...mockIndexData, items: mockIndexData.items.filter(item => !search || item.title.toLowerCase().includes(search.toLowerCase())) }));
     render(
       <WorkspaceIndexView
         onOpenProject={vi.fn()}
@@ -243,12 +244,16 @@ describe('All Files Fidelity and Interaction Tests', () => {
     const searchInput = await screen.findByTestId('search-input');
     fireEvent.change(searchInput, { target: { value: 'Thermal' } });
 
+    await waitFor(() => expect(screen.queryByTestId('index-item-proj-1')).not.toBeInTheDocument());
+    expect(screen.getByTestId('index-item-note-1')).toBeInTheDocument();
+    expect(ipc.getWorkspaceIndex).toHaveBeenLastCalledWith('all', 'Thermal');
     // Should show clear button
     const clearBtn = screen.getByRole('button', { name: /Clear/i });
     expect(clearBtn).toBeInTheDocument();
 
     fireEvent.click(clearBtn);
     expect(searchInput).toHaveValue('');
+    expect(await screen.findByTestId('index-item-proj-1')).toBeInTheDocument();
   });
 
   it('toggles item pin without opening row', async () => {
@@ -290,4 +295,36 @@ describe('All Files Fidelity and Interaction Tests', () => {
     // ProjectDeletionModal should open
     expect(await screen.findByTestId('btn-confirm-delete-project')).toBeInTheDocument();
   });
+  it('uses the registered name, icon and color for a customized built-in type', async () => {
+    const openCollection = vi.fn();
+    vi.mocked(ipc.listObjectTypes).mockResolvedValue(mockObjectTypes.map(type => type.id === 'decision' ? { ...type, display_name: 'Approval', icon: '🧪', color: '#123456' } : type));
+    render(<WorkspaceIndexView initialTab="objects" onOpenProject={vi.fn()} onOpenArtifact={vi.fn()} onOpenObjectCollection={openCollection} />);
+    const badge = await screen.findByRole('button', { name: 'Open Approval collection' });
+    expect(badge).toHaveTextContent('Approval');
+    expect(badge.querySelector('.object-identity')).toHaveStyle({ '--object-color': '#123456' });
+    fireEvent.click(badge);
+    expect(openCollection).toHaveBeenCalledWith('decision');
+  });
+
+  it('offers a retry when pinning fails and never opens the record', async () => {
+    vi.mocked(ipc.togglePin).mockRejectedValueOnce(new Error('Write failed')).mockResolvedValueOnce();
+    const open = vi.fn();
+    render(<WorkspaceIndexView onOpenProject={vi.fn()} onOpenArtifact={open} />);
+    fireEvent.click(await screen.findByTestId('pin-btn-note-1'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t update this item');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(ipc.togglePin).toHaveBeenCalledTimes(2);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('opens a registered collection even when that type has no records', async () => {
+    const openCollection = vi.fn();
+    render(<WorkspaceIndexView initialTab="objects" onOpenProject={vi.fn()} onOpenArtifact={vi.fn()} onOpenObjectCollection={openCollection} />);
+    fireEvent.click(await screen.findByTestId('type-filter-idea'));
+    expect(screen.getByText('No items found')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open collection' }));
+    expect(openCollection).toHaveBeenCalledWith('idea');
+  });
+
 });

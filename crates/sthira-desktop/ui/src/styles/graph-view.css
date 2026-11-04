@@ -1,0 +1,434 @@
+/* Knowledge Graph View styles adhering to Sthira Design System v1 */
+
+.graph-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background-color: var(--sthira-canvas);
+  color: var(--sthira-text);
+  overflow: hidden;
+  user-select: none;
+  position: relative;
+}
+
+/* Editorial Header Surface */
+.graph-header {
+  background-color: var(--sthira-canvas);
+  border-bottom: 1px solid var(--sthira-border);
+  padding: 20px 32px 14px 32px;
+  position: relative;
+  z-index: 20;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.graph-header-art {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 580px;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.graph-header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.graph-eyebrow {
+  font-family: var(--sthira-font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sthira-text-muted);
+  margin-bottom: 6px;
+}
+
+.graph-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.graph-title {
+  font-family: var(--sthira-font-editorial);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--sthira-text);
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.graph-stats-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border-radius: 9999px;
+  background-color: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sthira-text-muted);
+  box-shadow: 0 1px 3px rgba(30, 32, 28, 0.04);
+}
+
+.graph-stats-chip strong {
+  font-weight: 600;
+  color: var(--sthira-text);
+}
+
+.graph-subtitle {
+  font-family: var(--sthira-font-ui);
+  font-size: 13px;
+  color: var(--sthira-text-muted);
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+
+/* Secondary Filter & Search Toolbar */
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 32px;
+  background-color: var(--sthira-canvas);
+  border-bottom: 1px solid var(--sthira-border);
+  position: relative;
+  z-index: 19;
+}
+
+.graph-filters-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.graph-filters-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sthira-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+}
+
+.graph-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 13px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--sthira-border);
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.graph-filter-pill:hover {
+  background-color: var(--sthira-surface-muted);
+  border-color: var(--sthira-border-strong);
+}
+
+/* Primary Active Pill (Projects) */
+.graph-filter-pill.active-primary {
+  background-color: var(--sthira-primary);
+  color: var(--sthira-on-primary);
+  border-color: var(--sthira-primary);
+  box-shadow: 0 1px 4px rgba(73, 88, 61, 0.25);
+}
+
+/* Secondary Active Pills (Pages, Ideas, Tasks, etc.) */
+.graph-filter-pill.active-secondary {
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text);
+  border-color: var(--sthira-border-strong);
+  box-shadow: 0 1px 2px rgba(30, 32, 28, 0.04);
+}
+
+.graph-filter-pill.inactive {
+  opacity: 0.55;
+  background-color: transparent;
+  border-color: var(--sthira-border);
+  color: var(--sthira-text-muted);
+}
+
+.graph-filter-pill .check-icon {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+/* Right Toolbar Controls */
+.graph-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-search-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.graph-search-input {
+  padding: 6px 34px 6px 32px;
+  font-size: 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--sthira-border);
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text);
+  outline: none;
+  width: 210px;
+  transition: all 0.15s ease;
+}
+
+.graph-search-input:focus {
+  border-color: var(--sthira-primary);
+  box-shadow: 0 0 0 2px var(--sthira-primary-tint);
+  width: 250px;
+}
+
+.graph-search-icon {
+  position: absolute;
+  left: 11px;
+  width: 14px;
+  height: 14px;
+  color: var(--sthira-text-muted);
+  pointer-events: none;
+}
+
+.graph-search-shortcut {
+  position: absolute;
+  right: 11px;
+  font-size: 10px;
+  font-family: var(--sthira-font-mono);
+  color: var(--sthira-text-muted);
+  background-color: var(--sthira-surface-muted);
+  padding: 1px 4px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.graph-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--sthira-border);
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text-muted);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.graph-btn-icon:hover {
+  background-color: var(--sthira-surface-muted);
+  color: var(--sthira-text);
+  border-color: var(--sthira-border-strong);
+}
+
+/* Canvas Viewport */
+.graph-canvas-wrapper {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--sthira-canvas);
+}
+
+.graph-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+
+.graph-canvas:active {
+  cursor: grabbing;
+}
+
+/* Floating Overlays */
+.graph-legend-card {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  z-index: 10;
+  width: 330px;
+  background-color: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  border-radius: var(--sthira-radius-lg);
+  box-shadow: 0 8px 24px rgba(30, 32, 28, 0.08);
+  padding: 14px 18px;
+  backdrop-filter: blur(8px);
+}
+
+.graph-legend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sthira-text);
+}
+
+.graph-legend-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.graph-legend-row:last-child {
+  margin-bottom: 0;
+}
+
+.graph-legend-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 95px;
+  font-weight: 600;
+  color: var(--sthira-text);
+  flex-shrink: 0;
+}
+
+.graph-legend-desc {
+  color: var(--sthira-text-muted);
+  line-height: 1.35;
+}
+
+/* Viewport Zoom Floating Bar */
+.graph-viewport-toolbar {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.graph-zoom-bar {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  border-radius: 9999px;
+  box-shadow: 0 4px 16px rgba(30, 32, 28, 0.08);
+  padding: 3px 6px;
+}
+
+.graph-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  border: none;
+  background: transparent;
+  color: var(--sthira-text);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.graph-zoom-btn:hover {
+  background-color: var(--sthira-surface-muted);
+}
+
+.graph-zoom-text {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--sthira-font-mono);
+  color: var(--sthira-text);
+  min-width: 46px;
+  text-align: center;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.graph-fit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  background-color: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  color: var(--sthira-text);
+  box-shadow: 0 4px 16px rgba(30, 32, 28, 0.08);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.graph-fit-btn:hover {
+  background-color: var(--sthira-surface-muted);
+  border-color: var(--sthira-border-strong);
+}
+
+/* Radar Minimap */
+.graph-minimap {
+  width: 106px;
+  height: 72px;
+  background-color: #EFECE4;
+  border: 1px solid var(--sthira-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(30, 32, 28, 0.08);
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+}
+
+html.dark .graph-minimap,
+html[data-theme="dark"] .graph-minimap {
+  background-color: #23251F;
+}
+
+.graph-minimap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Selected Node Details Card */
+.graph-selected-card {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 15;
+  width: 310px;
+  background-color: var(--sthira-surface);
+  border: 1px solid var(--sthira-border);
+  border-radius: var(--sthira-radius-lg);
+  box-shadow: 0 12px 32px rgba(30, 32, 28, 0.12);
+  padding: 16px;
+  backdrop-filter: blur(8px);
+}

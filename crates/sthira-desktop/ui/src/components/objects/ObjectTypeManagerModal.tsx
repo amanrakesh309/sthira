@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
 import {
   X,
   Plus,
@@ -301,6 +302,8 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
   initialTypeId,
   onTypesChanged,
 }) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(isOpen, dialogRef, onClose);
   const [types, setTypes] = useState<ObjectType[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<TypeDraft | null>(null);
@@ -529,19 +532,19 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
   return (
     <div
       data-testid="object-type-manager-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm animate-in fade-in"
+      className="object-type-manager-layer"
     >
-      <div className="w-full max-w-5xl h-[86vh] bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div ref={dialogRef} className="object-type-manager" role="dialog" aria-modal="true" aria-labelledby="object-type-manager-title">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#ECE9E0] dark:border-[#2C2E27] flex items-center justify-between bg-[#FAF8F3] dark:bg-[#161714] shrink-0">
+        <div className="object-type-manager-header">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-[#EFECE4] dark:bg-[#252820] text-[#282C25] dark:text-[#EDEAE2] flex items-center justify-center">
               <Settings2 className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2]">
+              <h2 id="object-type-manager-title">
                 Object Types &amp; Templates
-              </h3>
+              </h2>
               <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93]">
                 Define schemas, properties, and default Markdown bodies.
               </p>
@@ -559,7 +562,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
         </div>
 
         {/* Body: Left Type List + Right Editor */}
-        <div className="flex-1 flex overflow-hidden min-h-0">
+        <div className="object-type-manager-body flex-1 flex overflow-hidden min-h-0">
           {/* Left Pane */}
           <aside className="w-64 shrink-0 border-r border-[#ECE9E0] dark:border-[#2C2E27] bg-[#FAF8F3] dark:bg-[#161714] flex flex-col overflow-hidden">
             <div className="px-3 pt-3 pb-2 flex items-center justify-between">
@@ -585,6 +588,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                     key={t.id}
                     type="button"
                     data-testid={`type-list-item-${t.id}`}
+                    aria-pressed={isActive}
                     onClick={() => selectType(t)}
                     className={`w-full text-left px-2.5 py-2 rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer ${
                       isActive
@@ -635,7 +639,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
             {draft ? (
               <>
                 {/* Tab Bar */}
-                <div className="px-6 pt-3 border-b border-[#ECE9E0] dark:border-[#2C2E27] flex items-center justify-between shrink-0">
+                <div className="object-type-manager-tabs">
                   <div className="flex items-center gap-1">
                     {(
                       [
@@ -648,6 +652,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                         key={tab.id}
                         type="button"
                         data-testid={`tab-${tab.id}`}
+                        aria-pressed={activeTab === tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors cursor-pointer ${
                           activeTab === tab.id
@@ -677,6 +682,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                         <input
                           type="text"
                           data-testid="input-type-name"
+                          aria-label="Display Name"
                           value={draft.display_name}
                           onChange={(e) => {
                             const name = e.target.value;
@@ -699,6 +705,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                         </label>
                         <textarea
                           data-testid="textarea-type-description"
+                          aria-label="Description"
                           value={draft.description}
                           onChange={(e) => updateDraft({ description: e.target.value })}
                           rows={2}
@@ -717,6 +724,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                               key={emoji}
                               type="button"
                               data-testid={`icon-option-${emoji}`}
+                              aria-label={`Icon ${emoji}`}
                               onClick={() => updateDraft({ icon: emoji })}
                               className={`w-8 h-8 rounded-lg flex items-center justify-center text-base border transition-colors cursor-pointer ${
                                 draft.icon === emoji
@@ -968,11 +976,12 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
 
 
                 {/* Footer */}
-                <div className="px-6 py-3 border-t border-[#ECE9E0] dark:border-[#2C2E27] bg-[#FAF8F3] dark:bg-[#161714] flex items-center justify-between shrink-0">
+                <div className="object-type-manager-footer">
                   <div className="flex items-center gap-2 min-w-0">
                     {errorMessage && (
                       <span
                         data-testid="object-type-error"
+                        role="alert"
                         className="inline-flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400"
                       >
                         <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -982,6 +991,7 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                     {savedFlash && !errorMessage && (
                       <span
                         data-testid="object-type-saved"
+                        role="status"
                         className="inline-flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold"
                       >
                         <Check className="w-3.5 h-3.5" />

@@ -340,7 +340,7 @@ describe('Workspace Organization Refactor', () => {
     expect(screen.queryByTestId('tab-standalone')).not.toBeInTheDocument();
 
     // Verify items in "All Items" tab
-    expect(screen.getByText('Deep Space Mission')).toBeInTheDocument();
+    expect(screen.getByTestId('index-item-p1')).toHaveTextContent('Deep Space Mission');
     expect(screen.getByText('Unaffiliated Idea Note')).toBeInTheDocument();
     expect(screen.getByText('Thrust Vectoring Decision')).toBeInTheDocument();
 

@@ -2,14 +2,16 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Share2,
   Search,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  ArrowLeft,
+  SlidersHorizontal,
+  Maximize2,
+  MoreHorizontal,
   ExternalLink,
+  Info,
+  Check,
+  RotateCcw,
 } from 'lucide-react';
-import { getKnowledgeGraph } from '../api/ipc';
-import type { KnowledgeGraphData, GraphNode, GraphEdge } from '../types/sthira';
+import { getKnowledgeGraph, listObjectTypes } from '../api/ipc';
+import type { KnowledgeGraphData, GraphNode, GraphEdge, ObjectType } from '../types/sthira';
 
 interface GraphViewProps {
   onOpenProject: (projectId: string) => void;
@@ -23,6 +25,8 @@ interface SimNode extends GraphNode {
   vx: number;
   vy: number;
   radius: number;
+  cardWidth?: number;
+  cardHeight?: number;
   isDragging?: boolean;
 }
 
@@ -37,6 +41,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
   onBack,
 }) => {
   const [graphData, setGraphData] = useState<KnowledgeGraphData>({ nodes: [], edges: [] });
+  const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,13 +51,18 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const [showIdeas, setShowIdeas] = useState(true);
   const [showTasks, setShowTasks] = useState(true);
   const [showSources, setShowSources] = useState(true);
+  const [selectedCustomTypes, setSelectedCustomTypes] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState('');
 
   // Selected & Hovered Node
   const [selectedNode, setSelectedNode] = useState<SimNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<SimNode | null>(null);
+  const [zoomScale, setZoomScale] = useState(1);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
   const simNodesRef = useRef<SimNode[]>([]);
   const simEdgesRef = useRef<SimEdge[]>([]);
   const animFrameIdRef = useRef<number | null>(null);
@@ -63,13 +73,17 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const panStartRef = useRef({ x: 0, y: 0 });
   const draggedNodeRef = useRef<SimNode | null>(null);
 
-  // Load graph data from backend
+  // Load graph data & registered types from backend
   const loadGraph = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await getKnowledgeGraph();
-      setGraphData(data);
+      const [data, types] = await Promise.all([
+        getKnowledgeGraph(),
+        listObjectTypes().catch(() => [] as ObjectType[]),
+      ]);
+      setGraphData(data || { nodes: [], edges: [] });
+      setObjectTypes(Array.isArray(types) ? types : []);
     } catch (err: any) {
       console.error('Failed to load knowledge graph', err);
       setError(err?.toString() || 'Failed to load knowledge graph');
@@ -82,6 +96,30 @@ export const GraphView: React.FC<GraphViewProps> = ({
     loadGraph();
   }, [loadGraph]);
 
+  // Global keyboard shortcuts (⌘F / Ctrl+F for search, Escape to clear)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        const activeTag = document.activeElement?.tagName;
+        if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
+          e.preventDefault();
+          searchInputRef.current?.focus();
+        }
+      } else if (e.key === 'Escape') {
+        if (selectedNode) {
+          setSelectedNode(null);
+        } else if (searchQuery) {
+          setSearchQuery('');
+        } else if (onBack) {
+          onBack();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNode, searchQuery]);
+
   // Determine visibility of a node based on current filter states
   const isNodeVisible = useCallback(
     (node: GraphNode): boolean => {
@@ -92,18 +130,21 @@ export const GraphView: React.FC<GraphViewProps> = ({
         if (ot === 'idea') return showIdeas;
         if (ot === 'todo' || ot === 'task') return showTasks;
         if (ot === 'source' || ot === 'decision') return showSources;
+        if (selectedCustomTypes[ot] !== undefined) {
+          return selectedCustomTypes[ot];
+        }
         return true;
       }
       return true;
     },
-    [showProjects, showPages, showIdeas, showTasks, showSources]
+    [showProjects, showPages, showIdeas, showTasks, showSources, selectedCustomTypes]
   );
 
   // Initialize or update simulation nodes & edges when graphData or filters change
   useEffect(() => {
     const canvas = canvasRef.current;
-    const width = canvas ? canvas.clientWidth : 800;
-    const height = canvas ? canvas.clientHeight : 600;
+    const width = canvas ? canvas.clientWidth : 900;
+    const height = canvas ? canvas.clientHeight : 650;
 
     const visibleNodesMap = new Map<string, SimNode>();
     const existingNodesMap = new Map<string, SimNode>(
@@ -112,20 +153,72 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
     const filteredNodes = graphData.nodes.filter(isNodeVisible);
 
+    // Group items around their projects if possible
+    const projectPositions = new Map<string, { x: number; y: number }>();
+    const projectNodes = filteredNodes.filter((n) => n.kind === 'project');
+
+    projectNodes.forEach((pNode, pIdx) => {
+      const existing = existingNodesMap.get(pNode.id);
+      if (existing) {
+        projectPositions.set(pNode.id, { x: existing.x, y: existing.y });
+      } else {
+        const angle = (pIdx / Math.max(1, projectNodes.length)) * 2 * Math.PI - Math.PI / 4;
+        const dist = 180 + (pIdx % 3) * 60;
+        projectPositions.set(pNode.id, {
+          x: width / 2 + Math.cos(angle) * dist,
+          y: height / 2 + Math.sin(angle) * dist,
+        });
+      }
+    });
+
     filteredNodes.forEach((node, idx) => {
       const existing = existingNodesMap.get(node.id);
-      const angle = (idx / Math.max(1, filteredNodes.length)) * 2 * Math.PI;
-      const radiusDist = 120 + (idx % 4) * 55;
 
-      let radius = 22;
-      if (node.kind === 'project') radius = 34;
-      else if (node.kind === 'object') radius = 26;
+      let radius = 24;
+      let cardWidth = 180;
+      const cardHeight = 42;
+
+      if (node.kind === 'project') {
+        radius = 34;
+      } else {
+        // Approximate card width based on label length
+        const labelLen = node.label.length;
+        cardWidth = Math.min(240, Math.max(150, labelLen * 7 + 60));
+        radius = cardWidth / 2;
+      }
+
+      let initX = width / 2;
+      let initY = height / 2;
+
+      if (existing) {
+        initX = existing.x;
+        initY = existing.y;
+      } else if (node.kind === 'project') {
+        const pos = projectPositions.get(node.id);
+        if (pos) {
+          initX = pos.x;
+          initY = pos.y;
+        }
+      } else if (node.project_id && projectPositions.has(node.project_id)) {
+        const parentPos = projectPositions.get(node.project_id)!;
+        const angle = (idx * 1.37) % (2 * Math.PI);
+        const dist = 130 + (idx % 3) * 40;
+        initX = parentPos.x + Math.cos(angle) * dist + (Math.random() - 0.5) * 30;
+        initY = parentPos.y + Math.sin(angle) * dist + (Math.random() - 0.5) * 30;
+      } else {
+        const angle = (idx / Math.max(1, filteredNodes.length)) * 2 * Math.PI;
+        const dist = 220 + (idx % 4) * 50;
+        initX = width / 2 + Math.cos(angle) * dist + (Math.random() - 0.5) * 40;
+        initY = height / 2 + Math.sin(angle) * dist + (Math.random() - 0.5) * 40;
+      }
 
       const simNode: SimNode = {
         ...node,
         radius,
-        x: existing ? existing.x : width / 2 + Math.cos(angle) * radiusDist + (Math.random() - 0.5) * 40,
-        y: existing ? existing.y : height / 2 + Math.sin(angle) * radiusDist + (Math.random() - 0.5) * 40,
+        cardWidth,
+        cardHeight,
+        x: initX,
+        y: initY,
         vx: existing ? existing.vx : 0,
         vy: existing ? existing.vy : 0,
       };
@@ -152,7 +245,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     simEdgesRef.current = simEdges;
   }, [graphData, isNodeVisible]);
 
-  // Simulation step & Canvas render loop
+  // Canvas render loop & Physics step
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -162,13 +255,51 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
     let isRunning = true;
 
+    // Helper for rounded rect on canvas with jsdom test environment compatibility
+    const drawRoundRect = (
+      c: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      r: number
+    ) => {
+      if (typeof c.roundRect === 'function') {
+        c.beginPath();
+        c.roundRect(x, y, w, h, r);
+        return;
+      }
+      if (typeof c.arcTo === 'function') {
+        const rad = Math.min(r, w / 2, h / 2);
+        c.beginPath();
+        c.moveTo(x + rad, y);
+        c.arcTo(x + w, y, x + w, y + h, rad);
+        c.arcTo(x + w, y + h, x, y + h, rad);
+        c.arcTo(x, y + h, x, y, rad);
+        c.arcTo(x, y, x + w, y, rad);
+        c.closePath();
+        return;
+      }
+      if (typeof c.rect === 'function') {
+        c.beginPath();
+        c.rect(x, y, w, h);
+        c.closePath();
+        return;
+      }
+      if (typeof c.beginPath === 'function') {
+        c.beginPath();
+        if (typeof c.closePath === 'function') c.closePath();
+      }
+    };
+
     const render = () => {
       if (!isRunning) return;
 
+      const isDark = document.documentElement.classList.contains('dark');
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      const rectWidth = rect.width || 800;
-      const rectHeight = rect.height || 600;
+      const rectWidth = rect.width || 900;
+      const rectHeight = rect.height || 650;
       const targetWidth = Math.floor(rectWidth * dpr);
       const targetHeight = Math.floor(rectHeight * dpr);
 
@@ -180,6 +311,10 @@ export const GraphView: React.FC<GraphViewProps> = ({
       ctx.save();
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, rectWidth, rectHeight);
+
+      // Draw subtle warm canvas background
+      ctx.fillStyle = isDark ? '#161714' : '#FAF8F3';
+      ctx.fillRect(0, 0, rectWidth, rectHeight);
 
       const transform = transformRef.current;
       ctx.translate(transform.x, transform.y);
@@ -197,8 +332,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
         if (n1.isDragging) continue;
 
         // Subtle pull toward center
-        n1.vx += (centerX - n1.x) * 0.0006;
-        n1.vy += (centerY - n1.y) * 0.0006;
+        const gravityWeight = n1.kind === 'project' ? 0.0007 : 0.0004;
+        n1.vx += (centerX - n1.x) * gravityWeight;
+        n1.vy += (centerY - n1.y) * gravityWeight;
 
         // Repulsion from other nodes
         for (let j = i + 1; j < nodes.length; j++) {
@@ -207,10 +343,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
           const dy = n2.y - n1.y;
           const distSq = dx * dx + dy * dy + 1;
           const dist = Math.sqrt(distSq);
-          const minDist = n1.radius + n2.radius + 30;
 
-          if (dist < 400) {
-            const force = (minDist * 40) / distSq;
+          const r1 = n1.kind === 'project' ? 50 : (n1.cardWidth || 160) / 2;
+          const r2 = n2.kind === 'project' ? 50 : (n2.cardWidth || 160) / 2;
+          const minDist = r1 + r2 + (n1.kind === 'project' || n2.kind === 'project' ? 60 : 35);
+
+          if (dist < 450) {
+            const force = (minDist * 45) / distSq;
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
 
@@ -235,8 +374,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
         const dx = t.x - s.x;
         const dy = t.y - s.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const targetDist = edge.relationship === 'belongs_to' ? 100 : 140;
-        const springForce = (dist - targetDist) * 0.008;
+        const targetDist = edge.relationship === 'belongs_to' ? 140 : 180;
+        const springForce = (dist - targetDist) * 0.007;
 
         const fx = (dx / dist) * springForce;
         const fy = (dy / dist) * springForce;
@@ -254,13 +393,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
       // 3. Update positions with damping
       for (const n of nodes) {
         if (n.isDragging) continue;
-        n.vx *= 0.88;
-        n.vy *= 0.88;
+        n.vx *= 0.86;
+        n.vy *= 0.86;
         n.x += n.vx;
         n.y += n.vy;
       }
 
-      // --- Draw Edges ---
+      // --- Draw Edges (Organic Bezier Splines) ---
       for (const edge of edges) {
         if (!edge.sourceNode || !edge.targetNode) continue;
         const s = edge.sourceNode;
@@ -270,54 +409,80 @@ export const GraphView: React.FC<GraphViewProps> = ({
           (hoveredNode && (s.id === hoveredNode.id || t.id === hoveredNode.id)) ||
           (selectedNode && (s.id === selectedNode.id || t.id === selectedNode.id));
 
+        ctx.save();
         ctx.beginPath();
         ctx.moveTo(s.x, s.y);
-        ctx.lineTo(t.x, t.y);
+
+        // Smooth organic curved bezier connection
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const curvature = Math.min(30, dist * 0.14);
+        const sign = ((s.x * 3 + t.y * 7) | 0) % 2 === 0 ? 1 : -1;
+        const perpX = (-dy / dist) * curvature * sign;
+        const perpY = (dx / dist) * curvature * sign;
+        const cpX = (s.x + t.x) / 2 + perpX;
+        const cpY = (s.y + t.y) / 2 + perpY;
+
+        if (typeof ctx.quadraticCurveTo === 'function') {
+          ctx.quadraticCurveTo(cpX, cpY, t.x, t.y);
+        } else {
+          ctx.lineTo(t.x, t.y);
+        }
+
+        const setDash = (dash: number[]) => {
+          if (typeof ctx.setLineDash === 'function') {
+            ctx.setLineDash(dash);
+          }
+        };
 
         if (edge.relationship === 'belongs_to') {
-          ctx.strokeStyle = isHighlighted ? '#1E201C' : '#D5D0C3';
-          ctx.lineWidth = isHighlighted ? 2.5 : 1.2;
-          ctx.setLineDash([]);
+          ctx.strokeStyle = isHighlighted
+            ? (isDark ? '#879E78' : '#384232')
+            : (isDark ? 'rgba(100, 105, 95, 0.45)' : 'rgba(200, 194, 179, 0.7)');
+          ctx.lineWidth = isHighlighted ? 2.5 : 1.4;
+          setDash([]);
         } else if (edge.relationship === 'supports') {
-          ctx.strokeStyle = isHighlighted ? '#059669' : '#10B981';
-          ctx.lineWidth = isHighlighted ? 2.5 : 1.8;
-          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = isHighlighted ? '#10B981' : (isDark ? '#059669' : '#34D399');
+          ctx.lineWidth = isHighlighted ? 2.5 : 1.6;
+          setDash([4, 3]);
         } else if (edge.relationship === 'contradicts') {
-          ctx.strokeStyle = isHighlighted ? '#DC2626' : '#EF4444';
-          ctx.lineWidth = isHighlighted ? 2.5 : 1.8;
-          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = isHighlighted ? '#EF4444' : '#F87171';
+          ctx.lineWidth = isHighlighted ? 2.5 : 1.6;
+          setDash([4, 3]);
         } else if (edge.relationship === 'extends') {
-          ctx.strokeStyle = isHighlighted ? '#4F46E5' : '#6366F1';
-          ctx.lineWidth = isHighlighted ? 2.5 : 1.8;
-          ctx.setLineDash([5, 3]);
+          ctx.strokeStyle = isHighlighted ? '#6366F1' : '#818CF8';
+          ctx.lineWidth = isHighlighted ? 2.5 : 1.6;
+          setDash([5, 3]);
         } else {
-          // references or default
-          ctx.strokeStyle = isHighlighted ? '#D97706' : '#F59E0B';
-          ctx.lineWidth = isHighlighted ? 2 : 1.4;
-          ctx.setLineDash([2, 3]);
+          ctx.strokeStyle = isHighlighted ? '#F59E0B' : (isDark ? '#B45309' : '#FBBF24');
+          ctx.lineWidth = isHighlighted ? 2.2 : 1.4;
+          setDash([3, 3]);
         }
         ctx.stroke();
-        ctx.setLineDash([]);
+        setDash([]);
 
         // Relationship label on non-membership edges
-        if (edge.relationship !== 'belongs_to' && (isHighlighted || transform.scale > 0.85)) {
-          const midX = (s.x + t.x) / 2;
-          const midY = (s.y + t.y) / 2;
-          ctx.save();
-          ctx.font = '9px system-ui, sans-serif';
-          ctx.fillStyle = '#6E6D66';
+        if (edge.relationship !== 'belongs_to' && (isHighlighted || transform.scale > 0.9)) {
+          const edgeMidX = (s.x + t.x) / 2;
+          const edgeMidY = (s.y + t.y) / 2;
+          ctx.font = '10px Inter, system-ui, sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           const textWidth = ctx.measureText(edge.relationship).width;
-          ctx.fillStyle = '#FAF9F5';
-          ctx.fillRect(midX - textWidth / 2 - 3, midY - 6, textWidth + 6, 12);
-          ctx.strokeStyle = '#E8E5DC';
+
+          ctx.fillStyle = isDark ? '#1C1D19' : '#FAF8F3';
+          drawRoundRect(ctx, edgeMidX - textWidth / 2 - 5, edgeMidY - 8, textWidth + 10, 16, 4);
+          ctx.fill();
+          ctx.strokeStyle = isDark ? '#2C2E27' : '#E8E5DC';
           ctx.lineWidth = 1;
-          ctx.strokeRect(midX - textWidth / 2 - 3, midY - 6, textWidth + 6, 12);
-          ctx.fillStyle = '#3A3B36';
-          ctx.fillText(edge.relationship, midX, midY);
-          ctx.restore();
+          ctx.stroke();
+
+          ctx.fillStyle = isDark ? '#EDEAE2' : '#3A3B36';
+          ctx.fillText(edge.relationship, edgeMidX, edgeMidY);
         }
+
+        ctx.restore();
       }
 
       // --- Draw Nodes ---
@@ -330,90 +495,239 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
         ctx.save();
 
-        // Node Glow / Selection Ring
-        if (isSelected || (query && isMatch)) {
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, node.radius + 6, 0, 2 * Math.PI);
-          ctx.fillStyle = isSelected ? 'rgba(40, 44, 37, 0.12)' : 'rgba(99, 102, 241, 0.15)';
-          ctx.fill();
-          ctx.strokeStyle = isSelected ? '#282C25' : '#6366F1';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
+        if (query && !isMatch) {
+          ctx.globalAlpha = 0.25;
         }
 
-        // Base Circle
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
-
+        // ==========================================
+        // 1. PROJECT HUB NODE RENDERING
+        // ==========================================
         if (node.kind === 'project') {
-          // Large Hub Node in Forest Sage
-          ctx.fillStyle = '#49583D';
-          ctx.fill();
-          ctx.lineWidth = isHovered ? 3 : 2;
-          ctx.strokeStyle = isHovered ? '#6E7F60' : '#38462F';
-          ctx.stroke();
-        } else if (node.kind === 'object') {
-          // Typed Object Node
-          ctx.fillStyle = '#FAF9F5';
-          ctx.fill();
-          ctx.lineWidth = isHovered ? 2.5 : 1.8;
-          ctx.strokeStyle = node.color || '#6366F1';
-          ctx.stroke();
-        } else {
-          // Standard Page / Artifact Note
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fill();
-          ctx.lineWidth = isHovered ? 2.2 : 1.5;
-          ctx.strokeStyle = isHovered ? '#1E201C' : '#E8E5DC';
-          ctx.stroke();
-        }
+          // Outer soft concentric glowing halo
+          const outerHaloRadius = node.radius * 3.1;
+          if (typeof ctx.createRadialGradient === 'function') {
+            const grad = ctx.createRadialGradient(
+              node.x,
+              node.y,
+              node.radius * 0.7,
+              node.x,
+              node.y,
+              outerHaloRadius
+            );
+            grad.addColorStop(0, isDark ? 'rgba(75, 95, 65, 0.4)' : 'rgba(215, 207, 190, 0.55)');
+            grad.addColorStop(0.5, isDark ? 'rgba(50, 65, 45, 0.2)' : 'rgba(230, 224, 210, 0.35)');
+            grad.addColorStop(1, isDark ? 'rgba(22, 23, 20, 0)' : 'rgba(250, 248, 243, 0)');
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, outerHaloRadius, 0, 2 * Math.PI);
+            ctx.fillStyle = grad;
+            ctx.fill();
+          }
 
-        // Node Icon
-        ctx.font = `${node.kind === 'project' ? 18 : 14}px system-ui, Apple Color Emoji, Segoe UI Emoji`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(node.icon || (node.kind === 'project' ? '📂' : '📄'), node.x, node.y);
-
-        // Draft indicator on notes
-        if (node.draft_status) {
+          // Middle concentric ring
           ctx.beginPath();
-          ctx.arc(node.x + node.radius - 4, node.y - node.radius + 4, 4, 0, 2 * Math.PI);
-          ctx.fillStyle = '#F59E0B';
+          ctx.arc(node.x, node.y, node.radius * 1.75, 0, 2 * Math.PI);
+          ctx.fillStyle = isDark ? 'rgba(75, 95, 65, 0.25)' : 'rgba(220, 212, 196, 0.45)';
           ctx.fill();
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = 1.5;
+
+          // Selection / Hover highlight ring
+          if (isSelected || isHovered) {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, node.radius + 6, 0, 2 * Math.PI);
+            ctx.strokeStyle = isSelected
+              ? (isDark ? '#879E78' : '#282C25')
+              : (isDark ? '#6E7F60' : '#49583D');
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+
+          // Core Hub Circle (Forest Sage)
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
+          ctx.fillStyle = isDark ? '#2E3829' : '#384232';
+          ctx.fill();
+          ctx.strokeStyle = isDark ? '#4A5B40' : '#2A3325';
+          ctx.lineWidth = 2;
           ctx.stroke();
-        }
 
-        // Node Label
-        ctx.font = `${node.kind === 'project' ? 'bold 12px' : '11px'} system-ui, -apple-system, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
+          // Gold folder icon inside hub
+          ctx.font = '20px Apple Color Emoji, Segoe UI Emoji, system-ui';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(node.icon || '📁', node.x, node.y);
 
-        const label = node.label.length > 28 ? node.label.slice(0, 26) + '…' : node.label;
+          // Project Title below hub
+          ctx.font = 'bold 13px Fraunces, "Source Serif 4", Georgia, serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = isDark ? '#EDEAE2' : '#1E201C';
 
-        // Label pill background for crisp readability
-        const labelWidth = ctx.measureText(label).width;
-        const labelY = node.y + node.radius + 6;
+          const label = node.label.length > 28 ? node.label.slice(0, 26) + '…' : node.label;
+          ctx.fillText(label, node.x, node.y + node.radius + 10);
 
-        ctx.fillStyle = 'rgba(245, 243, 236, 0.85)';
-        ctx.fillRect(node.x - labelWidth / 2 - 4, labelY - 2, labelWidth + 8, 16);
+          // Subtitle / item count
+          if (node.item_count !== undefined) {
+            ctx.font = '11px Inter, system-ui, sans-serif';
+            ctx.fillStyle = isDark ? '#9E9C93' : '#73766D';
+            ctx.fillText(
+              `${node.item_count} ${node.item_count === 1 ? 'item' : 'items'}`,
+              node.x,
+              node.y + node.radius + 28
+            );
+          }
+        } else {
+          // ==========================================
+          // 2. NOTE / PAGE / OBJECT CARD PILL RENDERING
+          // ==========================================
+          const cardW = node.cardWidth || 170;
+          const cardH = node.cardHeight || 42;
+          const cardX = node.x - cardW / 2;
+          const cardY = node.y - cardH / 2;
+          const cardR = 12;
 
-        ctx.fillStyle = node.kind === 'project' ? '#1E201C' : '#3A3B36';
-        ctx.fillText(label, node.x, labelY);
+          // Card Shadow
+          ctx.shadowColor = isDark ? 'rgba(0, 0, 0, 0.4)' : 'rgba(30, 32, 28, 0.06)';
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
 
-        // Item count pill for projects
-        if (node.kind === 'project' && node.item_count !== undefined) {
-          const subText = `${node.item_count} ${node.item_count === 1 ? 'item' : 'items'}`;
-          ctx.font = '10px system-ui, sans-serif';
-          ctx.fillStyle = '#8C8A82';
-          ctx.fillText(subText, node.x, labelY + 16);
+          // Card Background
+          drawRoundRect(ctx, cardX, cardY, cardW, cardH, cardR);
+          ctx.fillStyle = isDark
+            ? (node.kind === 'object' ? '#20221E' : '#1C1D19')
+            : (node.kind === 'object' ? '#FAF9FE' : '#FFFFFF');
+          ctx.fill();
+
+          // Reset shadow
+          ctx.shadowColor = 'transparent';
+
+          // Card Border
+          ctx.strokeStyle = isSelected
+            ? (isDark ? '#879E78' : '#49583D')
+            : isHovered
+            ? (isDark ? '#4F5247' : '#B8B4A7')
+            : node.kind === 'object'
+            ? (node.color || '#D8D2EB')
+            : (isDark ? '#2C2E27' : '#E6E2D8');
+          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.stroke();
+
+          // Left Icon Box
+          const iconBoxSize = 26;
+          const iconBoxX = cardX + 8;
+          const iconBoxY = cardY + (cardH - iconBoxSize) / 2;
+          drawRoundRect(ctx, iconBoxX, iconBoxY, iconBoxSize, iconBoxSize, 7);
+          ctx.fillStyle = isDark
+            ? '#262923'
+            : node.kind === 'object'
+            ? '#F0ECFA'
+            : '#F2F6FA';
+          ctx.fill();
+
+          // Icon
+          ctx.font = '13px Apple Color Emoji, Segoe UI Emoji, system-ui';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(
+            node.icon || (node.kind === 'object' ? '⚖️' : '📄'),
+            iconBoxX + iconBoxSize / 2,
+            iconBoxY + iconBoxSize / 2
+          );
+
+          // Note / Object Label
+          ctx.font = '12px Inter, system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = isDark ? '#EDEAE2' : '#1E201C';
+
+          const maxTextW = cardW - iconBoxSize - 28;
+          let displayLabel = node.label;
+          if (ctx.measureText(displayLabel).width > maxTextW) {
+            while (displayLabel.length > 3 && ctx.measureText(displayLabel + '…').width > maxTextW) {
+              displayLabel = displayLabel.slice(0, -1);
+            }
+            displayLabel += '…';
+          }
+          ctx.fillText(displayLabel, cardX + iconBoxSize + 15, cardY + cardH / 2);
+
+          // Draft status amber dot
+          if (node.draft_status) {
+            ctx.beginPath();
+            ctx.arc(cardX + cardW - 8, cardY + 8, 3.5, 0, 2 * Math.PI);
+            ctx.fillStyle = '#E8982C';
+            ctx.fill();
+            ctx.strokeStyle = isDark ? '#1C1D19' : '#FFFFFF';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
         }
 
         ctx.restore();
       }
 
       ctx.restore();
+
+      // --- Render Radar Minimap ---
+      const minimapCanvas = minimapCanvasRef.current;
+      if (minimapCanvas && nodes.length > 0) {
+        const mctx = minimapCanvas.getContext('2d');
+        if (mctx) {
+          const mw = minimapCanvas.width;
+          const mh = minimapCanvas.height;
+          mctx.clearRect(0, 0, mw, mh);
+
+          // Find bounding box of all nodes
+          let minX = Infinity;
+          let maxX = -Infinity;
+          let minY = Infinity;
+          let maxY = -Infinity;
+
+          for (const n of nodes) {
+            if (n.x < minX) minX = n.x;
+            if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.y > maxY) maxY = n.y;
+          }
+
+          const pad = 120;
+          minX -= pad;
+          maxX += pad;
+          minY -= pad;
+          maxY += pad;
+
+          const spanX = Math.max(100, maxX - minX);
+          const spanY = Math.max(100, maxY - minY);
+
+          const scaleX = mw / spanX;
+          const scaleY = mh / spanY;
+          const mScale = Math.min(scaleX, scaleY);
+
+          // Minimap background
+          mctx.fillStyle = isDark ? '#1C1D19' : '#FAF8F3';
+          mctx.fillRect(0, 0, mw, mh);
+
+          // Draw node dots
+          for (const n of nodes) {
+            const mx = (n.x - minX) * mScale;
+            const my = (n.y - minY) * mScale;
+
+            mctx.beginPath();
+            mctx.arc(mx, my, n.kind === 'project' ? 3.5 : 2, 0, 2 * Math.PI);
+            mctx.fillStyle = n.kind === 'project'
+              ? (isDark ? '#879E78' : '#384232')
+              : (isDark ? '#B1B5AB' : '#8C8A82');
+            mctx.fill();
+          }
+
+          // Draw current viewport rectangle
+          const vpLeft = (-transform.x / transform.scale - minX) * mScale;
+          const vpTop = (-transform.y / transform.scale - minY) * mScale;
+          const vpW = (rectWidth / transform.scale) * mScale;
+          const vpH = (rectHeight / transform.scale) * mScale;
+
+          mctx.strokeStyle = isDark ? 'rgba(135, 158, 120, 0.6)' : 'rgba(73, 88, 61, 0.5)';
+          mctx.lineWidth = 1.2;
+          mctx.strokeRect(vpLeft, vpTop, vpW, vpH);
+        }
+      }
 
       animFrameIdRef.current = requestAnimationFrame(render);
     };
@@ -447,10 +761,21 @@ export const GraphView: React.FC<GraphViewProps> = ({
       const nodes = simNodesRef.current;
       for (let i = nodes.length - 1; i >= 0; i--) {
         const node = nodes[i];
-        const dx = node.x - canvasX;
-        const dy = node.y - canvasY;
-        if (dx * dx + dy * dy <= (node.radius + 6) * (node.radius + 6)) {
-          return node;
+        if (node.kind === 'project') {
+          const dx = node.x - canvasX;
+          const dy = node.y - canvasY;
+          if (dx * dx + dy * dy <= (node.radius + 8) * (node.radius + 8)) {
+            return node;
+          }
+        } else {
+          const w = node.cardWidth || 170;
+          const h = node.cardHeight || 42;
+          if (
+            Math.abs(canvasX - node.x) <= w / 2 &&
+            Math.abs(canvasY - node.y) <= h / 2
+          ) {
+            return node;
+          }
         }
       }
       return null;
@@ -503,7 +828,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+    const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -512,11 +837,12 @@ export const GraphView: React.FC<GraphViewProps> = ({
     const mouseY = e.clientY - rect.top;
 
     const currentScale = transformRef.current.scale;
-    const nextScale = Math.min(2.5, Math.max(0.3, currentScale * zoomFactor));
+    const nextScale = Math.min(2.5, Math.max(0.35, currentScale * zoomFactor));
 
     transformRef.current.x = mouseX - (mouseX - transformRef.current.x) * (nextScale / currentScale);
     transformRef.current.y = mouseY - (mouseY - transformRef.current.y) * (nextScale / currentScale);
     transformRef.current.scale = nextScale;
+    setZoomScale(nextScale);
   };
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -537,14 +863,57 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
   const resetZoom = () => {
     transformRef.current = { x: 0, y: 0, scale: 1 };
+    setZoomScale(1);
   };
 
   const zoomIn = () => {
-    transformRef.current.scale = Math.min(2.5, transformRef.current.scale * 1.25);
+    const next = Math.min(2.5, transformRef.current.scale * 1.25);
+    transformRef.current.scale = next;
+    setZoomScale(next);
   };
 
   const zoomOut = () => {
-    transformRef.current.scale = Math.max(0.3, transformRef.current.scale * 0.8);
+    const next = Math.max(0.35, transformRef.current.scale * 0.8);
+    transformRef.current.scale = next;
+    setZoomScale(next);
+  };
+
+  const fitToView = () => {
+    const canvas = canvasRef.current;
+    const nodes = simNodesRef.current;
+    if (!canvas || nodes.length === 0) {
+      resetZoom();
+      return;
+    }
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (const n of nodes) {
+      if (n.x < minX) minX = n.x;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.y > maxY) maxY = n.y;
+    }
+
+    const pad = 80;
+    const spanW = Math.max(100, maxX - minX + pad * 2);
+    const spanH = Math.max(100, maxY - minY + pad * 2);
+
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(2.0, Math.max(0.4, Math.min(rect.width / spanW, rect.height / spanH)));
+
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+
+    transformRef.current = {
+      x: rect.width / 2 - midX * scale,
+      y: rect.height / 2 - midY * scale,
+      scale,
+    };
+    setZoomScale(scale);
   };
 
   const visibleNodes = useMemo(
@@ -565,47 +934,50 @@ export const GraphView: React.FC<GraphViewProps> = ({
   return (
     <div
       data-testid="graph-view-container"
-      className="flex flex-col h-screen w-full bg-[#FAF8F3] dark:bg-[#121310] text-[#1E201C] dark:text-[#EDEAE2] overflow-hidden select-none"
+      className="graph-container"
     >
-      {/* Top Header & Interactive Filter Bar */}
-      <header className="bg-white dark:bg-[#1C1D19] border-b border-[#E8E5DC] dark:border-[#2C2E27] px-6 py-3 shrink-0 flex flex-wrap items-center justify-between gap-3 shadow-2xs z-20">
-        {/* Left: Breadcrumbs & Stats */}
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#252820] hover:bg-[#E5E1D6] dark:hover:bg-[#2D3027] text-xs font-semibold text-[#1E201C] dark:text-[#EDEAE2] transition-colors cursor-pointer"
-            title="Return to Home"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Home</span>
-          </button>
-
-          <span className="text-[#8C8A82] text-xs font-medium">/</span>
-
-          <div className="flex items-center gap-2">
-            <Share2 className="w-4 h-4 text-[#49583D] dark:text-[#879E78]" />
-            <h1 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] tracking-tight">
-              Knowledge Graph Map
-            </h1>
-          </div>
-
-          <div className="hidden md:flex items-center gap-1.5 text-[11px] text-[#6E6D66] dark:text-[#9E9C93] bg-[#FAF9F5] dark:bg-[#22241F] border border-[#E8E5DC] dark:border-[#2C2E27] px-2.5 py-1 rounded-lg">
-            <span data-testid="graph-node-count" className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">
-              {totalVisibleNodes}
-            </span>{' '}
-            nodes
-            <span className="text-[#8C8A82]">·</span>
-            <span data-testid="graph-edge-count" className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">
-              {totalVisibleEdges}
-            </span>{' '}
-            edges
-          </div>
+      {/* 1. Generous Editorial Header */}
+      <header className="graph-header">
+        {/* Mountain watercolor silhouette background */}
+        <div className="graph-header-art" aria-hidden="true">
+          <svg viewBox="0 0 640 100" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-35 dark:opacity-15">
+            <path d="M0 100 Q120 62 240 76 T480 50 T640 65 L640 100 Z" fill="#9FB096" />
+            <path d="M140 100 Q260 38 380 54 T640 28 L640 100 Z" fill="#667A58" />
+            <path d="M260 100 Q400 16 520 28 T640 10 L640 100 Z" fill="#49583D" />
+          </svg>
         </div>
 
-        {/* Center: Filter Pills */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] font-bold text-[#8C8A82] dark:text-[#7A786F] uppercase tracking-wider mr-1 hidden lg:inline">
+        <div className="graph-header-top">
+          <div>
+            <div className="graph-eyebrow">Explore Your Knowledge</div>
+            <div className="graph-title-row">
+              <h1 className="graph-title">Knowledge Graph</h1>
+              <div className="graph-stats-chip">
+                <Share2 className="w-3.5 h-3.5 text-sthira-primary" />
+                <span data-testid="graph-node-count" className="font-semibold text-sthira-text">
+                  {totalVisibleNodes}
+                </span>{' '}
+                nodes
+                <span className="text-sthira-text-muted">·</span>
+                <span data-testid="graph-edge-count" className="font-semibold text-sthira-text">
+                  {totalVisibleEdges}
+                </span>{' '}
+                edges
+              </div>
+            </div>
+            <p className="graph-subtitle">
+              A connected view of your projects, pages, objects and ideas.
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {/* 2. Secondary Filter & Search Toolbar */}
+      <div className="graph-toolbar">
+        {/* Left Filter Pills */}
+        <div className="graph-filters-group">
+          <span className="graph-filters-label">
+            <SlidersHorizontal className="w-3.5 h-3.5" />
             Filters:
           </span>
 
@@ -613,132 +985,142 @@ export const GraphView: React.FC<GraphViewProps> = ({
             type="button"
             data-testid="filter-projects"
             onClick={() => setShowProjects((prev) => !prev)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
-              showProjects
-                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
-                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
-            }`}
+            className={`graph-filter-pill ${showProjects ? 'active-primary' : 'inactive'}`}
           >
-            <span>📂</span>
+            <span>📁</span>
             <span>Projects</span>
+            {showProjects && <Check className="w-3 h-3 check-icon" />}
           </button>
 
           <button
             type="button"
             data-testid="filter-pages"
             onClick={() => setShowPages((prev) => !prev)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
-              showPages
-                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
-                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
-            }`}
+            className={`graph-filter-pill ${showPages ? 'active-secondary' : 'inactive'}`}
           >
             <span>📄</span>
             <span>Pages</span>
+            {showPages && <Check className="w-3 h-3 check-icon" />}
           </button>
 
           <button
             type="button"
             data-testid="filter-ideas"
             onClick={() => setShowIdeas((prev) => !prev)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
-              showIdeas
-                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
-                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
-            }`}
+            className={`graph-filter-pill ${showIdeas ? 'active-secondary' : 'inactive'}`}
           >
             <span>💡</span>
             <span>Ideas</span>
+            {showIdeas && <Check className="w-3 h-3 check-icon" />}
           </button>
 
           <button
             type="button"
             data-testid="filter-tasks"
             onClick={() => setShowTasks((prev) => !prev)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
-              showTasks
-                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
-                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
-            }`}
+            className={`graph-filter-pill ${showTasks ? 'active-secondary' : 'inactive'}`}
           >
             <span>☑️</span>
             <span>Tasks</span>
+            {showTasks && <Check className="w-3 h-3 check-icon" />}
           </button>
 
           <button
             type="button"
             data-testid="filter-sources"
             onClick={() => setShowSources((prev) => !prev)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border flex items-center gap-1.5 ${
-              showSources
-                ? 'bg-[#49583D] text-white border-[#49583D] shadow-2xs'
-                : 'bg-white dark:bg-[#1C1D19] text-[#6E6D66] dark:text-[#A8A69E] border-[#E8E5DC] dark:border-[#2C2E27] hover:bg-[#FAF9F5] dark:hover:bg-[#22241F]'
-            }`}
+            className={`graph-filter-pill ${showSources ? 'active-secondary' : 'inactive'}`}
           >
             <span>🔗</span>
             <span>Sources</span>
+            {showSources && <Check className="w-3 h-3 check-icon" />}
           </button>
+
+          {/* Registered Custom Object Types (e.g. Decisions) */}
+          {(objectTypes || [])
+            .filter((ot) => ot && !['idea', 'todo', 'task'].includes((ot.id || '').toLowerCase()))
+            .map((ot) => {
+              const isActive = selectedCustomTypes[ot.id.toLowerCase()] ?? true;
+              return (
+                <button
+                  key={ot.id}
+                  type="button"
+                  onClick={() =>
+                    setSelectedCustomTypes((prev) => ({
+                      ...prev,
+                      [ot.id.toLowerCase()]: !isActive,
+                    }))
+                  }
+                  className={`graph-filter-pill ${isActive ? 'active-secondary' : 'inactive'}`}
+                >
+                  <span>{ot.icon || '⚖️'}</span>
+                  <span>{ot.display_name}</span>
+                  {isActive && <Check className="w-3 h-3 check-icon" />}
+                </button>
+              );
+            })}
         </div>
 
-        {/* Right: Search & Actions */}
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-[#8C8A82] absolute left-2.5 top-1/2 -translate-y-1/2" />
+        {/* Right Search & Controls */}
+        <div className="graph-actions-group">
+          <div className="graph-search-container">
+            <Search className="graph-search-icon" />
             <input
+              ref={searchInputRef}
               type="text"
               data-testid="graph-search-input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter nodes..."
-              className="pl-8 pr-2.5 py-1 text-xs rounded-xl border border-[#E8E5DC] bg-[#FAF9F5] outline-none focus:border-[#282C25] w-32 sm:w-44"
+              placeholder="Search nodes..."
+              className="graph-search-input"
             />
+            <span className="graph-search-shortcut">⌘F</span>
           </div>
 
-          <div className="flex items-center border border-[#E8E5DC] rounded-xl overflow-hidden bg-white">
-            <button
-              type="button"
-              onClick={zoomIn}
-              title="Zoom In"
-              className="p-1.5 text-[#6E6D66] hover:bg-[#EFECE4] hover:text-[#1E201C] transition-colors cursor-pointer"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={zoomOut}
-              title="Zoom Out"
-              className="p-1.5 text-[#6E6D66] hover:bg-[#EFECE4] hover:text-[#1E201C] transition-colors cursor-pointer border-l border-[#E8E5DC]"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={resetZoom}
-              title="Reset View"
-              className="p-1.5 text-[#6E6D66] hover:bg-[#EFECE4] hover:text-[#1E201C] transition-colors cursor-pointer border-l border-[#E8E5DC]"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={fitToView}
+            title="Fullscreen View"
+            className="graph-btn-icon"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={resetZoom}
+            title="Reset View"
+            className="graph-btn-icon"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            title="More Options"
+            className="graph-btn-icon"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
         </div>
-      </header>
+      </div>
 
-      {/* Main Interactive Canvas Area */}
-      <div className="flex-1 relative w-full h-full overflow-hidden bg-[#F5F3EC]">
+      {/* 3. Main Interactive Canvas Viewport */}
+      <div className="graph-canvas-wrapper">
         {isLoading ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#F5F3EC]/80 z-10 text-xs text-[#8C8A82]">
-            Loading knowledge graph map...
+          <div className="absolute inset-0 flex items-center justify-center bg-sthira-canvas/80 z-10 text-xs text-sthira-text-muted">
+            Loading knowledge graph...
           </div>
         ) : error ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#F5F3EC] z-10 p-6">
-            <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs max-w-md">
+          <div className="absolute inset-0 flex items-center justify-center bg-sthira-canvas z-10 p-6">
+            <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-300 text-xs max-w-md">
               {error}
             </div>
           </div>
         ) : totalVisibleNodes === 0 ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 text-[#8C8A82]">
-            <Share2 className="w-10 h-10 mb-2 stroke-1" />
-            <h3 className="text-sm font-semibold text-[#1E201C]">No matching graph nodes</h3>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 text-sthira-text-muted">
+            <Share2 className="w-12 h-12 mb-3 stroke-1 text-sthira-primary" />
+            <h3 className="text-sm font-semibold text-sthira-text">No matching graph nodes</h3>
             <p className="text-xs max-w-sm mt-1">
               Adjust your filters or create projects and pages to visualize knowledge relationships.
             </p>
@@ -753,18 +1135,18 @@ export const GraphView: React.FC<GraphViewProps> = ({
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
           onDoubleClick={handleDoubleClick}
-          className="w-full h-full cursor-grab active:cursor-grabbing block"
+          className="graph-canvas"
         />
 
         {/* Floating Selected Node Details Card */}
         {selectedNode && (
-          <div className="absolute bottom-6 right-6 z-20 w-80 bg-white/95 backdrop-blur-sm border border-[#E8E5DC] rounded-2xl shadow-xl p-4 text-xs animate-in slide-in-from-bottom-2 duration-150">
+          <div className="graph-selected-card animate-in fade-in slide-in-from-top-2 duration-150">
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="flex items-center gap-2">
-                <span className="text-lg">{selectedNode.icon || '📄'}</span>
+                <span className="text-xl">{selectedNode.icon || (selectedNode.kind === 'project' ? '📁' : '📄')}</span>
                 <div>
-                  <h4 className="font-bold text-[#1E201C] line-clamp-1">{selectedNode.label}</h4>
-                  <span className="text-[10px] uppercase font-semibold text-[#8C8A82] tracking-wider">
+                  <h4 className="font-bold text-sthira-text line-clamp-1">{selectedNode.label}</h4>
+                  <span className="text-[10px] uppercase font-semibold text-sthira-text-muted tracking-wider">
                     {selectedNode.kind === 'object'
                       ? `${selectedNode.object_type || 'object'}`
                       : selectedNode.kind}
@@ -774,20 +1156,20 @@ export const GraphView: React.FC<GraphViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedNode(null)}
-                className="text-[#8C8A82] hover:text-[#1E201C] p-0.5 rounded cursor-pointer"
+                className="text-sthira-text-muted hover:text-sthira-text p-0.5 rounded cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             {selectedNode.kind === 'project' && selectedNode.item_count !== undefined && (
-              <p className="text-[#6E6D66] text-[11px] mb-3">
+              <p className="text-sthira-text-muted text-[11px] mb-3">
                 This project contains <strong>{selectedNode.item_count}</strong> attached pages and entities.
               </p>
             )}
 
             {selectedNode.kind !== 'project' && (
-              <p className="text-[#6E6D66] text-[11px] mb-3">
+              <p className="text-sthira-text-muted text-[11px] mb-3">
                 {selectedNode.draft_status
                   ? 'Unfinished draft note ready for continuation.'
                   : 'Synthesized knowledge artifact in workspace.'}
@@ -798,7 +1180,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
               type="button"
               data-testid="btn-open-selected-node"
               onClick={() => handleNavigateToNode(selectedNode)}
-              className="w-full py-1.5 px-3 rounded-xl bg-[#49583D] hover:bg-[#39472F] text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+              className="w-full py-1.5 px-3 rounded-xl bg-sthira-primary hover:bg-sthira-primary-hover text-sthira-on-primary font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
             >
               <span>{selectedNode.kind === 'project' ? 'Open Project' : 'Focus Note'}</span>
               <ExternalLink className="w-3.5 h-3.5" />
@@ -806,23 +1188,86 @@ export const GraphView: React.FC<GraphViewProps> = ({
           </div>
         )}
 
-        {/* Legend Overlay at Bottom-Left */}
-        <div className="absolute bottom-6 left-6 z-10 bg-white/95 dark:bg-[#1C1D19]/95 backdrop-blur-xs border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl px-3.5 py-2 text-[11px] text-[#6E6D66] dark:text-[#9E9C93] shadow-xs hidden sm:flex items-center gap-4">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#49583D]" />
-            <span>Project</span>
+        {/* Floating Legend Card (Bottom-Left) */}
+        <div className="graph-legend-card hidden sm:block">
+          <div className="graph-legend-header">
+            <span>Legend</span>
+            <Info className="w-3.5 h-3.5 text-sthira-text-muted" />
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#FAF8F3] border border-[#CCDCCC]" />
-            <span>Note</span>
+          <div className="graph-legend-row">
+            <span className="graph-legend-badge">
+              <span>📁</span> Project
+            </span>
+            <span className="graph-legend-desc">
+              A workspace for focused work (e.g., research, build, plan)
+            </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#BE8B41]" />
-            <span>Object</span>
+          <div className="graph-legend-row">
+            <span className="graph-legend-badge">
+              <span>📄</span> Page / Note
+            </span>
+            <span className="graph-legend-desc">
+              Knowledge, research, and content
+            </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-[#49583D]" />
-            <span>Link</span>
+          <div className="graph-legend-row">
+            <span className="graph-legend-badge">
+              <span>⚖️</span> Object
+            </span>
+            <span className="graph-legend-desc">
+              Structured data, decisions, or custom entities
+            </span>
+          </div>
+        </div>
+
+        {/* Viewport Zoom & Minimap Floating Toolbar (Bottom-Right) */}
+        <div className="graph-viewport-toolbar">
+          <div className="graph-zoom-bar">
+            <button
+              type="button"
+              onClick={zoomOut}
+              title="Zoom Out"
+              className="graph-zoom-btn"
+            >
+              −
+            </button>
+            <span
+              onClick={resetZoom}
+              title="Reset to 100%"
+              className="graph-zoom-text"
+            >
+              {Math.round(zoomScale * 100)}%
+            </span>
+            <button
+              type="button"
+              onClick={zoomIn}
+              title="Zoom In"
+              className="graph-zoom-btn"
+            >
+              +
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={fitToView}
+            title="Fit to View"
+            className="graph-fit-btn"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+
+          {/* Minimap Preview Card */}
+          <div
+            className="graph-minimap"
+            title="Minimap Radar View"
+            onClick={fitToView}
+          >
+            <canvas
+              ref={minimapCanvasRef}
+              width={100}
+              height={68}
+            />
           </div>
         </div>
       </div>

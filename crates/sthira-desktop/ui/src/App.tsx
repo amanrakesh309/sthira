@@ -81,7 +81,13 @@ export const App: React.FC = () => {
 
   // Modals state
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('settings') === '1' || params.get('modal') === 'settings';
+    }
+    return false;
+  });
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isObjectTypeBuilderOpen, setIsObjectTypeBuilderOpen] = useState(false);
   const [isObjectTypeManagerOpen, setIsObjectTypeManagerOpen] = useState(false);
@@ -448,7 +454,7 @@ export const App: React.FC = () => {
           into this container. */}
       <main
         data-testid="center-workspace"
-        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
+        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'graph' || currentView === 'canvas' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
       >
         {currentView === 'home' && (
           <HomeView
@@ -557,6 +563,7 @@ export const App: React.FC = () => {
                 }}
                 onOpenArtifact={handleOpenArtifact}
                 onOpenCanvas={handleOpenCanvas}
+                onWorkspaceMutated={loadState}
               />
             );
           })()

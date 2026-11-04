@@ -1,416 +1,176 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Table as TableIcon,
-  Columns,
-  LayoutGrid,
-  Plus,
-  ArrowLeft,
-  X,
-} from 'lucide-react';
-import {
-  listObjectsByType,
-  saveObjectInstance,
-  createTypedObject,
-  getWorkspaceTree,
-} from '../../api/ipc';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Table as TableIcon, Columns, LayoutGrid, Plus, ArrowLeft, X, ExternalLink } from 'lucide-react';
+import { listObjectsByType, saveObjectInstance, createTypedObject, getWorkspaceTree, getTypeTemplates,
+  instantiateObjectFromTemplate, getArtifactContext, getObjectInstance } from '../../api/ipc';
 import { ObjectTableView } from './ObjectTableView';
 import { ObjectKanbanView } from './ObjectKanbanView';
 import { PropertyFieldRenderer } from './PropertyFieldRenderer';
-import type { ObjectType, ObjectItem } from '../../types/sthira';
+import { ObjectIdentity } from './ObjectIdentity';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
+import { directoryDate, directoryExcerpt } from '../../utils/directory';
+import type { ObjectType, ObjectItem, ObjectTemplate } from '../../types/sthira';
 
 interface ObjectCollectionContainerProps {
   objectType: ObjectType;
   onBack: () => void;
   onOpenArtifact: (artifactId: string, projectId?: string) => void;
   onOpenCanvas?: (canvasId?: string) => void;
+  onWorkspaceMutated?: () => void;
 }
 
-export const ObjectCollectionContainer: React.FC<ObjectCollectionContainerProps> = ({
-  objectType,
-  onBack,
-  onOpenArtifact,
-}) => {
+export function ObjectCollectionContainer({ objectType, onBack, onOpenArtifact, onWorkspaceMutated }: ObjectCollectionContainerProps) {
   const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'canvas'>('table');
   const [items, setItems] = useState<ObjectItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const itemsRef = useRef<ObjectItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState('');
+  const request = useRef(0);
+  const metadataRequest = useRef(0);
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const failedSave = useRef<(() => void) | null>(null);
+  const setRecords = (records: ObjectItem[]) => { itemsRef.current = records; setItems(records); };
+  const [createOpen, setCreateOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [properties, setProperties] = useState<Record<string, any>>({});
+  const [projectId, setProjectId] = useState('');
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [templates, setTemplates] = useState<ObjectTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
+  const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const initialProperties = useRef<Record<string, any>>({});
+  const editedProperties = useRef<Record<string, any>>({});
+  const createdDraft = useRef<ObjectItem | null>(null);
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(createOpen, dialog, () => { if (!creatingRef.current) setCreateOpen(false); });
+  const refreshWorkspace = () => { window.dispatchEvent(new CustomEvent('sthira:refresh_objects')); onWorkspaceMutated?.(); };
 
-  // New object form state
-  const [newTitle, setNewTitle] = useState('');
-  const [newProperties, setNewProperties] = useState<Record<string, any>>({});
-  const [newProjectId, setNewProjectId] = useState<string>('');
-  const [workspaceProjects, setWorkspaceProjects] = useState<{ id: string; name: string }[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
-
-  const loadItems = async () => {
-    setIsLoading(true);
+  const loadItems = useCallback(async () => {
+    const id = ++request.current;
+    setLoading(true); setLoadError(null);
     try {
-      const data = await listObjectsByType(objectType.id);
-      setItems(data);
-    } catch (err) {
-      console.error('Failed to load objects for type', objectType.id, err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadItems();
-    // Load projects for quick-attach dropdown
-    getWorkspaceTree().then((tree) => {
-      setWorkspaceProjects(tree.projects.map((p) => ({ id: p.id, name: p.name })));
-    }).catch(console.error);
+      const records = await listObjectsByType(objectType.id);
+      if (id === request.current) { itemsRef.current = records; setItems(records); }
+    } catch { if (id === request.current) setLoadError('Couldn’t load this collection. Check your vault and try again.'); }
+    finally { if (id === request.current) setLoading(false); }
   }, [objectType.id]);
+  useEffect(() => {
+    itemsRef.current = []; setItems([]); setSaveError(null); setSaveState(''); setCreateOpen(false); failedSave.current = null;
+    setTemplates([]); metadataRequest.current += 1;
+    void loadItems(); return () => { request.current += 1; };
+  }, [loadItems]);
 
-  // Handle inline property changes
-  const handleUpdateProperty = async (
-    artifactId: string,
-    propertyKey: string,
-    newValue: any
-  ) => {
-    // Optimistic UI update
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.artifact_id !== artifactId) return item;
-        return {
-          ...item,
-          properties: {
-            ...item.properties,
-            [propertyKey]: newValue,
-          },
-          updated_at: Date.now(),
-        };
-      })
-    );
-
-    // Save to backend
-    const targetItem = items.find((i) => i.artifact_id === artifactId);
-    if (!targetItem) return;
-
-    const updatedProps = {
-      ...targetItem.properties,
-      [propertyKey]: newValue,
-    };
-
-    try {
-      await saveObjectInstance({
-        artifact_id: artifactId,
-        object_type_id: objectType.id,
-        properties: updatedProps,
-        updated_at: Date.now(),
-      });
-    } catch (err) {
-      console.error('Failed to save object instance update', err);
-      // Revert if failed
-      loadItems();
-    }
-  };
-
-  const handleOpenCreateWithDefaults = (initialProps?: Record<string, any>) => {
-    setNewTitle('');
-    const defaults: Record<string, any> = {};
-    for (const p of objectType.schema) {
-      if (initialProps && initialProps[p.key] !== undefined) {
-        defaults[p.key] = initialProps[p.key];
-      } else if (p.property_type === 'boolean') {
-        defaults[p.key] = false;
-      } else if (p.property_type === 'select' && p.options && p.options.length > 0) {
-        defaults[p.key] = p.options[0];
-      } else {
-        defaults[p.key] = '';
+  const handleUpdateProperty = (artifactId: string, key: string, value: any) => {
+    const record = itemsRef.current.find(item => item.artifact_id === artifactId);
+    if (!record) return;
+    const next = { ...record, properties: { ...record.properties, [key]: value }, updated_at: Date.now() };
+    setRecords(itemsRef.current.map(item => item.artifact_id === artifactId ? next : item));
+    const generation = request.current;
+    const persist = async () => {
+      if (generation === request.current) { setSaveState('Saving…'); setSaveError(null); }
+      try {
+        await saveObjectInstance({ artifact_id: artifactId, object_type_id: objectType.id, properties: next.properties, updated_at: next.updated_at });
+        if (generation === request.current) { setSaveState('Saved'); failedSave.current = null; }
+        refreshWorkspace();
+      } catch {
+        if (generation === request.current) {
+          setSaveState('Save failed'); setSaveError('Couldn’t save property changes. Your edited values are still held here. Retry to save them.');
+          failedSave.current = () => {
+            const latest = itemsRef.current.find(item => item.artifact_id === artifactId);
+            if (latest) handleUpdateProperty(artifactId, key, latest.properties[key]);
+          };
+        }
       }
-    }
-    setNewProperties(defaults);
-    setNewProjectId('');
-    setIsCreateOpen(true);
+    };
+    // Full-property JSON writes must keep order, including rapid edits in different cells.
+    saveQueue.current = saveQueue.current.then(persist, persist);
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
-
-    setIsCreating(true);
+  const defaults = (preset: Record<string, any> = {}) => Object.fromEntries(objectType.schema.map(property => [property.key,
+    preset[property.key] ?? property.default_value ?? (property.property_type === 'boolean' ? false : property.property_type === 'multiselect' ? [] : property.property_type === 'select' ? property.options?.[0] || '' : '')]));
+  const loadCreateMetadata = async () => {
+    const id = ++metadataRequest.current;
+    setMetadataError(null);
+    const [tree, presets] = await Promise.allSettled([getWorkspaceTree(), getTypeTemplates(objectType.id)]);
+    if (id !== metadataRequest.current) return;
+    if (tree.status === 'fulfilled') setProjects(tree.value.projects.map(project => ({ id: project.id, name: project.name })));
+    if (presets.status === 'fulfilled') setTemplates(presets.value);
+    if (tree.status === 'rejected' || presets.status === 'rejected') setMetadataError('Some projects or templates could not be loaded. Retry to use them.');
+  };
+  const openCreate = (values: Record<string, any> = {}) => {
+    initialProperties.current = values; editedProperties.current = {}; createdDraft.current = null;
+    setTitle(''); setProperties(defaults(values)); setProjectId(''); setTemplateId(''); setCreateError(null); setCreateOpen(true);
+    void loadCreateMetadata();
+  };
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!title.trim() || creatingRef.current) return;
+    creatingRef.current = true; setCreating(true); setCreateError(null);
     try {
-      const created = await createTypedObject(
-        objectType.id,
-        newTitle.trim(),
-        newProperties,
-        newProjectId || null
-      );
-      setItems((prev) => [created, ...prev]);
-      setIsCreateOpen(false);
-    } catch (err) {
-      console.error('Failed to create typed object', err);
-    } finally {
-      setIsCreating(false);
+      let record = createdDraft.current;
+      if (!record) {
+        if (!templateId) record = await createTypedObject(objectType.id, title.trim(), properties, projectId || null);
+        else {
+          const id = await instantiateObjectFromTemplate(objectType.id, templateId === '__default__' ? null : templateId, title.trim(), projectId || null);
+          // Retain identity before subsequent reads/saves so Retry cannot create a duplicate.
+          record = { artifact_id: id, title: title.trim(), content_md: '', object_type_id: objectType.id, properties, project_id: projectId || null, updated_at: Date.now() };
+          createdDraft.current = record;
+        }
+      }
+      if (templateId) {
+        await saveObjectInstance({ artifact_id: record.artifact_id, object_type_id: objectType.id, properties, updated_at: Date.now() });
+        const [context, instance] = await Promise.all([getArtifactContext(record.artifact_id), getObjectInstance(record.artifact_id)]);
+        record = { ...record, content_md: context.artifact.content_md, properties: instance?.properties || properties };
+      }
+      setRecords([record, ...itemsRef.current.filter(item => item.artifact_id !== record!.artifact_id)]);
+      setCreateOpen(false); createdDraft.current = null; refreshWorkspace();
+    } catch {
+      setCreateError(createdDraft.current ? 'The document was created, but its properties could not finish saving. Retry to finish this same item.' : 'Couldn’t finish creating this item. Check your vault and try again.');
+      if (createdDraft.current) refreshWorkspace();
     }
+    finally { creatingRef.current = false; setCreating(false); }
   };
 
-  return (
-    <div className="flex flex-col h-full bg-[#F5F3EC] text-[#1E201C] overflow-hidden">
-      {/* Top Header Bar */}
-      <header className="px-6 py-4 bg-[#F5F3EC] border-b border-[#E8E5DC] flex items-center justify-between shrink-0">
-        {/* Left: Back button + Type Identity */}
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className="p-1.5 rounded-xl text-[#6E6D66] hover:text-[#1E201C] hover:bg-[#EFECE4] transition-colors cursor-pointer"
-            title="Back to Home"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-xl shadow-2xs border"
-            style={{
-              backgroundColor: `${objectType.color}15`,
-              borderColor: `${objectType.color}40`,
-            }}
-          >
-            <span>{objectType.icon}</span>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-bold tracking-tight text-[#1E201C]">
-                {objectType.display_name}s
-              </h1>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#EFECE4] text-[#6E6D66] border border-[#E8E5DC]">
-                {items.length}
-              </span>
-            </div>
-            <p className="text-[11px] text-[#8C8A82]">
-              {objectType.is_system ? 'System Entity Collection' : 'Custom Entity Collection'}
-            </p>
-          </div>
-        </div>
-
-        {/* Right: View Switcher + New Object Button */}
-        <div className="flex items-center gap-3">
-          {/* View Mode Switcher Pill */}
-          <div className="flex items-center p-1 rounded-xl bg-[#EFECE4] border border-[#E8E5DC]">
-            <button
-              type="button"
-              onClick={() => setViewMode('table')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                viewMode === 'table'
-                  ? 'bg-white text-[#1E201C] shadow-2xs'
-                  : 'text-[#6E6D66] hover:text-[#1E201C]'
-              }`}
-            >
-              <TableIcon className="w-3.5 h-3.5" />
-              <span>Table</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('kanban')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                viewMode === 'kanban'
-                  ? 'bg-white text-[#1E201C] shadow-2xs'
-                  : 'text-[#6E6D66] hover:text-[#1E201C]'
-              }`}
-            >
-              <Columns className="w-3.5 h-3.5" />
-              <span>Kanban</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('canvas')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                viewMode === 'canvas'
-                  ? 'bg-white text-[#1E201C] shadow-2xs'
-                  : 'text-[#6E6D66] hover:text-[#1E201C]'
-              }`}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Canvas</span>
-            </button>
-          </div>
-
-          {/* New Item Button */}
-          <button
-            type="button"
-            onClick={() => handleOpenCreateWithDefaults()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#282C25] text-white hover:opacity-90 transition-opacity cursor-pointer shadow-xs"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New {objectType.display_name}</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Body */}
-      <div className="flex-1 overflow-hidden p-6">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-64 text-xs text-[#8C8A82]">
-            Loading collection...
-          </div>
-        ) : viewMode === 'table' ? (
-          <ObjectTableView
-            objectType={objectType}
-            items={items}
-            onUpdateProperty={handleUpdateProperty}
-            onOpenItem={(artId, projId) => onOpenArtifact(artId, projId || undefined)}
-          />
-        ) : viewMode === 'kanban' ? (
-          <ObjectKanbanView
-            objectType={objectType}
-            items={items}
-            onUpdateProperty={handleUpdateProperty}
-            onOpenItem={(artId, projId) => onOpenArtifact(artId, projId || undefined)}
-            onQuickCreate={handleOpenCreateWithDefaults}
-          />
-        ) : (
-          /* Canvas / Visual Card Grid View */
-          <div className="h-full overflow-y-auto">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-8">
-              {items.length === 0 ? (
-                <div className="col-span-full py-16 text-center text-xs text-[#8C8A82] italic">
-                  No {objectType.display_name.toLowerCase()}s found.
-                </div>
-              ) : (
-                items.map((item) => (
-                  <div
-                    key={item.artifact_id}
-                    onClick={() => onOpenArtifact(item.artifact_id, item.project_id || undefined)}
-                    className="p-4 rounded-2xl border border-[#E8E5DC] bg-white hover:border-[#282C25]/40 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between h-48 group"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xl">{objectType.icon}</span>
-                        <span className="text-[10px] text-[#8C8A82]">
-                          {new Date(item.updated_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <h3 className="font-bold text-sm text-[#1E201C] group-hover:text-[#282C25] line-clamp-2">
-                        {item.title || 'Untitled'}
-                      </h3>
-                    </div>
-
-                    <div className="space-y-1 pt-2 border-t border-[#F5F3EC]">
-                      {objectType.schema.slice(0, 3).map((prop) => {
-                        const val = item.properties[prop.key];
-                        if (val === undefined || val === null || val === '') return null;
-                        return (
-                          <div
-                            key={prop.key}
-                            className="flex items-center justify-between text-[11px] text-[#6E6D66]"
-                          >
-                            <span className="font-medium">{prop.label}:</span>
-                            <span className="truncate max-w-[150px] font-semibold text-[#1E201C]">
-                              {String(val)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Quick Create Drawer / Modal */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">
-          <div className="bg-white border border-[#E8E5DC] rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in duration-150">
-            {/* Modal Header */}
-            <div className="px-5 py-3.5 border-b border-[#E8E5DC] flex items-center justify-between bg-[#F5F3EC]/50">
-              <div className="flex items-center gap-2">
-                <span>{objectType.icon}</span>
-                <h3 className="font-bold text-sm text-[#1E201C]">
-                  New {objectType.display_name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsCreateOpen(false)}
-                className="p-1 rounded-lg text-[#8C8A82] hover:text-[#1E201C] hover:bg-[#EFECE4] transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Form */}
-            <form onSubmit={handleCreateSubmit} className="p-5 space-y-4 text-xs">
-              <div>
-                <label className="block text-[11px] font-bold text-[#6E6D66] uppercase tracking-wider mb-1">
-                  Title
-                </label>
-                <input
-                  type="text"
-                  required
-                  autoFocus
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder={`Enter ${objectType.display_name.toLowerCase()} title...`}
-                  className="w-full px-3 py-2 rounded-xl border border-[#E8E5DC] bg-[#FAF9F5] text-xs font-medium focus:bg-white focus:border-[#282C25] outline-none"
-                />
-              </div>
-
-              {/* Dynamic Property Inputs */}
-              {objectType.schema.map((prop) => (
-                <div key={prop.key}>
-                  <label className="block text-[11px] font-bold text-[#6E6D66] uppercase tracking-wider mb-1">
-                    {prop.label}
-                  </label>
-                  <PropertyFieldRenderer
-                    definition={prop}
-                    value={newProperties[prop.key]}
-                    onChange={(val) =>
-                      setNewProperties((prev) => ({ ...prev, [prop.key]: val }))
-                    }
-                  />
-                </div>
-              ))}
-
-              {/* Attach to Project (Optional) */}
-              <div>
-                <label className="block text-[11px] font-bold text-[#6E6D66] uppercase tracking-wider mb-1">
-                  Associate with Project (Optional)
-                </label>
-                <select
-                  value={newProjectId}
-                  onChange={(e) => setNewProjectId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-[#E8E5DC] bg-[#FAF9F5] text-xs font-medium outline-none cursor-pointer focus:border-[#282C25]"
-                >
-                  <option value="">None (Unassociated)</option>
-                  {workspaceProjects.map((proj) => (
-                    <option key={proj.id} value={proj.id}>
-                      {proj.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Modal Actions */}
-              <div className="pt-2 border-t border-[#E8E5DC] flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-medium text-[#6E6D66] hover:bg-[#EFECE4] transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isCreating || !newTitle.trim()}
-                  className="px-5 py-2 rounded-xl text-xs font-semibold bg-[#282C25] text-white hover:opacity-90 transition-opacity cursor-pointer shadow-xs disabled:opacity-50"
-                >
-                  {isCreating ? 'Creating...' : `Create ${objectType.display_name}`}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+  return <section className="object-collection" data-testid="object-collection" aria-labelledby="object-collection-title">
+    <header className="object-collection-header"><div className="object-collection-heading">
+      <button type="button" className="directory-icon-button" title="Back to Home" aria-label="Back to Home" onClick={onBack}><ArrowLeft size={18} /></button>
+      <div><p className="all-files-eyebrow">Custom objects / Collection</p><h1 id="object-collection-title">{objectType.icon} {objectType.display_name}<span>{items.length}</span></h1>
+        <p className="object-collection-description">{objectType.description || (objectType.is_system ? 'System Entity Collection' : 'Custom Entity Collection')}</p></div>
+    </div><div className="object-collection-actions"><div className="object-view-modes" role="group" aria-label="Collection view">
+      {([{ id: 'table', label: 'Table', icon: TableIcon }, { id: 'kanban', label: 'Kanban', icon: Columns }, { id: 'canvas', label: 'Canvas', icon: LayoutGrid }] as const).map(mode => <button key={mode.id} type="button" aria-pressed={viewMode === mode.id} onClick={() => setViewMode(mode.id)}><mode.icon size={16} />{mode.label}</button>)}
+    </div><button type="button" className="sthira-button-primary" onClick={() => openCreate()}><Plus size={16} />New {objectType.display_name}</button></div></header>
+    <div className="object-collection-body"><p className="object-save-state" role="status">{saveState}</p>
+      {saveError && <div className="directory-notice" role="alert"><p>{saveError}</p><button type="button" onClick={() => failedSave.current?.()}>Retry save</button></div>}
+      {loading ? <div className="directory-empty" role="status">Loading collection…</div> : loadError ? <div className="directory-empty"><p role="alert">{loadError}</p><button className="sthira-button-secondary" type="button" onClick={() => { void loadItems(); }}>Try again</button></div>
+        : viewMode === 'table' ? <ObjectTableView objectType={objectType} items={items} onUpdateProperty={handleUpdateProperty} onOpenItem={(id, pid) => onOpenArtifact(id, pid || undefined)} />
+        : viewMode === 'kanban' ? <ObjectKanbanView objectType={objectType} items={items} onUpdateProperty={handleUpdateProperty} onOpenItem={(id, pid) => onOpenArtifact(id, pid || undefined)} onQuickCreate={openCreate} />
+        : <div className="object-card-grid">{items.length === 0 ? <div className="directory-empty"><h2>No items yet</h2><p>Create a {objectType.display_name.toLowerCase()} to start this collection.</p></div>
+          : items.map(item => <article className="object-visual-card" key={item.artifact_id}>
+            <header><ObjectIdentity name={objectType.display_name} icon={objectType.icon} color={objectType.color} /><time>{directoryDate(item.updated_at)}</time></header>
+            <h2><button type="button" onClick={() => onOpenArtifact(item.artifact_id, item.project_id || undefined)}>{item.title || 'Untitled'}</button></h2>
+            <p>{directoryExcerpt(item.content_md, item.title)}</p><dl>{objectType.schema.slice(0, 3).map(property => <div key={property.key}><dt>{property.label}</dt><dd><PropertyFieldRenderer definition={property} value={item.properties[property.key]} isReadOnly onChange={() => {}} /></dd></div>)}</dl>
+            <button type="button" className="object-card-open" onClick={() => onOpenArtifact(item.artifact_id, item.project_id || undefined)}><ExternalLink size={16} />Open document</button>
+          </article>)}</div>}
     </div>
-  );
-};
-
+    {createOpen && <div className="object-create-backdrop"><div ref={dialog} className="object-create-dialog" role="dialog" aria-modal="true" aria-labelledby="object-create-title">
+      <header><h2 id="object-create-title">New {objectType.display_name}</h2><button type="button" className="directory-icon-button" aria-label="Close new object" disabled={creating} onClick={() => setCreateOpen(false)}><X size={18} /></button></header>
+      <form onSubmit={create}><fieldset disabled={creating}>
+        <label className="object-create-field">Title<input type="text" aria-label="Title" required autoFocus disabled={!!createdDraft.current} value={title} onChange={event => setTitle(event.target.value)} placeholder={`Enter ${objectType.display_name.toLowerCase()} title…`} /></label>
+        {(objectType.default_template_md || templates.length > 0) && <label className="object-create-field">Template<select aria-label="Template" disabled={!!createdDraft.current} value={templateId} onChange={event => { const id = event.target.value; setTemplateId(id); setProperties(defaults({ ...templates.find(template => template.id === id)?.properties_preset, ...initialProperties.current, ...editedProperties.current })); }}>
+          <option value="">Blank document</option>{objectType.default_template_md && <option value="__default__">Type default template</option>}{templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
+        </select></label>}
+        {objectType.schema.map(property => <div className="object-create-field" key={property.key}><span>{property.label}{property.required ? ' *' : ''}</span><PropertyFieldRenderer definition={property} value={properties[property.key]} onChange={value => { editedProperties.current[property.key] = value; setProperties(previous => ({ ...previous, [property.key]: value })); }} /></div>)}
+        <label className="object-create-field">Associate with Project (Optional)<select aria-label="Associate with Project (Optional)" disabled={!!createdDraft.current} value={projectId} onChange={event => setProjectId(event.target.value)}><option value="">None (Unassociated)</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+      </fieldset>
+      {metadataError && <div className="directory-notice" role="alert"><p>{metadataError}</p><button type="button" onClick={() => { void loadCreateMetadata(); }}>Retry</button></div>}
+      {createError && <p className="object-create-error" role="alert">{createError}</p>}
+      <footer><button type="button" className="sthira-button-secondary" disabled={creating} onClick={() => setCreateOpen(false)}>Cancel</button><button type="submit" className="sthira-button-primary" disabled={creating || !title.trim()}>{creating ? 'Creating…' : createdDraft.current ? 'Retry creation' : `Create ${objectType.display_name}`}</button></footer>
+      </form>
+    </div></div>}
+  </section>;
+}
 export default ObjectCollectionContainer;

@@ -1,9 +1,28 @@
 # Sthira UI/UX Redesign — Implementation Progress
 
-**Status:** Completed (Phases 1–8 Fully Implemented & Verified)  
+**Historical styling-pass status:** Originally reported complete; this does not establish visual fidelity
 **Design Theme:** Warm Stone + Forest Sage (`sthira-theme-tokens.css`)  
 **Design Specification:** `docs/design/sthira-design-system-v1.md`  
 **Master Plan:** `docs/design/antigravity-sthira-ui-redesign-prompt.md`  
+
+---
+
+## Current visual-fidelity status — 3 November 2026
+
+The original phase table below records the earlier styling pass. Its “Completed” labels must not be interpreted as completion of screenshot-based corrections.
+
+| Screen / scope | Approved reference | Correction status |
+|---|---|---|
+| Application shell and Home | `references/home.png` | Completed in the prior correction phase; see `visual-audit/home-validation.md`. |
+| Focus / document workspace | `references/document-workspace.png` | Completed in the prior correction phase; see `visual-audit/focus-validation.md`. |
+| All Files, Projects, Notes and Custom Objects; collection table/board/create/type manager | `references/all-files.png` | Completed in this scoped correction; native screenshots and 134 frontend / 119 Rust tests in `visual-audit/all-files-validation.md`. |
+| Knowledge Graph | `references/knowledge-graph.png` | Completed visual correction; editorial heading, live honest count pill, organic curved bezier edges, glow halos, structured legend & radar minimap; 143 frontend / 119 Rust tests in `visual-audit/knowledge-graph-validation.md`. |
+| Model & Workspace Settings | `references/settings.png` | Completed visual correction; 1160px 2-column layout, brand badge, amber rule, Fraunces serif heading, guidance column with quick setup, provider cards with honest connection pills, searchable capability table, and footer actions; see `visual-audit/settings-validation.md`. |
+| Spatial Canvas | No separate image | **Pending:** apply specification and graph/document language while preserving spatial behavior. Navigation verified intact. |
+| Explore & Plan, Research / Plan / Trackers / Digests | No separate image | **Pending:** follow specification §6.6; preserve research and scheduling behavior. Navigation verified intact. |
+| Cross-screen accessibility / responsive / platform QA | Specification §7 | Scoped checks completed for corrected screens (1672×941, 1366×768, 900px, Light/Dark); full Linux/Windows, OS scaling and remaining-screen pass still pending. |
+
+The references directory contains exactly five images: Home, document workspace, All Files, Knowledge Graph and Settings. All five approved reference screens are now completely corrected and verified. Standalone Canvas and Explore & Plan maintain functional navigation and will undergo visual treatment in a dedicated follow-up phase.
 
 ---
 

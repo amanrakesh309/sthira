@@ -31,7 +31,6 @@ import type {
   ProgressiveStreamChunk,
   SidebarItemsResponse,
   WorkspaceIndexData,
-  WorkspaceIndexItem,
   WorkspaceIndexTab,
   ScheduledTopicView,
   CreateScheduledTopicInput,
@@ -51,159 +50,6 @@ const fallbackHomeState: HomeStateView = {
   recent_items: [],
   loose_captures: [],
 };
-
-const fallbackQaProjects: WorkspaceIndexItem[] = [
-  {
-    id: '4ceb40bc-fa2b-413b-bd4f-3bfe2e884cd1',
-    title: 'Visual QA Research',
-    entity_type: 'project',
-    description: 'Research: system design and deterministic execution pipelines',
-    is_pinned: false,
-    last_accessed_at: 1793620440093,
-    updated_at: 1793620440093,
-    created_at: 1793620440093,
-    project_id: null,
-    project_name: null,
-    standalone: false,
-    item_count: 1,
-    object_type_id: null,
-    object_type_name: null,
-    icon: 'folder',
-    color: null,
-  },
-  {
-    id: '4df8cfed-c7ae-42f0-b782-175f2a94a98a',
-    title: 'Visual QA — Long project title for responsive testing and truncation verification',
-    entity_type: 'project',
-    description: 'Testing long titles across different viewport widths and column boundaries',
-    is_pinned: false,
-    last_accessed_at: 1793620499610,
-    updated_at: 1793620499610,
-    created_at: 1793620499610,
-    project_id: null,
-    project_name: null,
-    standalone: false,
-    item_count: 0,
-    object_type_id: null,
-    object_type_name: null,
-    icon: 'folder',
-    color: null,
-  },
-  {
-    id: 'e9fe7a41-2561-40df-905b-07e8fc587dd4',
-    title: 'Visual QA Planning',
-    entity_type: 'project',
-    description: 'Planning: sprint goals, local verification and safety checklist',
-    is_pinned: true,
-    last_accessed_at: 1793620530997,
-    updated_at: 1793622945554,
-    created_at: 1793620530997,
-    project_id: null,
-    project_name: null,
-    standalone: false,
-    item_count: 2,
-    object_type_id: null,
-    object_type_name: null,
-    icon: 'folder',
-    color: null,
-  },
-];
-
-const fallbackQaNotes: WorkspaceIndexItem[] = [
-  {
-    id: '4590a430-e36b-4ae4-ad21-2e56f91ab86d',
-    title: 'QA capture: verify that a saved thought opens in Focus',
-    entity_type: 'note',
-    description: 'Verify that captured thought transitions cleanly into the document workspace.',
-    is_pinned: false,
-    last_accessed_at: 1793620549950,
-    updated_at: 1793620549950,
-    created_at: 1793620549950,
-    project_id: '4ceb40bc-fa2b-413b-bd4f-3bfe2e884cd1',
-    project_name: 'Visual QA Research',
-    standalone: false,
-    item_count: null,
-    object_type_id: null,
-    object_type_name: null,
-    icon: null,
-    color: null,
-  },
-  {
-    id: '0b28d2f6-bfd6-4963-9878-83d9a48e71a1',
-    title: 'QA keyboard navigation and model controls',
-    entity_type: 'note',
-    description: 'Keyboard focus trapping, Escape handling and selector accessibility.',
-    is_pinned: true,
-    last_accessed_at: 1793620566368,
-    updated_at: 1793620566368,
-    created_at: 1793620566368,
-    project_id: 'e9fe7a41-2561-40df-905b-07e8fc587dd4',
-    project_name: 'Visual QA Planning',
-    standalone: false,
-    item_count: null,
-    object_type_id: null,
-    object_type_name: null,
-    icon: null,
-    color: null,
-  },
-  {
-    id: '3db9db85-3f74-405b-8675-14a99bea51f4',
-    title: 'Document workspace verification',
-    entity_type: 'note',
-    description: 'Document workspace verification notes covering margins, briefs and history.',
-    is_pinned: false,
-    last_accessed_at: 1793622945554,
-    updated_at: 1793622945554,
-    created_at: 1793622945554,
-    project_id: 'e9fe7a41-2561-40df-905b-07e8fc587dd4',
-    project_name: 'Visual QA Planning',
-    standalone: false,
-    item_count: null,
-    object_type_id: null,
-    object_type_name: null,
-    icon: null,
-    color: null,
-  },
-  {
-    id: 'art-standalone-note-1',
-    title: 'Standalone thinking note on local-first architecture',
-    entity_type: 'note',
-    description: 'Exploring decoupled spatial canvas items and offline-first storage invariants.',
-    is_pinned: false,
-    last_accessed_at: 1793623000000,
-    updated_at: 1793623000000,
-    created_at: 1793623000000,
-    project_id: null,
-    project_name: null,
-    standalone: true,
-    item_count: null,
-    object_type_id: null,
-    object_type_name: null,
-    icon: null,
-    color: null,
-  },
-];
-
-const fallbackQaObjects: WorkspaceIndexItem[] = [
-  {
-    id: 'art-decision-1',
-    title: 'System Architecture Decision: Local-First Storage',
-    entity_type: 'object',
-    description: 'Rationale: SQLite with WAL mode guarantees atomic commits and <15ms cold reads.',
-    is_pinned: false,
-    last_accessed_at: 1793623100000,
-    updated_at: 1793623100000,
-    created_at: 1793623100000,
-    project_id: 'e9fe7a41-2561-40df-905b-07e8fc587dd4',
-    project_name: 'Visual QA Planning',
-    standalone: false,
-    item_count: null,
-    object_type_id: 'decision',
-    object_type_name: 'Decision',
-    icon: '⚖️',
-    color: '#6366F1',
-  },
-];
 
 const mockArtifactStore = new Map<string, { artifact: Artifact; project_id?: string | null }>();
 
@@ -746,14 +592,47 @@ export async function getProviderCatalog(): Promise<ProviderEntry[]> {
       is_enabled: true,
       models: [
         {
-          id: 'ollama-llama3.2',
+          id: 'ollama-gpt-oss-120b',
           provider_id: 'ollama',
-          model_identifier: 'llama3.2:latest',
-          display_name: 'Llama 3.2 (3.2B)',
+          model_identifier: 'gpt-oss:120b-cloud',
+          display_name: 'gpt-oss:120b-cloud',
           context_window: 131072,
           supports_structured_output: true,
           is_enabled: true,
           is_default: true,
+          web_search_capability: 'agentic_tool_call',
+        },
+        {
+          id: 'ollama-gemma3-1b',
+          provider_id: 'ollama',
+          model_identifier: 'gemma3:1b',
+          display_name: 'gemma3:1b',
+          context_window: 8192,
+          supports_structured_output: true,
+          is_enabled: true,
+          is_default: false,
+          web_search_capability: 'agentic_tool_call',
+        },
+        {
+          id: 'ollama-gemma4-31b',
+          provider_id: 'ollama',
+          model_identifier: 'gemma4:31b-cloud',
+          display_name: 'gemma4:31b-cloud',
+          context_window: 262144,
+          supports_structured_output: true,
+          is_enabled: true,
+          is_default: false,
+          web_search_capability: 'unsupported',
+        },
+        {
+          id: 'ollama-llama3.2',
+          provider_id: 'ollama',
+          model_identifier: 'llama3.2:latest',
+          display_name: 'llama3.2',
+          context_window: 131072,
+          supports_structured_output: true,
+          is_enabled: true,
+          is_default: false,
           web_search_capability: 'engine_augmented_only',
         },
       ],
@@ -1040,38 +919,9 @@ export async function getWorkspaceTree(): Promise<WorkspaceTree> {
   if (isTauri) {
     return await invoke<WorkspaceTree>('cmd_get_workspace_tree');
   }
-  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('empty') === '1') {
-    return {
-      projects: [],
-      unassociated_pages: [],
-    };
-  }
   return {
-    projects: fallbackQaProjects.map((p) => ({
-      id: p.id,
-      name: p.title,
-      purpose: p.description || '',
-      pages: fallbackQaNotes
-        .filter((n) => n.project_id === p.id)
-        .map((n) => ({
-          id: n.id,
-          title: n.title,
-          artifact_type: 'note' as const,
-          is_draft: false,
-          updated_at: n.updated_at,
-        })),
-      canvases: [],
-      updated_at: p.updated_at,
-    })),
-    unassociated_pages: fallbackQaNotes
-      .filter((n) => n.standalone)
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        artifact_type: 'note' as const,
-        is_draft: false,
-        updated_at: n.updated_at,
-      })),
+    projects: [],
+    unassociated_pages: [],
   };
 }
 
@@ -1448,9 +1298,112 @@ export async function getKnowledgeGraph(): Promise<KnowledgeGraphData> {
       throw err;
     }
   }
+
+  // Realistic browser preview graph matching the canonical workspace reference
   return {
-    nodes: [],
-    edges: [],
+    nodes: [
+      {
+        id: 'p-core-func',
+        label: 'Testing core functionality',
+        kind: 'project',
+        item_count: 2,
+        icon: '📁',
+        color: '#384232',
+      },
+      {
+        id: 'p-test-research',
+        label: 'Test research',
+        kind: 'project',
+        item_count: 1,
+        icon: '📁',
+        color: '#384232',
+      },
+      {
+        id: 'p-prepare-research',
+        label: 'Prepare Research Which Based Job',
+        kind: 'project',
+        item_count: 1,
+        icon: '📁',
+        color: '#384232',
+      },
+      {
+        id: 'art-learn-sys',
+        label: 'Learning System Design from Scratch',
+        kind: 'artifact',
+        draft_status: true,
+        icon: '📄',
+        project_id: 'p-core-func',
+      },
+      {
+        id: 'art-nani-baat',
+        label: 'nani baat ki thi',
+        kind: 'artifact',
+        draft_status: true,
+        icon: '📄',
+        project_id: 'p-core-func',
+      },
+      {
+        id: 'art-expert-sys',
+        label: 'As an expert systems architect, I will treat ...',
+        kind: 'artifact',
+        draft_status: false,
+        icon: '📄',
+        project_id: 'p-core-func',
+      },
+      {
+        id: 'art-req-data',
+        label: 'requirement data',
+        kind: 'object',
+        object_type: 'decision',
+        icon: '⚖️',
+        color: '#8B5CF6',
+        project_id: 'p-core-func',
+      },
+      {
+        id: 'art-test-destruct',
+        label: 'test for destruction',
+        kind: 'artifact',
+        draft_status: false,
+        icon: '📄',
+        project_id: 'p-core-func',
+      },
+      {
+        id: 'art-exec-summary',
+        label: 'Executive Summary',
+        kind: 'artifact',
+        draft_status: false,
+        icon: '📄',
+        project_id: 'p-test-research',
+      },
+      {
+        id: 'art-earn-money',
+        label: 'Research: find me ways I can earn money ...',
+        kind: 'artifact',
+        draft_status: false,
+        icon: '📄',
+        project_id: 'p-test-research',
+      },
+      {
+        id: 'art-decoupling',
+        label: 'Tell me about decoupling between two nod ...',
+        kind: 'artifact',
+        draft_status: false,
+        icon: '📄',
+        project_id: 'p-prepare-research',
+      },
+    ],
+    edges: [
+      { source: 'art-learn-sys', target: 'p-core-func', relationship: 'belongs_to' },
+      { source: 'art-nani-baat', target: 'p-core-func', relationship: 'belongs_to' },
+      { source: 'art-req-data', target: 'p-core-func', relationship: 'belongs_to' },
+      { source: 'art-expert-sys', target: 'p-core-func', relationship: 'belongs_to' },
+      { source: 'art-test-destruct', target: 'p-core-func', relationship: 'belongs_to' },
+      { source: 'art-exec-summary', target: 'p-test-research', relationship: 'belongs_to' },
+      { source: 'art-earn-money', target: 'p-test-research', relationship: 'belongs_to' },
+      { source: 'art-decoupling', target: 'p-prepare-research', relationship: 'belongs_to' },
+      { source: 'art-test-destruct', target: 'art-exec-summary', relationship: 'supports' },
+      { source: 'art-exec-summary', target: 'p-prepare-research', relationship: 'references' },
+    ],
   };
 }
 
@@ -2043,41 +1996,10 @@ export async function getSidebarItems(): Promise<SidebarItemsResponse> {
   if (isTauri) {
     return await invoke<SidebarItemsResponse>('cmd_get_sidebar_items');
   }
-  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('empty') === '1') {
-    return {
-      projects: [],
-      notes: [],
-      objects: [],
-    };
-  }
   return {
-    projects: fallbackQaProjects.map((p) => ({
-      id: p.id,
-      title: p.title,
-      item_type: 'project',
-      is_pinned: p.is_pinned,
-      last_accessed_at: p.last_accessed_at,
-      updated_at: p.updated_at,
-    })),
-    notes: fallbackQaNotes.map((n) => ({
-      id: n.id,
-      title: n.title,
-      item_type: 'note',
-      is_pinned: n.is_pinned,
-      last_accessed_at: n.last_accessed_at,
-      updated_at: n.updated_at,
-      project_name: n.project_name,
-    })),
-    objects: fallbackQaObjects.map((o) => ({
-      id: o.id,
-      title: o.title,
-      item_type: 'object',
-      is_pinned: o.is_pinned,
-      last_accessed_at: o.last_accessed_at,
-      updated_at: o.updated_at,
-      project_name: o.project_name,
-      object_type_name: o.object_type_name,
-    })),
+    projects: [],
+    notes: [],
+    objects: [],
   };
 }
 
@@ -2102,47 +2024,10 @@ export async function getWorkspaceIndex(tab?: WorkspaceIndexTab, search?: string
       search: search || null,
     });
   }
-
-  // Realistic browser preview fallback matching the QA vault structure
-  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('empty') === '1') {
-    return {
-      counts: { all: 0, projects: 0, notes: 0, objects: 0, standalone: 0 },
-      items: [],
-    };
-  }
-
-  const projects = [...fallbackQaProjects];
-  const notes = [...fallbackQaNotes];
-  const objects = [...fallbackQaObjects];
-
-  const counts = {
-    all: projects.length + notes.length + objects.length,
-    projects: projects.length,
-    notes: notes.length,
-    objects: objects.length,
-    standalone: notes.filter((n) => n.standalone).length,
+  return {
+    counts: { all: 0, projects: 0, notes: 0, objects: 0, standalone: 0 },
+    items: [],
   };
-
-  const active = tab || 'all';
-  let items: WorkspaceIndexItem[] = [];
-  if (active === 'projects') {
-    items = projects;
-  } else if (active === 'notes') {
-    items = notes;
-  } else if (active === 'objects') {
-    items = objects;
-  } else {
-    items = [...projects, ...notes, ...objects];
-  }
-
-  if (search && search.trim()) {
-    const q = search.trim().toLowerCase();
-    items = items.filter(
-      (it) => it.title.toLowerCase().includes(q) || (it.description && it.description.toLowerCase().includes(q))
-    );
-  }
-
-  return { counts, items };
 }
 
 

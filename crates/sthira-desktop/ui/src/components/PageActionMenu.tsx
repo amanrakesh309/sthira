@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { useAnchoredPopover } from '../hooks/useAnchoredPopover';
 import {
   MoreHorizontal,
   Link2,
@@ -111,6 +113,12 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; openId?: string } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const popoverPosition = useAnchoredPopover(isOpen && variant === 'row', triggerRef, panelRef, view);
+  useEffect(() => {
+    if (isOpen && variant === 'row') panelRef.current?.querySelector<HTMLElement>('button:not(:disabled), input')?.focus();
+  }, [isOpen, view, variant]);
 
   const isStandalone = !projectId;
 
@@ -120,6 +128,7 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
     setError(null);
     setProjectSearch('');
     setNewProjectName('');
+    triggerRef.current?.focus();
   }, []);
 
   // Lazy-load projects + object types the first time the menu opens.
@@ -150,7 +159,7 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
       }
     };
     const onClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) close();
+      if (!containerRef.current?.contains(e.target as Node) && !panelRef.current?.contains(e.target as Node)) close();
     };
     window.addEventListener('keydown', onKeyDown);
     document.addEventListener('mousedown', onClickOutside);
@@ -592,37 +601,23 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
   );
 
 
-  return (
-    <div
-      ref={containerRef}
-      className="relative"
-      onClick={(e) => e.stopPropagation()}
-      data-testid={`page-action-menu-${artifactId}`}
-    >
-      {/* Three-dots trigger */}
-      <button
-        type="button"
-        data-testid={triggerTestId || 'page-action-menu-trigger'}
-        onClick={() => (isOpen ? close() : setIsOpen(true))}
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-        aria-label="Page actions"
-        title="Page actions"
-        className={
-          variant === 'toolbar'
-            ? 'w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#EFECE4] dark:hover:bg-[#252820] text-[#5C5F58] dark:text-[#A8A69E] transition-colors cursor-pointer'
-            : 'p-1.5 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer'
-        }
-      >
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-
-      {/* Dropdown */}
-      {isOpen && (
+  const dropdown = (
         <div
+          ref={panelRef}
+          style={variant === 'row' ? popoverPosition : undefined}
           role="menu"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              const controls = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+              const index = controls.indexOf(document.activeElement as HTMLButtonElement);
+              controls[(index + (event.key === 'ArrowDown' ? 1 : -1) + controls.length) % controls.length]?.focus();
+            }
+          }}
           data-testid="page-action-dropdown"
-          className={`absolute z-50 mt-1 w-64 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-2xl overflow-hidden text-xs font-sans animate-in fade-in zoom-in-95 duration-100 ${
+          className={variant === 'row' ? 'directory-page-popover' : `absolute z-50 mt-1 w-64 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-2xl overflow-hidden text-xs font-sans animate-in fade-in zoom-in-95 duration-100 ${
             align === 'right' ? 'right-0' : 'left-0'
           }`}
         >
@@ -644,7 +639,35 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
           {view === 'create-project' && renderCreateProject()}
           {view === 'confirm-delete' && renderConfirmDelete()}
         </div>
-      )}
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative"
+      onClick={(e) => e.stopPropagation()}
+      data-testid={`page-action-menu-${artifactId}`}
+    >
+      {/* Three-dots trigger */}
+      <button
+        type="button"
+        ref={triggerRef}
+        data-testid={triggerTestId || 'page-action-menu-trigger'}
+        onClick={() => (isOpen ? close() : setIsOpen(true))}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-label="Page actions"
+        title="Page actions"
+        className={
+          variant === 'toolbar'
+            ? 'w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#EFECE4] dark:hover:bg-[#252820] text-[#5C5F58] dark:text-[#A8A69E] transition-colors cursor-pointer'
+            : 'p-1.5 rounded-lg text-[#6E6D66] dark:text-[#A8A69E] hover:bg-[#EFECE4] dark:hover:bg-[#22241F] hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer'
+        }
+      >
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+
+      {isOpen && (variant === 'row' ? createPortal(dropdown, document.body) : dropdown)}
 
       {/* Result toast with [Open] */}
       {toast && (

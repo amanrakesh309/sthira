@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  SlidersHorizontal,
   X,
   Server,
   Eye,
@@ -18,6 +17,10 @@ import {
   ExternalLink,
   ShieldCheck,
   Sun,
+  Sprout,
+  Link as LinkIcon,
+  ChevronRight,
+  MoreHorizontal,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import {
@@ -43,13 +46,13 @@ import type {
   WebSearchResultItem,
   WebSearchCapability,
 } from '../types/sthira';
-import { WebSearchCapabilityBadge } from './ModelSelector';
 
 interface ModelSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onVaultMutated: () => void;
   onCatalogChanged?: () => void;
+  initialTab?: 'models' | 'search' | 'appearance' | 'vault';
 }
 
 interface ProviderPreset {
@@ -110,6 +113,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   onClose,
   onVaultMutated,
   onCatalogChanged,
+  initialTab,
 }) => {
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -119,11 +123,26 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [urlInputs, setUrlInputs] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<'models' | 'search' | 'appearance' | 'vault'>('models');
+
+  const [activeTab, setActiveTab] = useState<'models' | 'search' | 'appearance' | 'vault'>(() => {
+    if (initialTab) return initialTab;
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab') || params.get('settings_tab');
+      if (tabParam === 'search' || tabParam === 'appearance' || tabParam === 'vault') {
+        return tabParam;
+      }
+    }
+    return 'models';
+  });
+
+  // Local model search & capability filter
+  const [modelSearchQuery, setModelSearchQuery] = useState('');
+  const [selectedCapabilityFilter, setSelectedCapabilityFilter] = useState<string>('all');
 
   // Search Providers State
   const [searchProviders, setSearchProviders] = useState<SearchProviderEntry[]>([]);
-  const [loadingSearchProviders, setLoadingSearchProviders] = useState(false);
+  const [, setLoadingSearchProviders] = useState(false);
   const [searchUrlInputs, setSearchUrlInputs] = useState<Record<string, string>>({});
   const [searchKeyInputs, setSearchKeyInputs] = useState<Record<string, string>>({});
   const [showSearchKeys, setShowSearchKeys] = useState<Record<string, boolean>>({});
@@ -132,9 +151,8 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const [isTestingMap, setIsTestingMap] = useState<Record<string, boolean>>({});
   const [testErrorMap, setTestErrorMap] = useState<Record<string, string | null>>({});
 
-  // Discovered models per connected provider: providerId -> ProviderModelEntry[]
+  // Discovered models per connected provider
   const [discoveredModelsMap, setDiscoveredModelsMap] = useState<Record<string, ProviderModelEntry[]>>({});
-  // Selected model identifier from the discovered dropdown per connected provider: providerId -> modelIdentifier
   const [selectedDiscoveredModelMap, setSelectedDiscoveredModelMap] = useState<Record<string, string>>({});
 
   // Inline "Add Custom Model" form state per provider
@@ -156,9 +174,9 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     try {
       setLoading(true);
       const catalog = await getProviderCatalog();
-      setProviders(catalog);
+      setProviders(catalog || []);
       const urls: Record<string, string> = {};
-      catalog.forEach((p) => {
+      (catalog || []).forEach((p) => {
         urls[p.id] = p.base_url;
       });
       setUrlInputs(urls);
@@ -173,10 +191,10 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     try {
       setLoadingSearchProviders(true);
       const list = await getSearchProviders();
-      setSearchProviders(list);
+      setSearchProviders(list || []);
       const urls: Record<string, string> = {};
       const queries: Record<string, string> = {};
-      list.forEach((p) => {
+      (list || []).forEach((p) => {
         urls[p.id] = p.endpoint_url;
         queries[p.id] = 'rust async traits';
       });
@@ -293,7 +311,6 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     }
   };
 
-  // Dynamic Model Fetching (OmniRouter Style): discover models into dropdown selection
   const handleFetchModels = async (provider: ProviderEntry) => {
     setFetchingProviderId(provider.id);
     setNotice(null);
@@ -302,7 +319,6 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
       const endpoint = urlInputs[provider.id] || provider.base_url;
       const apiKey = keyInputs[provider.id];
 
-      // Save provider settings first if changed
       if (endpoint !== provider.base_url || apiKey) {
         await saveProvider(
           { ...provider, base_url: endpoint, has_api_key: !!apiKey || provider.has_api_key },
@@ -350,149 +366,145 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const handleAddAllDiscoveredModels = async (providerId: string) => {
     const available = discoveredModelsMap[providerId] || [];
     if (available.length === 0) return;
-
     try {
       for (const m of available) {
         await upsertModel(m);
       }
-      setNotice(`Added all ${available.length} models to ${providerId}`);
+      setNotice(`Added ${available.length} models to ${providerId}`);
       await fetchCatalog();
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
-      setErrorNotice(`Failed to add models: ${err?.message || err}`);
+      setErrorNotice(`Failed to batch add models: ${err?.message || err}`);
     }
   };
 
-  const handleFetchModelsForNewProvider = async () => {
-    const preset = PROVIDER_PRESETS.find((p) => p.id === selectedPresetId);
-    const pId = selectedPresetId === 'custom' ? `custom-${Date.now()}` : selectedPresetId;
-    const baseUrl = customProviderUrl.trim() || (preset ? preset.base_url : 'http://localhost:8000/v1');
-    const provType = preset ? preset.provider_type : 'openai_compatible';
-    const apiKey = customProviderKey.trim() || undefined;
+  const handleAddCustomModel = async (providerId: string) => {
+    if (!newModelId.trim()) {
+      setErrorNotice('Model identifier cannot be empty');
+      return;
+    }
+    const newEntry: ProviderModelEntry = {
+      id: `${providerId}-${newModelId.trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+      provider_id: providerId,
+      model_identifier: newModelId.trim(),
+      display_name: newModelDisplayName.trim() || newModelId.trim(),
+      context_window: 131072,
+      supports_structured_output: true,
+      is_enabled: true,
+      is_default: false,
+      web_search_capability: 'engine_augmented_only',
+    };
 
-    setIsFetchingNewProvider(true);
-    setErrorNotice(null);
-    setNotice(null);
     try {
-      const discovered = await discoverProviderModels(pId, provType, baseUrl, apiKey);
+      await upsertModel(newEntry);
+      setNotice(`Added custom model '${newEntry.display_name}'`);
+      setAddingModelForProvider(null);
+      setNewModelId('');
+      setNewModelDisplayName('');
+      await fetchCatalog();
+      if (onCatalogChanged) onCatalogChanged();
+    } catch (err: any) {
+      setErrorNotice(`Failed to add custom model: ${err?.message || err}`);
+    }
+  };
+
+  const handleDiscoverForNewProvider = async () => {
+    if (!customProviderUrl) return;
+    setIsFetchingNewProvider(true);
+    setNotice(null);
+    setErrorNotice(null);
+    try {
+      const discovered = await discoverProviderModels(
+        selectedPresetId,
+        'openai_compatible',
+        customProviderUrl,
+        customProviderKey.trim() || undefined
+      );
       setDiscoveredForNewProvider(discovered);
       if (discovered.length > 0) {
         setSelectedModelForNewProvider(discovered[0].model_identifier);
-        setNotice(`Discovered ${discovered.length} model(s). Select which model to connect below.`);
+        setNotice(`Found ${discovered.length} available models`);
       } else {
-        setNotice('No models returned. You can still save and add models manually.');
+        setNotice('Connection succeeded, but no models were returned.');
       }
     } catch (err: any) {
-      setErrorNotice(`Fetch failed: ${err?.message || err}`);
+      setErrorNotice(`Discovery failed: ${err?.message || err}`);
     } finally {
       setIsFetchingNewProvider(false);
     }
   };
 
-  const handleAddCustomModel = async (providerId: string) => {
-    if (!newModelId.trim()) return;
+  const handleSaveNewProvider = async () => {
+    if (!customProviderName.trim()) {
+      setErrorNotice('Provider name is required');
+      return;
+    }
     try {
-      const modelEntry: ProviderModelEntry = {
-        id: `${providerId}:${newModelId.trim()}`,
-        provider_id: providerId,
-        model_identifier: newModelId.trim(),
-        display_name: newModelDisplayName.trim() || newModelId.trim(),
-        context_window: 128000,
-        supports_structured_output: true,
+      const pId = selectedPresetId === 'custom'
+        ? `custom-${Date.now()}`
+        : selectedPresetId;
+
+      const newProvider: ProviderEntry = {
+        id: pId,
+        provider_type: 'openai_compatible',
+        display_name: customProviderName.trim(),
+        base_url: customProviderUrl.trim(),
+        has_api_key: customProviderKey.trim().length > 0,
         is_enabled: true,
-        is_default: false,
+        models: [],
       };
 
-      await upsertModel(modelEntry);
-      setNotice(`Added model '${modelEntry.display_name}'`);
-      setNewModelId('');
-      setNewModelDisplayName('');
-      setAddingModelForProvider(null);
+      await saveProvider(newProvider, customProviderKey.trim() || undefined);
+
+      if (selectedModelForNewProvider) {
+        const found = discoveredForNewProvider.find(
+          (m) => m.model_identifier === selectedModelForNewProvider
+        );
+        if (found) {
+          await upsertModel({ ...found, provider_id: pId, is_default: true });
+        }
+      }
+
+      setNotice(`Connected provider '${newProvider.display_name}'`);
+      setIsAddingProvider(false);
+      setCustomProviderKey('');
+      setDiscoveredForNewProvider([]);
+      setSelectedModelForNewProvider('');
       await fetchCatalog();
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
-      setErrorNotice(`Failed to add model: ${err?.message || err}`);
+      setErrorNotice(`Failed to connect provider: ${err?.message || err}`);
     }
   };
 
   const handleDeleteModel = async (modelId: string, modelName: string) => {
-    if (!confirm(`Delete model '${modelName}'?`)) return;
+    if (!confirm(`Are you sure you want to remove '${modelName}'?`)) return;
     try {
       await deleteModel(modelId);
-      setNotice(`Deleted model '${modelName}'`);
+      setNotice(`Removed model '${modelName}'`);
       await fetchCatalog();
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
-      setErrorNotice(`Failed to delete model: ${err?.message || err}`);
+      setErrorNotice(`Delete failed: ${err?.message || err}`);
     }
   };
 
   const handleDeleteProvider = async (providerId: string, providerName: string) => {
-    if (!confirm(`Remove provider '${providerName}' and all its models?`)) return;
+    if (!confirm(`Remove provider '${providerName}' and all its registered models?`)) return;
     try {
       await deleteProvider(providerId);
       setNotice(`Removed provider '${providerName}'`);
       await fetchCatalog();
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
-      setErrorNotice(`Failed to delete provider: ${err?.message || err}`);
-    }
-  };
-
-  const handleCreateNewProvider = async () => {
-    const preset = PROVIDER_PRESETS.find((p) => p.id === selectedPresetId);
-    const pId = selectedPresetId === 'custom'
-      ? `custom-${Date.now()}`
-      : selectedPresetId;
-    const displayName = customProviderName.trim() || (preset ? preset.display_name : 'Custom Provider');
-    const baseUrl = customProviderUrl.trim() || (preset ? preset.base_url : 'http://localhost:8000/v1');
-    const provType = preset ? preset.provider_type : 'openai_compatible';
-
-    try {
-      const selectedModelObj = discoveredForNewProvider.find(
-        (m) => m.model_identifier === selectedModelForNewProvider
-      );
-
-      const modelsToSeed: ProviderModelEntry[] = selectedModelObj
-        ? [{ ...selectedModelObj, provider_id: pId, id: `${pId}:${selectedModelObj.model_identifier}` }]
-        : [];
-
-      const newEntry: ProviderEntry = {
-        id: pId,
-        display_name: displayName,
-        provider_type: provType,
-        base_url: baseUrl,
-        has_api_key: customProviderKey.trim().length > 0,
-        is_enabled: true,
-        models: modelsToSeed,
-      };
-
-      await saveProvider(newEntry, customProviderKey.trim().length > 0 ? customProviderKey.trim() : undefined);
-
-      for (const m of modelsToSeed) {
-        await upsertModel(m);
-      }
-
-      setNotice(`Connected provider '${displayName}'! Added to connected providers list.`);
-      setIsAddingProvider(false);
-      setCustomProviderName('OpenRouter');
-      setCustomProviderUrl('https://openrouter.ai/api/v1');
-      setCustomProviderKey('');
-      setDiscoveredForNewProvider([]);
-      setSelectedModelForNewProvider('');
-
-      await fetchCatalog();
-      if (onCatalogChanged) onCatalogChanged();
-    } catch (err: any) {
-      setErrorNotice(`Failed to create provider: ${err?.message || err}`);
+      setErrorNotice(`Provider removal failed: ${err?.message || err}`);
     }
   };
 
   const handleSetDefault = async (modelId: string, modelName: string) => {
     try {
       await setDefaultModel(modelId);
-      setNotice(`Default model set to ${modelName}`);
-      setErrorNotice(null);
+      setNotice(`'${modelName}' set as default workspace model`);
       await fetchCatalog();
       if (onCatalogChanged) onCatalogChanged();
     } catch (err: any) {
@@ -557,7 +569,6 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     }
   };
 
-  // Provider icon helper
   const getProviderIcon = (providerType: string, providerId: string) => {
     if (providerId === 'ollama' || providerType === 'ollama') return '🦙';
     if (providerId === 'anthropic' || providerType === 'anthropic') return '⚡';
@@ -567,19 +578,79 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     return '☁️';
   };
 
+  // Helper for model capability badge
+  const getModelTypeBadge = (m: ProviderModelEntry): { text: string; color: 'mint' | 'peach' | 'slate' | 'amber' } => {
+    const id = (m.model_identifier || m.id || '').toLowerCase();
+    if (id.includes('1b') || id.includes('3b') || id.includes('flash') || id.includes('mini') || id.includes('light')) {
+      return { text: '⚡ Fast & Lightweight', color: 'mint' };
+    }
+    if (id.includes('70b') || id.includes('120b') || id.includes('pro') || id.includes('claude-3') || id.includes('gpt-4') || id.includes('41b')) {
+      return { text: '✨ High Capability', color: 'peach' };
+    }
+    if (id.includes('llama3.2') || id.includes('8b') || id.includes('efficient')) {
+      return { text: '📖 Efficient & Reliable', color: 'slate' };
+    }
+    return { text: '✨ General Purpose', color: 'amber' };
+  };
+
+  // Filtered models for current search/capability dropdown
+  const filterModels = (models: ProviderModelEntry[]) => {
+    return models.filter((m) => {
+      const query = modelSearchQuery.trim().toLowerCase();
+      const matchesSearch = query
+        ? m.display_name.toLowerCase().includes(query) ||
+          m.model_identifier.toLowerCase().includes(query)
+        : true;
+
+      if (!matchesSearch) return false;
+
+      if (selectedCapabilityFilter === 'all') return true;
+      if (selectedCapabilityFilter === 'search') {
+        return m.web_search_capability && m.web_search_capability !== 'unsupported';
+      }
+      if (selectedCapabilityFilter === 'fast') {
+        return getModelTypeBadge(m).text.includes('Fast');
+      }
+      if (selectedCapabilityFilter === 'high') {
+        return getModelTypeBadge(m).text.includes('High');
+      }
+      return true;
+    });
+  };
+
+  const totalRegisteredModels = useMemo(() => {
+    return providers.reduce((sum, p) => sum + p.models.length, 0);
+  }, [providers]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="w-full max-w-3xl bg-[#FFFFFF] dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-[#ECE9E0] dark:border-[#2C2E27] flex items-center justify-between bg-[#FAF8F3] dark:bg-[#161714]">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#49583D] dark:bg-[#283427] text-white dark:text-[#879E78] flex items-center justify-center shadow-sm">
-              <SlidersHorizontal className="w-4 h-4" />
+    <div
+      className="settings-modal-backdrop"
+      data-testid="model-settings-modal"
+    >
+      <div className="settings-modal-dialog animate-in fade-in zoom-in-95 duration-150">
+        {/* 1. Header with Brand Badge & Amber Rule */}
+        <div className="settings-header">
+          {/* Subtle misty mountain wash in top right */}
+          <div className="settings-header-art" aria-hidden="true">
+            <svg viewBox="0 0 540 90" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-35 dark:opacity-15">
+              <path d="M0 90 Q90 55 180 68 T360 45 T540 58 L540 90 Z" fill="#9FB096" />
+              <path d="M100 90 Q200 35 300 48 T540 25 L540 90 Z" fill="#667A58" />
+              <path d="M200 90 Q320 15 420 25 T540 10 L540 90 Z" fill="#49583D" />
+            </svg>
+          </div>
+
+          <div className="settings-header-left">
+            <div className="settings-brand-badge">
+              <div className="settings-brand-icon">
+                <Sprout className="w-4 h-4" />
+              </div>
+              <span className="settings-brand-name">Sthira</span>
             </div>
-            <div>
-              <h3 className="text-base font-bold font-editorial text-[#1E201C] dark:text-[#EDEAE2]">Model &amp; Workspace Settings</h3>
-              <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
-                Configure local and cloud AI providers, default routing, and knowledge grounding.
+            <div className="settings-title-section">
+              <div className="settings-amber-rule" />
+              <h2 className="settings-title">Model &amp; Workspace Settings</h2>
+              <p className="settings-subtitle">
+                Configure your models, tools, and workspace experience.
               </p>
             </div>
           </div>
@@ -587,108 +658,171 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close Settings"
-            className="p-1.5 rounded-lg text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2] hover:bg-[#EFECE4] dark:hover:bg-[#252820] transition-colors cursor-pointer"
+            className="settings-close-btn"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="px-6 pt-3 flex items-center justify-between border-b border-[#ECE9E0] dark:border-[#2C2E27] bg-[#FFFFFF] dark:bg-[#1C1D19] text-xs font-semibold text-[#6E6D66] dark:text-[#9E9C93]">
-          <div className="flex gap-4">
-            <button
-              type="button"
-              onClick={() => setActiveTab('models')}
-              className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'models'
-                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
-                  : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-              }`}
-            >
-              <Server className="w-3.5 h-3.5" />
-              Connected Providers &amp; Models
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('search')}
-              className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'search'
-                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
-                  : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5" />
-              Web Search Providers
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('appearance')}
-              className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'appearance'
-                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
-                  : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-              }`}
-            >
-              <Sun className="w-3.5 h-3.5" />
-              Appearance
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('vault')}
-              className={`pb-2.5 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'vault'
-                  ? 'border-[#49583D] dark:border-[#879E78] text-[#1E201C] dark:text-[#EDEAE2]'
-                  : 'border-transparent hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Vault &amp; Storage
-            </button>
-          </div>
-
-          {activeTab === 'models' && !isAddingProvider && (
-            <button
-              type="button"
-              onClick={() => setIsAddingProvider(true)}
-              className="pb-2.5 text-xs text-[#282C25] dark:text-[#EDEAE2] font-semibold flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Connect Provider</span>
-            </button>
-          )}
+        {/* 2. Horizontal Navigation Tabs */}
+        <div className="settings-tabs-row">
+          <button
+            type="button"
+            onClick={() => setActiveTab('models')}
+            className={`settings-tab-pill ${activeTab === 'models' ? 'active' : ''}`}
+          >
+            <Server className="w-3.5 h-3.5" />
+            <span>Connected Providers &amp; Models</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('search')}
+            className={`settings-tab-pill ${activeTab === 'search' ? 'active' : ''}`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>Web Search Providers</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('appearance')}
+            className={`settings-tab-pill ${activeTab === 'appearance' ? 'active' : ''}`}
+          >
+            <Sun className="w-3.5 h-3.5" />
+            <span>Appearance</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('vault')}
+            className={`settings-tab-pill ${activeTab === 'vault' ? 'active' : ''}`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Vault &amp; Storage</span>
+          </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 space-y-6 overflow-y-auto flex-1 text-xs">
-          {/* Notifications */}
-          {notice && (
-            <div className="p-3 bg-[#E3EBE3] border border-[#CCDCCC] text-[#2D5A27] rounded-xl flex items-center gap-2 font-medium animate-in fade-in">
-              <Check className="w-4 h-4 shrink-0" />
-              <span>{notice}</span>
-            </div>
-          )}
+        {/* Notifications */}
+        {notice && (
+          <div className="mx-8 mt-4 p-3 bg-[#E3EBE3] dark:bg-[#1C2B1B] border border-[#CCDCCC] dark:border-[#2D452B] text-[#2D5A27] dark:text-[#879E78] rounded-xl flex items-center gap-2 font-medium text-xs animate-in fade-in">
+            <Check className="w-4 h-4 shrink-0" />
+            <span>{notice}</span>
+          </div>
+        )}
 
-          {errorNotice && (
-            <div className="p-3 bg-[#FDF2F2] border border-[#F8D7DA] text-[#9E2A2B] rounded-xl flex items-center gap-2 font-medium animate-in fade-in">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{errorNotice}</span>
-            </div>
-          )}
+        {errorNotice && (
+          <div className="mx-8 mt-4 p-3 bg-[#FDF2F2] dark:bg-[#2B1717] border border-[#F8D7DA] dark:border-[#4A2020] text-[#9E2A2B] dark:text-[#F87171] rounded-xl flex items-center gap-2 font-medium text-xs animate-in fade-in">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorNotice}</span>
+          </div>
+        )}
 
-          {activeTab === 'models' && (
-            <div className="space-y-6">
-              {/* Add New Provider Card */}
+        {/* 3. Main Modal Body */}
+        {activeTab === 'models' && (
+          <div className="settings-body-grid">
+            {/* Left Guidance Column */}
+            <div className="settings-guidance-col">
+              <div className="settings-guidance-card">
+                {/* Subtle mountain wash in guidance card */}
+                <div className="settings-card-art" aria-hidden="true">
+                  <svg viewBox="0 0 240 70" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-25 dark:opacity-10">
+                    <path d="M0 70 Q60 40 120 50 T240 30 L240 70 Z" fill="#667A58" />
+                    <path d="M80 70 Q140 20 200 25 T240 15 L240 70 Z" fill="#49583D" />
+                  </svg>
+                </div>
+
+                <div className="settings-guidance-icon">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <h3 className="settings-guidance-title">Your AI workspace, your way.</h3>
+                <p className="settings-guidance-desc">
+                  Connect the model providers you use, choose your models, and set up a default for everyday work.
+                </p>
+                <div className="mt-3 pt-3 border-t border-sthira-border/50 text-[11px] text-sthira-text-muted">
+                  {providers.length} {providers.length === 1 ? 'provider' : 'providers'} · {totalRegisteredModels} registered {totalRegisteredModels === 1 ? 'model' : 'models'}
+                </div>
+              </div>
+
+              <div className="settings-quick-setup">
+                <div className="settings-quick-label">Quick setup</div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('search')}
+                  className="settings-quick-row"
+                  data-testid="quick-setup-search"
+                >
+                  <div className="settings-quick-row-left">
+                    <Globe className="w-4 h-4 text-sthira-text-muted" />
+                    <div>
+                      <span className="settings-quick-title">Search Tools</span>
+                      <span className="settings-quick-sub">Add and configure search tools</span>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('appearance')}
+                  className="settings-quick-row"
+                  data-testid="quick-setup-appearance"
+                >
+                  <div className="settings-quick-row-left">
+                    <Sun className="w-4 h-4 text-sthira-text-muted" />
+                    <div>
+                      <span className="settings-quick-title">Theme &amp; Display</span>
+                      <span className="settings-quick-sub">Themes, look &amp; feel, and more</span>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('vault')}
+                  className="settings-quick-row"
+                  data-testid="quick-setup-vault"
+                >
+                  <div className="settings-quick-row-left">
+                    <Layers className="w-4 h-4 text-sthira-text-muted" />
+                    <div>
+                      <span className="settings-quick-title">Storage &amp; Vault</span>
+                      <span className="settings-quick-sub">Set up knowledge, files, and sync</span>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-sthira-text-muted" />
+                </button>
+              </div>
+
+              {/* Botanical Leaf Art */}
+              <div className="settings-botanical-art hidden sm:flex" aria-hidden="true">
+                <svg viewBox="0 0 160 90" fill="none" className="w-28 h-auto opacity-35 dark:opacity-15 text-sthira-primary">
+                  <path d="M20 85 C40 55 80 40 140 20 C100 45 70 75 60 88" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <path d="M55 52 C75 35 110 32 135 22 C105 40 85 55 75 68" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M35 70 C50 55 75 50 95 45 C75 60 60 72 50 82" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </div>
+            </div>
+
+            {/* Right Content Column */}
+            <div className="settings-content-col">
+              <div className="settings-section-header">
+                <h3 className="settings-section-title">Connected Providers &amp; Models</h3>
+                <p className="settings-section-sub">
+                  Add model providers, manage available models, and choose a default for your workspace.
+                </p>
+              </div>
+
+              {/* Add New Provider Card Form */}
               {isAddingProvider && (
-                <div className="border-2 border-[#282C25] rounded-xl p-4 bg-[#FAF8F3] space-y-3.5 shadow-sm animate-in fade-in">
+                <div className="border-2 border-sthira-primary rounded-2xl p-5 bg-sthira-surface space-y-4 shadow-sm animate-in fade-in">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-[#1E201C] flex items-center gap-2">
-                      <Globe className="w-4 h-4" />
+                    <span className="font-bold text-sm text-sthira-text flex items-center gap-2">
+                      <Globe className="w-4 h-4 text-sthira-primary" />
                       Connect Compute Provider (OmniRouter)
                     </span>
                     <button
                       type="button"
                       onClick={() => setIsAddingProvider(false)}
-                      className="p-1 rounded-lg text-[#6E6D66] hover:text-[#1E201C] hover:bg-[#EFECE4]"
+                      className="p-1 rounded-lg text-sthira-text-muted hover:text-sthira-text"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -696,7 +830,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
+                      <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
                         Select Provider Preset
                       </label>
                       <select
@@ -710,7 +844,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                             setCustomProviderUrl(preset.base_url);
                           }
                         }}
-                        className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs text-[#1E201C] focus:outline-none focus:border-[#282C25]"
+                        className="w-full px-3 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs text-sthira-text focus:outline-none focus:border-sthira-primary"
                       >
                         {PROVIDER_PRESETS.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -721,7 +855,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
+                      <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
                         Display Name
                       </label>
                       <input
@@ -729,12 +863,12 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                         placeholder="e.g. OpenRouter / Groq / LM Studio"
                         value={customProviderName}
                         onChange={(e) => setCustomProviderName(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs text-[#1E201C] focus:outline-none focus:border-[#282C25]"
+                        className="w-full px-3 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs text-sthira-text focus:outline-none focus:border-sthira-primary"
                       />
                     </div>
 
                     <div className="md:col-span-2">
-                      <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
+                      <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
                         Base Endpoint URL
                       </label>
                       <input
@@ -742,659 +876,470 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                         placeholder="https://openrouter.ai/api/v1"
                         value={customProviderUrl}
                         onChange={(e) => setCustomProviderUrl(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
+                        className="w-full px-3 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs font-mono text-sthira-text focus:outline-none focus:border-sthira-primary"
                       />
                     </div>
 
                     <div className="md:col-span-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] font-semibold text-[#6E6D66]">
-                          API Key (Stored locally in encrypted SQLite)
-                        </label>
-                        <button
-                          type="button"
-                          onClick={handleFetchModelsForNewProvider}
-                          disabled={isFetchingNewProvider}
-                          className="text-[11px] text-[#282C25] font-semibold underline hover:text-black flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                        >
-                          <RefreshCw className={`w-3 h-3 ${isFetchingNewProvider ? 'animate-spin' : ''}`} />
-                          <span>{isFetchingNewProvider ? 'Fetching...' : 'Fetch Models via API'}</span>
-                        </button>
-                      </div>
+                      <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
+                        API Key (Optional for Local / Ollama)
+                      </label>
                       <input
                         type="password"
-                        placeholder="Paste your API key here..."
+                        placeholder={
+                          PROVIDER_PRESETS.find((p) => p.id === selectedPresetId)?.placeholder_key ||
+                          'API key...'
+                        }
                         value={customProviderKey}
                         onChange={(e) => setCustomProviderKey(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
+                        className="w-full px-3 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs font-mono text-sthira-text focus:outline-none focus:border-sthira-primary"
                       />
                     </div>
-
-                    {/* Discovered Models Dropdown for New Provider */}
-                    {discoveredForNewProvider.length > 0 && (
-                      <div className="md:col-span-2 p-3 bg-white border border-[#E8E5DC] rounded-xl space-y-1.5 animate-in fade-in">
-                        <label className="block text-[11px] font-bold text-[#1E201C]">
-                          Select Primary Model ({discoveredForNewProvider.length} models retrieved):
-                        </label>
-                        <select
-                          value={selectedModelForNewProvider}
-                          onChange={(e) => setSelectedModelForNewProvider(e.target.value)}
-                          className="w-full px-3 py-1.5 bg-[#FAF8F3] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
-                        >
-                          {discoveredForNewProvider.map((m) => (
-                            <option key={m.model_identifier} value={m.model_identifier}>
-                              {m.display_name} ({m.model_identifier}) - {(m.context_window / 1024).toFixed(0)}k ctx
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
                   </div>
 
-                  <div className="flex justify-end gap-2 pt-2">
+                  <div className="flex items-center justify-between pt-2 border-t border-sthira-border">
                     <button
                       type="button"
-                      onClick={() => setIsAddingProvider(false)}
-                      className="px-3 py-1.5 rounded-lg border border-[#E8E5DC] bg-white text-[#6E6D66] hover:bg-[#EFECE4]"
+                      onClick={handleDiscoverForNewProvider}
+                      disabled={isFetchingNewProvider}
+                      className="px-3 py-1.5 rounded-xl border border-sthira-border bg-sthira-surface hover:bg-sthira-surface-muted text-xs font-semibold text-sthira-text flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
-                      Cancel
+                      {isFetchingNewProvider ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5" />
+                      )}
+                      <span>Test &amp; Fetch Models</span>
                     </button>
+
                     <button
                       type="button"
-                      onClick={handleCreateNewProvider}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#282C25] text-white font-medium hover:bg-[#3D4238] flex items-center gap-1.5 cursor-pointer"
+                      onClick={handleSaveNewProvider}
+                      className="settings-btn-primary"
                     >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Connect Provider</span>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Save Provider</span>
                     </button>
                   </div>
+
+                  {discoveredForNewProvider.length > 0 && (
+                    <div className="pt-2 border-t border-sthira-border">
+                      <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
+                        Select Default Model to Seed
+                      </label>
+                      <select
+                        value={selectedModelForNewProvider}
+                        onChange={(e) => setSelectedModelForNewProvider(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs text-sthira-text focus:outline-none focus:border-sthira-primary"
+                      >
+                        {discoveredForNewProvider.map((m) => (
+                          <option key={m.model_identifier} value={m.model_identifier}>
+                            {m.display_name} ({m.model_identifier})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Provider Cards */}
-              {providers.map((provider) => {
-                const isOllama = provider.provider_type === 'ollama';
-                const hasKey = provider.has_api_key;
-                const isKeyVisible = !!showKeys[provider.id];
-                const isFetching = fetchingProviderId === provider.id;
-
-                return (
-                  <div
-                    key={provider.id}
-                    className="border border-[#E8E5DC] rounded-xl p-4 bg-[#FAF8F3] space-y-3.5 transition-all"
-                  >
-                    {/* Provider Header */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-lg">
-                          {getProviderIcon(provider.provider_type, provider.id)}
-                        </span>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-[#1E201C]">
-                              {provider.display_name}
-                            </h4>
-                            <span className="px-1.5 py-0.5 rounded bg-[#EFECE4] text-[#6E6D66] text-[10px] font-mono">
-                              {provider.provider_type}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-[#6E6D66]">
-                            {provider.models.length} model(s) registered
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* OmniRouter Dynamic Model Fetch Button */}
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleFetchModels(provider)}
-                          disabled={isFetching}
-                          className="px-3 py-1.5 rounded-lg bg-[#282C25] text-white hover:bg-[#3D4238] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
-                          title="Connect to provider and fetch available models dynamically"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-                          <span>{isFetching ? 'Fetching Models...' : 'Fetch Models'}</span>
-                        </button>
-
-                        {provider.id !== 'ollama' && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProvider(provider.id, provider.display_name)}
-                            className="p-1.5 rounded-lg text-[#8C8A82] hover:text-[#9E2A2B] hover:bg-[#F8EAEA] transition-colors"
-                            title="Delete provider"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Endpoint & Key Configuration */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
-                          Base Endpoint URL
-                        </label>
-                        <input
-                          type="text"
-                          value={urlInputs[provider.id] ?? provider.base_url}
-                          onChange={(e) =>
-                            setUrlInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                          }
-                          className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
-                        />
-                      </div>
-
-                      {!isOllama && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[11px] font-semibold text-[#6E6D66]">
-                              API Key {hasKey && <span className="text-emerald-700 font-normal">(Configured)</span>}
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleKeyVisibility(provider.id)}
-                              className="text-[#6E6D66] hover:text-[#1E201C] cursor-pointer"
-                              title="Toggle Visibility"
-                            >
-                              {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
-                          </div>
-                          <div className="relative">
-                            <input
-                              type={isKeyVisible ? 'text' : 'password'}
-                              placeholder={hasKey ? '••••••••••••••••' : 'Enter API Key...'}
-                              value={keyInputs[provider.id] ?? ''}
-                              onChange={(e) =>
-                                setKeyInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                              }
-                              className="w-full px-3 py-1.5 bg-[#FFFFFF] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Discovered Models Dropdown from Live Fetch */}
-                    {discoveredModelsMap[provider.id] && discoveredModelsMap[provider.id].length > 0 && (
-                      <div className="p-3 bg-[#FFFFFF] border-2 border-[#282C25] rounded-xl space-y-2 animate-in fade-in shadow-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-[#1E201C] flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-[#282C25]" />
-                            Select Model from {provider.display_name} ({discoveredModelsMap[provider.id].length} fetched)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleAddAllDiscoveredModels(provider.id)}
-                            className="text-[10px] text-[#282C25] font-semibold underline hover:text-black cursor-pointer"
-                          >
-                            Add All Models ({discoveredModelsMap[provider.id].length}) →
-                          </button>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={selectedDiscoveredModelMap[provider.id] || ''}
-                            onChange={(e) =>
-                              setSelectedDiscoveredModelMap((prev) => ({
-                                ...prev,
-                                [provider.id]: e.target.value,
-                              }))
-                            }
-                            className="flex-1 px-3 py-1.5 bg-[#FAF8F3] border border-[#E8E5DC] rounded-lg text-xs font-mono text-[#1E201C] focus:outline-none focus:border-[#282C25]"
-                          >
-                            {discoveredModelsMap[provider.id].map((m) => (
-                              <option key={m.model_identifier} value={m.model_identifier}>
-                                {m.display_name} ({m.model_identifier}) - {(m.context_window / 1024).toFixed(0)}k ctx
-                              </option>
-                            ))}
-                          </select>
-
-                          <button
-                            type="button"
-                            onClick={() => handleAddSelectedDiscoveredModel(provider.id)}
-                            className="px-3.5 py-1.5 rounded-lg bg-[#282C25] text-white text-xs font-medium hover:bg-[#3D4238] cursor-pointer shrink-0"
-                          >
-                            + Add Model
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action Bar */}
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAddingModelForProvider(
-                            addingModelForProvider === provider.id ? null : provider.id
-                          )
-                        }
-                        className="text-[11px] text-[#282C25] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Add Custom Model</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSaveProviderSettings(provider)}
-                        className="px-3 py-1 rounded-lg bg-[#EFECE4] hover:bg-[#E5E1D6] text-[#1E201C] font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <Save className="w-3 h-3" />
-                        <span>Save Endpoint / Key</span>
-                      </button>
-                    </div>
-
-                    {/* Inline Add Model Input Form */}
-                    {addingModelForProvider === provider.id && (
-                      <div className="p-3 bg-[#FFFFFF] border border-[#E8E5DC] rounded-xl space-y-2 animate-in fade-in">
-                        <div className="text-[11px] font-bold text-[#1E201C]">
-                          Add Model to {provider.display_name}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          <input
-                            type="text"
-                            placeholder="Model identifier (e.g. meta-llama/llama-3.3-70b-instruct)"
-                            value={newModelId}
-                            onChange={(e) => setNewModelId(e.target.value)}
-                            className="px-2.5 py-1 bg-[#FAF8F3] border border-[#E8E5DC] rounded-lg text-xs font-mono"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Display name (optional)"
-                            value={newModelDisplayName}
-                            onChange={(e) => setNewModelDisplayName(e.target.value)}
-                            className="px-2.5 py-1 bg-[#FAF8F3] border border-[#E8E5DC] rounded-lg text-xs"
-                          />
-                        </div>
-                        <div className="flex justify-end gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => setAddingModelForProvider(null)}
-                            className="px-2.5 py-1 text-xs text-[#6E6D66]"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAddCustomModel(provider.id)}
-                            className="px-3 py-1 rounded-lg bg-[#282C25] text-white text-xs font-medium"
-                          >
-                            Save Model
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Model List */}
-                    <div className="pt-2 border-t border-[#ECE9E0] space-y-2">
-                      <div className="flex items-center justify-between text-[11px] font-bold text-[#3A3B36] uppercase tracking-wider">
-                        <span>Available Models ({provider.models.length})</span>
-                        <span className="text-[10px] text-[#8C8A82] font-normal hidden sm:inline">
-                          Model • Web Search Support • Status
-                        </span>
-                      </div>
-
-                      {provider.models.length === 0 ? (
-                        <div className="p-4 bg-[#FFFFFF] border border-[#ECE9E0] rounded-lg text-[#6E6D66] text-center space-y-1">
-                          <p className="italic">No models fetched yet for {provider.display_name}.</p>
-                          <p className="text-[11px] text-[#8C8A82]">
-                            Enter your API key above and click <strong>Fetch Models</strong> to dynamically load models from this provider.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                          {provider.models.map((m) => (
-                            <div
-                              key={m.id}
-                              className={`p-2.5 rounded-lg border transition-all flex items-center justify-between ${
-                                m.is_default
-                                  ? 'bg-[#FFFFFF] border-[#282C25] shadow-xs'
-                                  : 'bg-[#FFFFFF] border-[#E8E5DC]'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleSetDefault(m.id, m.display_name)}
-                                  className={`w-4 h-4 rounded-full border flex items-center justify-center cursor-pointer transition-colors ${
-                                    m.is_default
-                                      ? 'border-[#282C25] bg-[#282C25] text-white'
-                                      : 'border-[#CCC8BE] hover:border-[#282C25]'
-                                  }`}
-                                  title={m.is_default ? 'Current Default Model' : 'Set as Default Model'}
-                                >
-                                  {m.is_default && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                                </button>
-
-                                <div className="truncate">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-[#1E201C] truncate">{m.display_name}</span>
-                                    {m.is_default && (
-                                      <span className="px-1.5 py-0.5 rounded bg-[#282C25] text-white text-[9px] font-bold uppercase shrink-0">
-                                        Default
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2 text-[10px] text-[#6E6D66] font-mono mt-0.5 truncate">
-                                    <span className="truncate">{m.model_identifier}</span>
-                                    <span>•</span>
-                                    <span>{(m.context_window / 1024).toFixed(0)}k ctx</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2.5 shrink-0">
-                                {/* Web Search Support Column & Dropdown */}
-                                <div
-                                  className="flex items-center gap-1.5"
-                                  title="Web search execution capability for this model"
-                                >
-                                  <span className="text-[10px] text-[#6E6D66] font-medium hidden md:inline">
-                                    Search:
-                                  </span>
-                                  <select
-                                    value={m.web_search_capability || 'engine_augmented_only'}
-                                    onChange={(e) =>
-                                      handleUpdateCapability(
-                                        m.id,
-                                        e.target.value as WebSearchCapability
-                                      )
-                                    }
-                                    className="text-[10px] py-1 px-1.5 rounded-md border border-[#E8E5DC] bg-[#FAF8F5] text-[#1E201C] cursor-pointer outline-none font-medium"
-                                    data-testid={`select-capability-${m.id}`}
-                                    aria-label={`Web Search Support for ${m.display_name}`}
-                                  >
-                                    <option value="agentic_tool_call">Tool Calling</option>
-                                    <option value="native">Native Grounding</option>
-                                    <option value="engine_augmented_only">Web Scrape Injected</option>
-                                    <option value="unsupported">Offline Only</option>
-                                  </select>
-                                  <WebSearchCapabilityBadge capability={m.web_search_capability} />
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleModelEnabled(m.id, m.is_enabled)}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer transition-colors ${
-                                    m.is_enabled
-                                      ? 'bg-[#E3EBE3] text-[#2D5A27] hover:bg-[#D5E2D5]'
-                                      : 'bg-[#F0EEE8] text-[#8C8A82] hover:bg-[#E5E1D6]'
-                                  }`}
-                                >
-                                  {m.is_enabled ? 'Enabled' : 'Disabled'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteModel(m.id, m.display_name)}
-                                  className="text-[#8C8A82] hover:text-[#9E2A2B] p-1 rounded"
-                                  title="Delete model"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {activeTab === 'search' && (
-            <div className="space-y-6">
-              <div className="p-3 bg-[#FAF8F3] border border-[#E8E5DC] rounded-xl flex items-start gap-2.5">
-                <Globe className="w-4 h-4 shrink-0 text-[#282C25] mt-0.5" />
-                <div className="space-y-1">
-                  <div className="font-semibold text-[#1E201C] text-xs">
-                    Pluggable Web Research &amp; Fact Gathering Providers
-                  </div>
-                  <p className="text-[11px] text-[#6E6D66] leading-relaxed">
-                    Configure local and cloud search engines for multi-query evidence gathering.
-                    Queries scrape live web pages into Markdown, verify citations with verbatim quotes, and protect your workspace with zero unsolicited writes.
-                  </p>
+              {/* Connected Provider Cards List */}
+              {loading && providers.length === 0 ? (
+                <div className="p-8 text-center text-xs text-sthira-text-muted">
+                  Loading providers catalog...
                 </div>
-              </div>
-
-              {loadingSearchProviders && searchProviders.length === 0 ? (
-                <div className="py-12 flex flex-col items-center justify-center text-center space-y-2">
-                  <RefreshCw className="w-5 h-5 animate-spin text-[#8C8A82]" />
-                  <span className="text-xs text-[#8C8A82]">Loading search providers...</span>
+              ) : providers.length === 0 ? (
+                <div className="p-8 rounded-2xl border border-sthira-border bg-sthira-surface text-center space-y-2">
+                  <Server className="w-8 h-8 mx-auto text-sthira-text-muted" />
+                  <h4 className="font-bold text-sm text-sthira-text">No Model Providers Connected</h4>
+                  <p className="text-xs text-sthira-text-muted max-w-sm mx-auto">
+                    Connect local models via Ollama or cloud providers like OpenRouter and Anthropic to power research.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {searchProviders.map((provider) => {
-                    const isTesting = !!isTestingMap[provider.id];
-                    const testResults = testResultsMap[provider.id];
-                    const testError = testErrorMap[provider.id];
-                    const isKeyVisible = !!showSearchKeys[provider.id];
-                    const needsApiKey = provider.provider_type === 'brave' || provider.provider_type === 'tavily';
+                  {providers.map((provider) => {
+                    const isFetching = fetchingProviderId === provider.id;
+                    const isKeyVisible = !!showKeys[provider.id];
+                    const discovered = discoveredModelsMap[provider.id] || [];
+                    const isConnected = provider.models.length > 0;
+                    const displayedModels = filterModels(provider.models);
 
                     return (
                       <div
                         key={provider.id}
-                        className={`border rounded-xl p-4 transition-all ${
-                          provider.is_default
-                            ? 'border-[#282C25] bg-[#FFFFFF] shadow-xs'
-                            : 'border-[#E8E5DC] bg-[#FAF8F3]'
-                        }`}
+                        className="settings-provider-card"
                       >
-                        {/* Header */}
-                        <div className="flex items-center justify-between pb-3 border-b border-[#ECE9E0]">
-                          <div className="flex items-center gap-2.5">
-                            <div className="p-1.5 rounded-lg bg-[#EFECE4] text-[#1E201C]">
-                              <Globe className="w-4 h-4" />
+                        {/* Provider Header */}
+                        <div className="settings-provider-header">
+                          <div className="settings-provider-meta">
+                            <div className="settings-provider-avatar">
+                              {getProviderIcon(provider.provider_type, provider.id)}
                             </div>
                             <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-[#1E201C]">{provider.display_name}</span>
-                                {provider.is_default && (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#282C25] text-white">
-                                    Primary Provider
-                                  </span>
-                                )}
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#EFECE4] text-[#6E6D66]">
-                                  {provider.provider_type === 'duckduckgo_scraper'
-                                    ? 'Headless HTML (No Key)'
-                                    : provider.provider_type === 'searxng'
-                                    ? 'SearXNG JSON API'
-                                    : provider.provider_type === 'brave'
-                                    ? 'Brave REST API'
-                                    : 'Tavily API'}
+                              <div className="settings-provider-name-row">
+                                <span className="settings-provider-name">{provider.display_name}</span>
+                                <span className="settings-provider-count-badge">
+                                  {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
                                 </span>
                               </div>
-                              <span className="text-[11px] text-[#6E6D66]">
-                                {provider.endpoint_url}
-                              </span>
+                              <p className="settings-provider-desc">
+                                {provider.id === 'ollama'
+                                  ? 'Run open models on your own machine with Ollama.'
+                                  : `Cloud inference via ${provider.display_name}.`}
+                              </p>
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleSearchProviderEnabled(provider)}
-                              className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer ${
-                                provider.is_enabled
-                                  ? 'bg-[#E3EBE3] text-[#2D5A27] border-[#CCDCCC]'
-                                  : 'bg-[#F5F3EC] text-[#8C8A82] border-[#E8E5DC]'
+                            <span
+                              className={`settings-conn-badge ${
+                                isConnected ? 'connected' : 'unconnected'
                               }`}
                             >
-                              {provider.is_enabled ? 'Enabled' : 'Disabled'}
+                              {isConnected ? (
+                                <>
+                                  <Check className="w-3 h-3" />
+                                  <span>Connected</span>
+                                </>
+                              ) : (
+                                <span>Not Connected</span>
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteProvider(provider.id, provider.display_name)}
+                              className="p-1 rounded text-sthira-text-muted hover:text-sthira-danger cursor-pointer"
+                              title="Remove Provider"
+                            >
+                              <MoreHorizontal className="w-4 h-4" />
                             </button>
-
-                            {!provider.is_default && (
-                              <button
-                                type="button"
-                                onClick={() => handleSetDefaultSearchProvider(provider)}
-                                className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-[#EFECE4] hover:bg-[#E5E1D6] text-[#1E201C] transition-colors cursor-pointer"
-                              >
-                                Make Primary
-                              </button>
-                            )}
                           </div>
                         </div>
 
-                        {/* Configuration Fields */}
-                        <div className="pt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                          <div>
-                            <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
-                              Endpoint URL
-                            </label>
-                            <input
-                              type="text"
-                              value={searchUrlInputs[provider.id] ?? provider.endpoint_url}
-                              onChange={(e) =>
-                                setSearchUrlInputs((prev) => ({
-                                  ...prev,
-                                  [provider.id]: e.target.value,
-                                }))
-                              }
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-[#F5F3EC] border border-[#E8E5DC] text-[#1E201C] focus:bg-white focus:outline-none"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[11px] font-semibold text-[#6E6D66] mb-1">
-                              API Key {needsApiKey ? '(Required)' : '(Optional / None)'}
-                            </label>
-                            <div className="relative">
+                        {/* Endpoint URL Row */}
+                        <div>
+                          <label className="settings-endpoint-label">Endpoint URL</label>
+                          <div className="settings-endpoint-box">
+                            <div className="relative flex-1 min-w-[240px]">
+                              <LinkIcon className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-sthira-text-muted" />
                               <input
-                                type={isKeyVisible ? 'text' : 'password'}
-                                value={
-                                  searchKeyInputs[provider.id] !== undefined
-                                    ? searchKeyInputs[provider.id]
-                                    : (provider.api_key ?? '')
-                                }
-                                placeholder={needsApiKey ? 'Enter API Key...' : 'None required'}
+                                type="text"
+                                value={urlInputs[provider.id] ?? provider.base_url}
                                 onChange={(e) =>
-                                  setSearchKeyInputs((prev) => ({
+                                  setUrlInputs((prev) => ({
                                     ...prev,
                                     [provider.id]: e.target.value,
                                   }))
                                 }
-                                className="w-full pl-2.5 pr-8 py-1.5 rounded-lg bg-[#F5F3EC] border border-[#E8E5DC] text-[#1E201C] focus:bg-white focus:outline-none"
+                                placeholder="http://localhost:11434"
+                                className="settings-endpoint-input pl-8 w-full"
                               />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleFetchModels(provider)}
+                              disabled={isFetching}
+                              className="settings-btn-secondary"
+                            >
+                              {isFetching ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              )}
+                              <span>Test Connection</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleSaveProviderSettings(provider)}
+                              className="settings-btn-secondary"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              <span>Save</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Optional API Key Input */}
+                        {provider.provider_type !== 'ollama' && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-sthira-border">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
+                                API Key {provider.has_api_key ? '(Configured)' : '(Required)'}
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type={isKeyVisible ? 'text' : 'password'}
+                                  placeholder={provider.has_api_key ? '••••••••••••••••' : 'Enter API Key...'}
+                                  value={keyInputs[provider.id] || ''}
+                                  onChange={(e) =>
+                                    setKeyInputs((prev) => ({
+                                      ...prev,
+                                      [provider.id]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full pl-3 pr-8 py-1.5 rounded-lg bg-sthira-surface-muted border border-sthira-border text-xs font-mono text-sthira-text focus:bg-sthira-surface focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleKeyVisibility(provider.id)}
+                                  className="absolute right-2 top-2 text-sthira-text-muted hover:text-sthira-text cursor-pointer"
+                                >
+                                  {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-end">
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setShowSearchKeys((prev) => ({
-                                    ...prev,
-                                    [provider.id]: !prev[provider.id],
-                                  }))
+                                  setAddingModelForProvider(
+                                    addingModelForProvider === provider.id ? null : provider.id
+                                  )
                                 }
-                                className="absolute right-2 top-2 text-[#8C8A82] hover:text-[#1E201C]"
+                                className="px-3 py-1.5 rounded-lg border border-dashed border-sthira-border hover:bg-sthira-surface-muted text-xs text-sthira-text-muted hover:text-sthira-text flex items-center gap-1.5 transition-colors cursor-pointer w-full justify-center"
                               >
-                                {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Add Custom Model ID</span>
                               </button>
                             </div>
-                          </div>
-                        </div>
-
-                        {/* Save & Test bar */}
-                        <div className="mt-3 pt-3 border-t border-[#ECE9E0] flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-1 max-w-md">
-                            <input
-                              type="text"
-                              placeholder="Test query (e.g. rust async traits)..."
-                              value={testQueryMap[provider.id] ?? 'rust async traits'}
-                              onChange={(e) =>
-                                setTestQueryMap((prev) => ({
-                                  ...prev,
-                                  [provider.id]: e.target.value,
-                                }))
-                              }
-                              className="px-2.5 py-1 text-xs rounded-lg bg-white border border-[#E8E5DC] text-[#1E201C] flex-1 focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRunSearchTest(provider)}
-                              disabled={isTesting}
-                              className="px-3 py-1 text-xs rounded-lg bg-[#282C25] hover:opacity-90 disabled:opacity-50 text-white font-medium flex items-center gap-1.5 transition-opacity cursor-pointer shrink-0"
-                            >
-                              {isTesting ? (
-                                <RefreshCw className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <Search className="w-3 h-3" />
-                              )}
-                              <span>Test Search</span>
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleSaveSearchProviderSettings(provider)}
-                            className="px-3 py-1 text-xs rounded-lg bg-[#EFECE4] hover:bg-[#E5E1D6] text-[#1E201C] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <Save className="w-3 h-3" />
-                            <span>Save Settings</span>
-                          </button>
-                        </div>
-
-                        {/* Test Results Display */}
-                        {testError && (
-                          <div className="mt-3 p-2.5 rounded-lg bg-[#FDF2F2] border border-[#F8D7DA] text-[#9E2A2B] text-[11px] flex items-center gap-1.5">
-                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                            <span>{testError}</span>
                           </div>
                         )}
 
-                        {testResults && testResults.length > 0 && (
-                          <div className="mt-3 p-3 bg-white border border-[#E8E5DC] rounded-xl space-y-2">
-                            <div className="flex items-center justify-between text-[11px] font-semibold text-[#6E6D66]">
-                              <span className="flex items-center gap-1 text-[#2D5A27]">
-                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                                Returned {testResults.length} Live Results
-                              </span>
+                        {/* Discovered Models Dropdown Bar */}
+                        {discovered.length > 0 && (
+                          <div className="p-3 bg-sthira-surface-muted border border-sthira-border rounded-xl space-y-2">
+                            <span className="text-[11px] font-semibold text-sthira-text">
+                              Discovered {discovered.length} Available Models:
+                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <select
+                                value={selectedDiscoveredModelMap[provider.id] || ''}
+                                onChange={(e) =>
+                                  setSelectedDiscoveredModelMap((prev) => ({
+                                    ...prev,
+                                    [provider.id]: e.target.value,
+                                  }))
+                                }
+                                className="flex-1 min-w-[200px] px-2.5 py-1.5 bg-sthira-surface border border-sthira-border rounded-lg text-xs text-sthira-text focus:outline-none"
+                              >
+                                {discovered.map((m) => (
+                                  <option key={m.model_identifier} value={m.model_identifier}>
+                                    {m.display_name} ({m.model_identifier})
+                                  </option>
+                                ))}
+                              </select>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setTestResultsMap((prev) => {
-                                    const next = { ...prev };
-                                    delete next[provider.id];
-                                    return next;
-                                  })
-                                }
-                                className="hover:text-[#1E201C]"
+                                onClick={() => handleAddSelectedDiscoveredModel(provider.id)}
+                                className="settings-btn-primary"
                               >
-                                Dismiss
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Add Model</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAddAllDiscoveredModels(provider.id)}
+                                className="settings-btn-secondary"
+                              >
+                                <span>Add All ({discovered.length})</span>
                               </button>
                             </div>
-                            <div className="space-y-2">
-                              {testResults.slice(0, 3).map((item, idx) => (
+                          </div>
+                        )}
+
+                        {/* Inline Custom Model Entry Form */}
+                        {addingModelForProvider === provider.id && (
+                          <div className="p-3 bg-sthira-surface-muted border border-sthira-border rounded-xl space-y-2 animate-in fade-in">
+                            <span className="text-xs font-semibold text-sthira-text">Register Custom Model ID</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                placeholder="Identifier: e.g. mistral-small-latest"
+                                value={newModelId}
+                                onChange={(e) => setNewModelId(e.target.value)}
+                                className="px-2.5 py-1 rounded bg-sthira-surface border border-sthira-border text-xs text-sthira-text"
+                              />
+                              <input
+                                type="text"
+                                placeholder="Display Name: e.g. Mistral Small"
+                                value={newModelDisplayName}
+                                onChange={(e) => setNewModelDisplayName(e.target.value)}
+                                className="px-2.5 py-1 rounded bg-sthira-surface border border-sthira-border text-xs text-sthira-text"
+                              />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setAddingModelForProvider(null)}
+                                className="px-3 py-1 text-xs text-sthira-text-muted hover:text-sthira-text cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAddCustomModel(provider.id)}
+                                className="settings-btn-primary"
+                              >
+                                Save Model
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Available Models Section */}
+                        <div className="settings-models-header">
+                          <div className="settings-models-title-row">
+                            <span className="settings-models-title">Available Models</span>
+                            <span className="settings-provider-count-badge">
+                              {provider.models.length}
+                            </span>
+                          </div>
+
+                          <div className="settings-models-controls">
+                            <div className="relative">
+                              <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-sthira-text-muted" />
+                              <input
+                                type="text"
+                                value={modelSearchQuery}
+                                onChange={(e) => setModelSearchQuery(e.target.value)}
+                                placeholder="Search models..."
+                                className="settings-model-search"
+                              />
+                            </div>
+
+                            <select
+                              value={selectedCapabilityFilter}
+                              onChange={(e) => setSelectedCapabilityFilter(e.target.value)}
+                              className="settings-select-capability"
+                            >
+                              <option value="all">All Capabilities</option>
+                              <option value="search">Web Search Ready</option>
+                              <option value="fast">Fast &amp; Lightweight</option>
+                              <option value="high">High Capability</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {provider.models.length === 0 ? (
+                          <div className="p-4 bg-sthira-surface-muted border border-sthira-border rounded-xl text-sthira-text-muted text-center space-y-1">
+                            <p className="italic">No models fetched yet for {provider.display_name}.</p>
+                            <p className="text-[11px]">
+                              Click <strong>Test Connection</strong> to dynamically query available models from this endpoint.
+                            </p>
+                          </div>
+                        ) : displayedModels.length === 0 ? (
+                          <div className="p-4 bg-sthira-surface-muted border border-sthira-border rounded-xl text-sthira-text-muted text-center text-xs">
+                            No models match your current filter.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {displayedModels.map((m) => {
+                              const { text: typeText, color: typeColor } = getModelTypeBadge(m);
+                              const hasSearch = m.web_search_capability && m.web_search_capability !== 'unsupported';
+                              const ctxKb = Math.round(m.context_window / 1024);
+
+                              return (
                                 <div
-                                  key={idx}
-                                  className="p-2 rounded-lg bg-[#FAF8F3] border border-[#ECE9E0] text-[11px] space-y-1"
+                                  key={m.id}
+                                  className={`settings-model-row ${m.is_default ? 'is-default' : ''}`}
                                 >
-                                  <div className="flex items-center justify-between">
-                                    <span className="font-semibold text-[#1E201C] line-clamp-1">
-                                      {item.title}
+                                  <div className="settings-model-left">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetDefault(m.id, m.display_name)}
+                                      className={`settings-radio-btn ${m.is_default ? 'checked' : ''}`}
+                                      title={m.is_default ? 'Current Default Model' : 'Set as Default Model'}
+                                    >
+                                      {m.is_default && <div className="settings-radio-inner" />}
+                                    </button>
+
+                                    <div className="settings-model-meta">
+                                      <span className="settings-model-name truncate">
+                                        {m.display_name}
+                                      </span>
+                                      <span className="settings-model-sub truncate">
+                                        {m.model_identifier}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="settings-model-chips">
+                                    <span className={`settings-chip ${typeColor}`}>
+                                      {typeText}
                                     </span>
-                                    {item.score !== undefined && (
-                                      <span className="text-[10px] text-[#8C8A82]">
-                                        score: {item.score.toFixed(2)}
+
+                                    {/* Capability selection dropdown for explicit testing and configuration */}
+                                    <select
+                                      value={m.web_search_capability || 'engine_augmented_only'}
+                                      onChange={(e) =>
+                                        handleUpdateCapability(
+                                          m.id,
+                                          e.target.value as WebSearchCapability
+                                        )
+                                      }
+                                      className="settings-capability-select"
+                                      data-testid={`select-capability-${m.id}`}
+                                      aria-label={`Web Search Support for ${m.display_name}`}
+                                    >
+                                      <option value="agentic_tool_call">Tool Calling</option>
+                                      <option value="native">Native Grounding</option>
+                                      <option value="engine_augmented_only">Web Scrape Injected</option>
+                                      <option value="unsupported">Offline Only</option>
+                                    </select>
+
+                                    <span className="settings-chip">
+                                      {hasSearch ? (
+                                        <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
+                                          <Globe className="w-3 h-3" />
+                                          <span>Web Search</span>
+                                        </span>
+                                      ) : (
+                                        <span className="flex items-center gap-1 text-sthira-text-muted">
+                                          <span>⊗ No Web Search</span>
+                                        </span>
+                                      )}
+                                    </span>
+
+                                    <span className="settings-chip">
+                                      <Layers className="w-3 h-3" />
+                                      <span>{ctxKb}K context</span>
+                                    </span>
+
+                                    {m.is_default && (
+                                      <span className="settings-chip default-badge">
+                                        Default
                                       </span>
                                     )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleModelEnabled(m.id, m.is_enabled)}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer transition-colors ${
+                                        m.is_enabled
+                                          ? 'bg-[#E3EBE3] text-[#2D5A27] dark:bg-[#1C2B1B] dark:text-[#879E78]'
+                                          : 'bg-sthira-surface-muted text-sthira-text-muted'
+                                      }`}
+                                      title={m.is_enabled ? 'Disable model' : 'Enable model'}
+                                    >
+                                      {m.is_enabled ? 'Enabled' : 'Disabled'}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteModel(m.id, m.display_name)}
+                                      className="text-sthira-text-muted hover:text-sthira-danger p-1 rounded cursor-pointer"
+                                      title="Delete model"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
                                   </div>
-                                  <p className="text-[#6E6D66] line-clamp-2 leading-relaxed">
-                                    {item.snippet}
-                                  </p>
-                                  <a
-                                    href={item.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-[10px] text-blue-600 hover:underline flex items-center gap-1 truncate"
-                                  >
-                                    <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                                    <span className="truncate">{item.url}</span>
-                                  </a>
                                 </div>
-                              ))}
-                            </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1402,107 +1347,381 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                   })}
                 </div>
               )}
-            </div>
-          )}
 
-          {/* APPEARANCE TAB */}
-          {activeTab === 'appearance' && (
-            <div className="space-y-6 animate-in fade-in">
-              <div className="flex items-center gap-2 pb-2 border-b border-[#ECE9E0] dark:border-[#2C2E27]">
-                <Sun className="w-4 h-4 text-[#282C25] dark:text-[#EDEAE2]" />
-                <h4 className="font-bold text-sm text-[#1E201C] dark:text-[#EDEAE2]">
-                  Theme &amp; Visual Appearance
-                </h4>
-              </div>
-
-              <div className="p-4 rounded-xl bg-[#FAF8F3] dark:bg-[#161714] border border-[#E8E5DC] dark:border-[#2C2E27] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <span className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] text-sm block mb-0.5">
-                    Interface Theme
+              {/* Add Another Provider Bar */}
+              {!isAddingProvider && (
+                <div
+                  onClick={() => setIsAddingProvider(true)}
+                  className="settings-add-provider-bar"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setIsAddingProvider(true);
+                    }
+                  }}
+                >
+                  <div className="settings-add-provider-btn">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Another Provider</span>
+                  </div>
+                  <span className="settings-add-provider-desc">
+                    Connect OpenAI, Anthropic, Gemini, local models, and more.
                   </span>
-                  <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93] max-w-md">
-                    Choose between tactile Warm Stone (Light), glare-free Deep Obsidian Stone (Dark), or automatically match your system color scheme.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 4. WEB SEARCH PROVIDERS TAB */}
+        {activeTab === 'search' && (
+          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs">
+            <div className="settings-section-header">
+              <h3 className="settings-section-title">Web Search Providers</h3>
+              <p className="settings-section-sub">
+                Configure external search engines and headless scrapers for research evidence grounding.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {searchProviders.map((provider) => {
+                const isTesting = !!isTestingMap[provider.id];
+                const testError = testErrorMap[provider.id];
+                const testResults = testResultsMap[provider.id];
+                const isKeyVisible = !!showSearchKeys[provider.id];
+                const needsApiKey = provider.provider_type === 'brave' || provider.provider_type === 'tavily';
+
+                return (
+                  <div
+                    key={provider.id}
+                    className="p-5 rounded-2xl border border-sthira-border bg-sthira-surface space-y-4 shadow-xs"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-sthira-text">{provider.display_name}</span>
+                          {provider.is_default && (
+                            <span className="px-2 py-0.5 rounded-full bg-sthira-primary text-sthira-on-primary text-[10px] font-bold">
+                              Primary
+                            </span>
+                          )}
+                          <span className="px-2 py-0.5 rounded-full bg-sthira-surface-muted text-sthira-text-muted text-[10px] font-mono">
+                            {provider.provider_type}
+                          </span>
+                        </div>
+                        <p className="text-xs text-sthira-text-muted mt-0.5">
+                          {provider.provider_type === 'duckduckgo_scraper'
+                            ? 'Headless zero-token HTML scraper. No API key required.'
+                            : provider.provider_type === 'searxng'
+                            ? 'Local metasearch engine proxy. Privacy-first, zero third-party leakage.'
+                            : 'Direct cloud web search API.'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!provider.is_default && provider.is_enabled && (
+                          <button
+                            type="button"
+                            onClick={() => handleSetDefaultSearchProvider(provider)}
+                            className="px-2.5 py-1 text-xs rounded-xl border border-sthira-border bg-sthira-surface hover:bg-sthira-surface-muted text-sthira-text transition-colors cursor-pointer"
+                          >
+                            Set Primary
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSearchProviderEnabled(provider)}
+                          className={`px-3 py-1 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                            provider.is_enabled
+                              ? 'bg-[#E3EBE3] text-[#2D5A27] dark:bg-[#1C2B1B] dark:text-[#879E78]'
+                              : 'bg-sthira-surface-muted text-sthira-text-muted'
+                          }`}
+                        >
+                          {provider.is_enabled ? 'Active' : 'Disabled'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3 border-t border-sthira-border">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
+                          Endpoint URL
+                        </label>
+                        <input
+                          type="text"
+                          value={searchUrlInputs[provider.id] ?? provider.endpoint_url}
+                          onChange={(e) =>
+                            setSearchUrlInputs((prev) => ({
+                              ...prev,
+                              [provider.id]: e.target.value,
+                            }))
+                          }
+                          className="w-full px-3 py-1.5 rounded-xl bg-sthira-surface-muted border border-sthira-border text-xs text-sthira-text focus:bg-sthira-surface focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-sthira-text-muted mb-1">
+                          API Key {needsApiKey ? '(Required)' : '(Optional / None)'}
+                        </label>
+                        <div className="relative">
+                          <input
+                            type={isKeyVisible ? 'text' : 'password'}
+                            value={
+                              searchKeyInputs[provider.id] !== undefined
+                                ? searchKeyInputs[provider.id]
+                                : provider.api_key ?? ''
+                            }
+                            placeholder={needsApiKey ? 'Enter API Key...' : 'None required'}
+                            onChange={(e) =>
+                              setSearchKeyInputs((prev) => ({
+                                ...prev,
+                                [provider.id]: e.target.value,
+                              }))
+                            }
+                            className="w-full pl-3 pr-8 py-1.5 rounded-xl bg-sthira-surface-muted border border-sthira-border text-xs text-sthira-text focus:bg-sthira-surface focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowSearchKeys((prev) => ({
+                                ...prev,
+                                [provider.id]: !prev[provider.id],
+                              }))
+                            }
+                            className="absolute right-2 top-2 text-sthira-text-muted hover:text-sthira-text cursor-pointer"
+                          >
+                            {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-sthira-border flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 flex-1 max-w-md">
+                        <input
+                          type="text"
+                          placeholder="Test query (e.g. rust async traits)..."
+                          value={testQueryMap[provider.id] ?? 'rust async traits'}
+                          onChange={(e) =>
+                            setTestQueryMap((prev) => ({
+                              ...prev,
+                              [provider.id]: e.target.value,
+                            }))
+                          }
+                          className="px-3 py-1.5 text-xs rounded-xl bg-sthira-surface border border-sthira-border text-sthira-text flex-1 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRunSearchTest(provider)}
+                          disabled={isTesting}
+                          className="settings-btn-primary shrink-0"
+                        >
+                          {isTesting ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Search className="w-3.5 h-3.5" />
+                          )}
+                          <span>Test Search</span>
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSaveSearchProviderSettings(provider)}
+                        className="settings-btn-secondary"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>Save Settings</span>
+                      </button>
+                    </div>
+
+                    {testError && (
+                      <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{testError}</span>
+                      </div>
+                    )}
+
+                    {testResults && testResults.length > 0 && (
+                      <div className="p-4 bg-sthira-surface-muted border border-sthira-border rounded-xl space-y-3">
+                        <div className="flex items-center justify-between text-xs font-semibold text-sthira-text">
+                          <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+                            <ShieldCheck className="w-4 h-4" />
+                            Returned {testResults.length} Live Results
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTestResultsMap((prev) => {
+                                const next = { ...prev };
+                                delete next[provider.id];
+                                return next;
+                              })
+                            }
+                            className="text-sthira-text-muted hover:text-sthira-text text-xs cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                        <div className="space-y-2">
+                          {testResults.slice(0, 3).map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="p-3 rounded-xl bg-sthira-surface border border-sthira-border text-xs space-y-1"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-sthira-text line-clamp-1">
+                                  {item.title}
+                                </span>
+                                {item.score !== undefined && (
+                                  <span className="text-[10px] text-sthira-text-muted">
+                                    score: {item.score.toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sthira-text-muted text-[11px] line-clamp-2 leading-relaxed">
+                                {item.snippet}
+                              </p>
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 truncate"
+                              >
+                                <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                                <span className="truncate">{item.url}</span>
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 5. APPEARANCE TAB */}
+        {activeTab === 'appearance' && (
+          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs animate-in fade-in">
+            <div className="settings-section-header">
+              <h3 className="settings-section-title">Theme &amp; Visual Appearance</h3>
+              <p className="settings-section-sub">
+                Customize workspace color temperature, reading contrast, and system theme persistence.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-sthira-surface border border-sthira-border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+              <div>
+                <span className="font-semibold text-sthira-text text-sm block mb-1">
+                  Interface Theme
+                </span>
+                <p className="text-xs text-sthira-text-muted max-w-md">
+                  Choose between tactile Warm Stone (Light), glare-free Deep Obsidian (Dark), or automatically follow your operating system appearance.
+                </p>
+              </div>
+              <div className="shrink-0">
+                <ThemeToggle variant="selector" />
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-sthira-surface border border-sthira-border space-y-3 text-xs shadow-xs">
+              <span className="font-semibold text-sthira-text">
+                Aesthetic Design Invariants
+              </span>
+              <ul className="list-disc list-inside space-y-1.5 text-sthira-text-muted">
+                <li>
+                  <strong>Warm Stone (Light):</strong> Calming cream paper tone (
+                  <code className="font-mono text-[11px]">#FAF8F3</code>) optimized for daytime contemplation.
+                </li>
+                <li>
+                  <strong>Deep Obsidian (Dark):</strong> Low blue-light obsidian tone (
+                  <code className="font-mono text-[11px]">#161714</code>) preserving epistemic clarity.
+                </li>
+                <li>
+                  <strong>System:</strong> Automatically synchronizes with your OS dark mode toggle.
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* 6. VAULT & STORAGE TAB */}
+        {activeTab === 'vault' && (
+          <div className="p-8 space-y-6 overflow-y-auto flex-1 text-xs animate-in fade-in">
+            <div className="settings-section-header">
+              <h3 className="settings-section-title">Vault Invariants &amp; Local Storage</h3>
+              <p className="settings-section-sub">
+                SQLite database transactions adhere strictly to the 7-Layer Reversibility Protocol with atomic rollback guarantees.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 bg-sthira-surface border border-sthira-border rounded-2xl shadow-xs">
+                <div>
+                  <span className="font-semibold text-sthira-text text-sm block">Load Benchmark Workspace</span>
+                  <p className="text-xs text-sthira-text-muted">
+                    Seed the sample research workspace and verified epistemic claims for testing.
                   </p>
                 </div>
-                <div className="shrink-0">
-                  <ThemeToggle variant="selector" />
-                </div>
+                <button
+                  type="button"
+                  onClick={handleLoadDemo}
+                  disabled={loading}
+                  className="settings-btn-secondary"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-sthira-primary" />
+                  <span>Seed Demo</span>
+                </button>
               </div>
 
-              <div className="p-4 rounded-xl bg-[#FAF8F3] dark:bg-[#161714] border border-[#E8E5DC] dark:border-[#2C2E27] space-y-2 text-xs">
-                <span className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">
-                  Aesthetic Design Invariants
-                </span>
-                <ul className="list-disc list-inside space-y-1 text-[#6E6D66] dark:text-[#9E9C93]">
-                  <li><strong>Warm Stone (Light):</strong> Calming cream paper tone (<code className="font-mono text-[11px]">#FAF8F3</code>) optimized for daytime reading.</li>
-                  <li><strong>Deep Obsidian (Dark):</strong> Low blue-light obsidian tone (<code className="font-mono text-[11px]">#121310</code>) preserving epistemic badges and matrix clarity.</li>
-                  <li><strong>System:</strong> Reactively updates theme when your OS toggles light or dark mode.</li>
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {/* VAULT STORAGE TAB */}
-          {activeTab === 'vault' && (
-            <div className="space-y-4">
-              <h4 className="font-bold text-sm text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2">
-                <Layers className="w-4 h-4 text-[#282C25] dark:text-[#EDEAE2]" />
-                Vault Invariants &amp; Local Storage
-              </h4>
-              <p className="text-[#6E6D66] dark:text-[#9E9C93] leading-relaxed">
-                All SQLite database writes adhere strictly to the 7-Layer Reversibility Protocol.
-                Every operation records reversible change sets with exact deterministic rollback inverses.
-              </p>
-
-              <div className="pt-4 border-t border-[#ECE9E0] dark:border-[#2C2E27] flex flex-col gap-3">
-                <div className="flex items-center justify-between p-3.5 bg-[#FAF8F3] dark:bg-[#161714] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl">
-                  <div>
-                    <span className="font-semibold text-[#1E201C] dark:text-[#EDEAE2]">Load Benchmark Workspace</span>
-                    <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93]">Seed the sample research workspace and verified epistemic claims</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleLoadDemo}
-                    disabled={loading}
-                    className="px-3 py-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#1E201C] dark:text-[#EDEAE2] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Seed Demo</span>
-                  </button>
+              <div className="flex items-center justify-between p-4 bg-red-50/50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-2xl shadow-xs">
+                <div>
+                  <span className="font-semibold text-red-700 dark:text-red-300 text-sm block">Clear Vault Data</span>
+                  <p className="text-xs text-sthira-text-muted">
+                    Wipes all local projects, notes, and epistemic claims for a pristine clean start.
+                  </p>
                 </div>
-
-                <div className="flex items-center justify-between p-3.5 bg-[#FFF8F8] dark:bg-[#2A1616] border border-[#F0D5D5] dark:border-[#4A2020] rounded-xl">
-                  <div>
-                    <span className="font-semibold text-[#9E2A2B] dark:text-[#F87171]">Clear Vault Data</span>
-                    <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93]">Wipes all projects, notes, and epistemic claims for a pristine clean start</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleResetVault}
-                    disabled={loading}
-                    className="px-3 py-1.5 rounded-xl bg-[#F8EAEA] dark:bg-[#3D1A1A] hover:bg-[#F0D5D5] dark:hover:bg-[#4D2020] text-[#9E2A2B] dark:text-[#F87171] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Reset Vault</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleResetVault}
+                  disabled={loading}
+                  className="px-4 py-2 rounded-xl bg-red-100 hover:bg-red-200 dark:bg-red-900/60 dark:hover:bg-red-900 text-red-700 dark:text-red-200 font-semibold flex items-center gap-1.5 transition-colors cursor-pointer text-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Reset Vault</span>
+                </button>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-[#ECE9E0] dark:border-[#2C2E27] bg-[#FAF8F3] dark:bg-[#161714] flex items-center justify-between text-xs text-[#6E6D66] dark:text-[#9E9C93]">
-          <span>OmniRouter Compute Fabric • Dynamic Fetch &amp; Connect</span>
+        {/* 7. Modal Footer with Cancel & Save Changes */}
+        <div className="settings-footer">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-medium hover:bg-[#3D4238] dark:hover:bg-[#D4D1C7] transition-colors cursor-pointer"
+            className="settings-btn-secondary"
           >
-            Done
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="settings-btn-primary"
+            data-testid="btn-save-settings"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Save Changes</span>
           </button>
         </div>
       </div>
     </div>
   );
 };
+
+export default ModelSettingsModal;
