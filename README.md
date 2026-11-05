@@ -5,6 +5,8 @@
 
 Sthira is an offline-first knowledge workspace engineered for deep thinking, long-horizon research, and planning. It fuses the tactile durability of human-readable Markdown files with the relational rigor, vector search, and transactional integrity of an embedded SQLite database (`rusqlite` + `sqlite-vec`), wrapped in a desktop application built with Tauri v2, React 19, and Tailwind CSS.
 
+Start with the [permanent product, design, and verification policies](docs/policies/README.md). The [design sources](docs/design/README.md) contain the approved composition references; [known limitations](docs/known-limitations.md) distinguish outstanding verification from intended behavior. Generated audit reports, screenshots, and QA data stay in ignored temporary output.
+
 ---
 
 ## Key Architectural Principles
@@ -19,8 +21,8 @@ Sthira is an offline-first knowledge workspace engineered for deep thinking, lon
    - Epistemic provenance (`UserRecorded`, `SourceBacked`, `AiInferred`) is computed deterministically from `(artifact.authorship, VerifiedQuote::verify())`.
    - AI outputs can **never** be laundered into `UserRecorded` decisions. Speculative thoughts (*"Maybe we should..."*) are treated as hypotheses, never recorded decisions.
 
-3. **Sub-5ms Cold Return & Zero-Guilt Resumption:**
-   - Level 1 Quick Briefs ($\le 75$ words) and Level 2 Reviews are precomputed and cached in `derived_briefs` by cryptographic `basis_fingerprint`. Cold returns execute in $< 5\text{ms}$.
+3. **Cached Context & Zero-Guilt Resumption:**
+   - Level 1 Quick Briefs ($\le 75$ words) and Level 2 Reviews are precomputed and cached in `derived_briefs` by cryptographic `basis_fingerprint`. Cached-read latency is a measured performance target, not an unconditional native GUI timing guarantee.
    - **No-Pressure Guarantee:** Copywriting is strictly neutral and informative. Guilt-inducing language (*"you haven't"*, *"overdue"*, *"behind schedule"*, or *"streak"*) is programmatically banned and enforced via automated linter gates.
 
 4. **Isolated Derived Memory Mirrors:**
@@ -65,16 +67,16 @@ Sthira is an offline-first knowledge workspace engineered for deep thinking, lon
 │   │   ├── ui/                        # React 19 + TypeScript + Tailwind frontend
 │   │   │   ├── src/components/        # UI widgets, modals, layout components
 │   │   │   ├── src/views/             # HomeView, FocusView, CanvasView, GraphView, ObjectListView, ObjectKanbanView
-│   │   │   └── src/test/              # Vitest test suites (33 UI tests)
+│   │   │   └── src/test/              # Vitest component and integration suites
 │   │   └── tests/                     # Rust integration tests for IPC bridge, graph, and actions
 │   ├── sthira-cli/                    # Headless CLI binary interface
 │   └── sthira-testkit/                # Deterministic test harness (FakeClock, DeterministicFakeModel)
 ├── xtask/                             # Automated phase gate runner & anti-cheating scanner
 ├── tests/
 │   └── frozen/                        # Acceptance & metamorphic tests (Phases 1 to 7, Phase 9)
-├── docs/                             # Architecture specs, implementation plans & progress logs
+├── docs/                             # Permanent policies, design references and architecture context
 ├── fixtures/golden/                   # Frozen test fixtures and forbidden literals
-└── gate_reports/                      # JSON verification reports for all phases
+└── gate_reports/                      # Generated gate output (ignored; not current acceptance evidence)
 ```
 
 ---
@@ -137,17 +139,17 @@ cargo run -p sthira-desktop
 
 ### Desktop UI Key Bindings & Controls
 - **Universal Input:** On Home View, capture thoughts, type search queries, or select operational modes (`Capture`, `Research`, `Plan`, `Act`). Streams real LLM inference from active models without stubs.
-- **Full-Height Workspace Canvas (`FocusView`):** Generous responsive document canvas (`max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full`) with a cleanly docked, collapsible Epistemic Margin right sidebar (`w-80`).
+- **Project & Document Workspaces:** Project navigation opens its overview; selecting an item opens it centrally. Notes use one rich editable Markdown-backed surface. Evidence opens through Page actions → Sources & insights; Connections provides contextual reference reading.
 - **Notion-Style Slash Commands (`/`):** Type `/` at the beginning of a line or after a space to trigger an interactive block menu:
   - Formatting: `/h1`, `/h2`, `/h3`, `/todo`, `/bullet`, `/table`, `/code`, `/callout`
   - Epistemic & Objects: `/decision` (registers `UserRecorded` decision node), `/question`, `/idea`, `/task`
   - Inline AI: `/plan <goal>`, `/research <topic>`, `/expand`
-- **Formatting Toolbar & Rich Preview Toggle:** Top formatting toolbar (`B`, `I`, `H1`, `H2`, `Checklist`, `Code`, `Table`, `/ Insert Block`) and seamless toggle between raw markdown editing and rich typography preview with interactive clickable checkboxes (`- [ ] ` $\rightarrow$ `- [x] `).
+- **Formatting Toolbar:** `B`, `I`, `H1`, `H2`, `Checklist`, `Code`, `Table`, and `/ Insert Block` operate in the single editable document, including task checkboxes. There is no Edit/Preview mode toggle.
 - **Sidebar Navigation:** Click `+ New Page` under any project or unassociated section. Drag to resize sidebar width.
 - **3-Dots Settings Menu (`...`):** Pin notes/projects to top (`📌`), duplicate with `(Copy)` suffix, attach to other projects, or rename inline (`Enter` to save, `Escape` to cancel).
 - **Auto-Save:** Typing is automatically saved after 600ms of inactivity or upon clicking away. Watch the live status pill (`Saving...` $\rightarrow$ `Saved` $\rightarrow$ `Auto-saved`).
 - **Knowledge Graph:** Click `🌐 Knowledge Graph` in the sidebar to open the 2D force-directed physics graph. Pan, zoom, and filter by node types.
-- **Web Search & Research Rail:** In Research mode or in the Right Mode Rail, toggle `[🌐 Include Web Search]` to scrape web sources and click `[Import to Vault]` to persist findings offline.
+- **Web Search & Center Workspace:** Research and Plan stream in the center workspace. Web search and Import to Vault preserve source attribution and durable offline material.
 - **Adaptive Stream Switcher:** During progressive AI responses, toggle between `[ 🎛️ Interactive Widgets ]` and `[ 📄 Plain Markdown ]`.
 
 ---
@@ -188,13 +190,13 @@ cargo run -p sthira-cli -- reconcile
 
 Sthira is protected by comprehensive test suites across both Rust and React/TypeScript.
 
-### 1. Run All Rust Workspace Tests (68 Tests)
+### 1. Run All Rust Workspace Tests
 Runs all unit, integration, and frozen acceptance tests across all crates:
 ```bash
 cargo test --workspace
 ```
 
-### 2. Run Desktop UI Test Suites (29 Vitest Tests)
+### 2. Run Desktop UI Test Suites
 Runs all frontend component and integration tests in `crates/sthira-desktop/ui`:
 ```bash
 cd crates/sthira-desktop/ui

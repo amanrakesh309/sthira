@@ -1,5 +1,7 @@
 Sequential Execution Slices (Phase 8A $\rightarrow$ 8D)
 
+> Historical UI implementation plan. Follow the current [product, design, and verification policies](policies/README.md) where behavior or controls below differ.
+
 ### Slice 8A: The Tauri v2 IPC Bridge & Live Event Stream
 
 1. **State Management:** Initialize `sthira_core::Engine` with `TieredModelProvider` (`llama3.2:latest` local router + `gemma4:31b-cloud` primary synthesis + `gpt-oss:120b-cloud` deep review) and register it via `.manage(engine)`.

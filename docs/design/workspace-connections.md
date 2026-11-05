@@ -16,7 +16,7 @@ When a page belongs to a project, **This page / Project** selects which item own
 
 The rail is visible by default on wide desktop windows, and can be toggled independently of Sources & insights (available through Page actions). At narrower workspace widths it becomes a drawer. Both themes use the existing semantic tokens. Previews are for reading; use Open in workspace to edit the referenced item. The original note is always editable, without separate Edit / Preview modes.
 
-Derived notes automatically expose their parent and backlinks through saved lineage, including notes created before the Connections feature. Those relationships appear as **Derived from / Derived item** and remain part of provenance rather than removable manual connections. See the [unified editor validation](visual-audit/note-editor-validation.md).
+Derived notes automatically expose their parent and backlinks through saved lineage, including notes created before the Connections feature. Those relationships appear as **Derived from / Derived item** and remain part of provenance rather than removable manual connections. Follow the permanent [product contract](../policies/product.md).
 
 ## Storage and boundaries
 
@@ -36,4 +36,4 @@ Derived notes automatically expose their parent and backlinks through saved line
 - `crates/sthira-desktop/ui/src/components/RichDocumentRenderer.tsx`: local internal-link activation while retaining normal external links.
 - `crates/sthira-desktop/ui/src/api/connections.ts`, `types/sthira.ts`, `styles/connections.css`: typed bridge and responsive theme styling.
 
-Validation and screenshots: [connections-validation.md](visual-audit/connections-validation.md).
+Verification requirements: [verification and evidence policy](../policies/verification.md). Generated evidence is temporary and does not belong in this implementation contract.

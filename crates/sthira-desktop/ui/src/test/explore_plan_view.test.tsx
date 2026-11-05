@@ -280,7 +280,7 @@ describe('🧭 Explore & Plan Hub', () => {
 
     // Filter pill for Research is active
     const researchFilterBtn = screen.getByTestId('filter-type-research');
-    expect(researchFilterBtn.className).toContain('bg-[#282C25]');
+    expect(researchFilterBtn.className).toContain('bg-[var(--sthira-primary)]');
 
     // Table renders the research items
     expect(screen.getByText('Research: Zero-Copy Serialization in Rust')).toBeInTheDocument();

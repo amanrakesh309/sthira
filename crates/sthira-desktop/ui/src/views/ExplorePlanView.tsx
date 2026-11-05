@@ -523,19 +523,19 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   return (
     <div
       data-testid="explore-plan-view"
-      className="flex-1 min-h-screen bg-[#FAF8F3] dark:bg-[#121310] text-[#1E201C] dark:text-[#EDEAE2] flex flex-col transition-colors overflow-y-auto"
+      className="flex-1 min-h-screen bg-[var(--sthira-canvas)] text-[var(--sthira-text)] flex flex-col transition-colors overflow-y-auto"
     >
       <div className="max-w-6xl w-full mx-auto px-6 py-8 flex flex-col space-y-6">
         {/* Header & Breadcrumbs */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#E8E5DC] dark:border-[#2C2E27] pb-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--sthira-border)] pb-6">
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[#8C8A82] dark:text-[#A8A59C] uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--sthira-text-muted)] uppercase tracking-wider">
               {onBack ? (
                 <button
                   type="button"
                   data-testid="explore-plan-back"
                   onClick={onBack}
-                  className="hover:text-[#1E201C] dark:hover:text-white transition-colors cursor-pointer"
+                  className="hover:text-[var(--sthira-text)] transition-colors cursor-pointer"
                 >
                   Workspace
                 </button>
@@ -543,12 +543,12 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                 <span>Workspace</span>
               )}
               <span>/</span>
-              <span className="text-[#1E201C] dark:text-[#EDEAE2]">Explore &amp; Plan</span>
+              <span className="text-[var(--sthira-text)]">Explore &amp; Plan</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2.5">
+            <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[var(--sthira-text)] flex items-center gap-2.5">
               <span>🧭 Explore &amp; Plan</span>
             </h1>
-            <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
+            <p className="text-xs text-[var(--sthira-text-muted)]">
               Unified workspace for deep research, milestone planning, continuous background
               trackers, and generated digests.
             </p>
@@ -557,7 +557,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
 
         {/* Top Segmented Tabs: Warm Stone Pill Bar */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none">
-          <div className="p-1 rounded-2xl bg-[#EFECE4] dark:bg-[#1E201A] border border-[#E0DCD3] dark:border-[#2C2E27] inline-flex items-center gap-1">
+          <div className="p-1 rounded-2xl bg-[var(--sthira-surface-muted)] border border-[var(--sthira-border)] inline-flex items-center gap-1">
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id;
               return (
@@ -568,8 +568,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
                     isActive
-                      ? 'bg-[#49583D] text-white shadow-2xs'
-                      : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white hover:bg-white/60 dark:hover:bg-[#252820]'
+                      ? 'bg-[var(--sthira-primary)] text-white shadow-2xs'
+                      : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)] hover:bg-white/60 dark:hover:bg-[#252820]'
                   }`}
                 >
                   <span>
@@ -578,7 +578,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   {tab.count !== undefined && (
                     <span
                       data-testid={tab.countTestId}
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      className={`text-xs px-1.5 py-0.2 rounded-full font-mono ${
                         isActive
                           ? 'bg-white/20 text-white'
                           : 'bg-[#E5E1D6] dark:bg-[#282B23] text-[#7A7870] dark:text-[#B5B2A8]'
@@ -599,12 +599,12 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Input Card */}
             <div
               data-testid="research-input-card"
-              className="rounded-2xl bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] p-6 shadow-2xs space-y-4"
+              className="rounded-2xl bg-[var(--sthira-surface)] border border-[var(--sthira-border)] p-6 shadow-2xs space-y-4"
             >
               <div className="space-y-1">
                 <label
                   htmlFor="research-query-textarea"
-                  className="text-xs font-bold uppercase tracking-wider text-[#7A7870] dark:text-[#9E9C93]"
+                  className="text-xs font-bold uppercase tracking-wider text-[var(--sthira-text-muted)]"
                 >
                   Autonomous Research Inquiry
                 </label>
@@ -621,7 +621,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     }
                   }}
                   placeholder="What would you like to research?"
-                  className="w-full bg-[#FAF8F3]/50 dark:bg-[#121310]/50 border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3.5 text-sm text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93] transition-colors resize-none"
+                  className="w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none"
                 />
               </div>
 
@@ -632,7 +632,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   <div className="flex items-center gap-1.5">
                     <div
                       data-testid="toggle-web-search"
-                      className={`flex items-center gap-1 bg-[#FAF8F3] dark:bg-[#121310] p-1 rounded-xl border border-[#E8E5DC] dark:border-[#2C2E27] ${
+                      className={`flex items-center gap-1 bg-[var(--sthira-canvas)] p-1 rounded-xl border border-[var(--sthira-border)] ${
                         isResearchUnsupported ? 'opacity-50 cursor-not-allowed' : ''
                       }`}
                       title={
@@ -641,7 +641,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           : undefined
                       }
                     >
-                      <span className="text-[11px] font-semibold text-[#8C8A82] px-1.5 flex items-center gap-1">
+                      <span className="text-[11px] font-semibold text-[var(--sthira-text-muted)] px-1.5 flex items-center gap-1">
                         <Globe className="w-3 h-3" />
                         <span>Web Search:</span>
                       </span>
@@ -654,8 +654,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
                         } ${
                           webSearchMode === 'auto'
-                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                            ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] font-semibold shadow-2xs'
+                            : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)]'
                         }`}
                       >
                         Auto
@@ -669,8 +669,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
                         } ${
                           webSearchMode === 'always_search'
-                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                            ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] font-semibold shadow-2xs'
+                            : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)]'
                         }`}
                       >
                         Enabled
@@ -684,8 +684,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           isResearchUnsupported ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
                         } ${
                           webSearchMode === 'local_vault_only'
-                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] font-semibold shadow-2xs'
-                            : 'text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#1E201C] dark:hover:text-white'
+                            ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] font-semibold shadow-2xs'
+                            : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)]'
                         }`}
                       >
                         Local Vault Only
@@ -697,7 +697,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       <span
                         data-testid="web-search-engine-augmented-hint"
                         title="Sthira will automatically query SearXNG/Brave and inject scraped web pages into this model's prompt."
-                        className="inline-flex items-center text-[#8C8A82] dark:text-[#A8A59B] hover:text-[#282C25] dark:hover:text-[#EDEAE2] cursor-help p-1"
+                        className="inline-flex items-center text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)] cursor-help p-1"
                       >
                         <Info className="w-3.5 h-3.5" />
                       </span>
@@ -717,7 +717,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
 
                   {/* Model Selector */}
                   <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
+                    <Sparkles className="w-3.5 h-3.5 text-[var(--sthira-text-muted)]" />
                     <ModelSelector
                       dataTestId="select-research-model"
                       models={models}
@@ -731,7 +731,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     data-testid="select-research-project"
                     value={selectedResearchProject || ''}
                     onChange={(e) => setSelectedResearchProject(e.target.value || null)}
-                    className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                   >
                     <option value="">No Project (Standalone)</option>
                     {projects.map((p) => (
@@ -746,7 +746,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     data-testid="select-synthesis-template"
                     value={selectedResearchTemplate}
                     onChange={(e) => setSelectedResearchTemplate(e.target.value)}
-                    className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                     title="Select synthesis markdown skeleton template"
                   >
                     {templates
@@ -765,7 +765,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   data-testid="btn-start-research"
                   disabled={!researchQuery.trim() || isSubmittingResearch}
                   onClick={handleSubmitResearch}
-                  className="px-5 py-2 bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
+                  className="px-5 py-2 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
                 >
                   {isSubmittingResearch ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -773,7 +773,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     <Search className="w-3.5 h-3.5" />
                   )}
                   <span>Start Research</span>
-                  <span className="text-[10px] opacity-60 font-mono">⌘↵</span>
+                  <span className="text-xs opacity-60 font-mono">⌘↵</span>
                 </button>
               </div>
             </div>
@@ -781,7 +781,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Recent Research Section */}
             <div data-testid="recent-research-section" className="space-y-4">
               <div className="flex items-center justify-between border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60 pb-2">
-                <h2 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2">
+                <h2 className="text-sm font-bold text-[var(--sthira-text)] flex items-center gap-2">
                   <span>Recent Research</span>
                   <span className="text-xs text-[#8C8A81] font-normal">
                     (last {recentResearch.length})
@@ -794,7 +794,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     setActiveTab('digests');
                     setDigestTypeFilter('research');
                   }}
-                  className="text-xs font-semibold text-[#282C25] dark:text-[#EDEAE2] hover:underline flex items-center gap-1 cursor-pointer"
+                  className="text-xs font-semibold text-[var(--sthira-text)] hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <span>View all research notes →</span>
                 </button>
@@ -810,27 +810,27 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       key={item.id}
                       data-testid={`recent-research-item-${item.id}`}
                       onClick={() => onOpenArtifact?.(item.id, item.project_id)}
-                      className="group p-4 bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] rounded-xl hover:border-[#282C25] dark:hover:border-[#9E9C93] transition-all cursor-pointer shadow-2xs flex flex-col justify-between space-y-3"
+                      className="group p-4 bg-[var(--sthira-surface)] border border-[var(--sthira-border)] rounded-xl hover:border-[var(--sthira-primary)] transition-all cursor-pointer shadow-2xs flex flex-col justify-between space-y-3"
                     >
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#E8EEF5] dark:bg-[#1F2633] text-[#2B4C6F] dark:text-[#A2C2E8]">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-[#E8EEF5] dark:bg-[#1F2633] text-[#2B4C6F] dark:text-[#A2C2E8]">
                             🔍 Research
                           </span>
-                          <span className="text-[10px] text-[#8C8A82]">
+                          <span className="text-xs text-[var(--sthira-text-muted)]">
                             {formatRelativeTime(item.updated_at || item.created_at)}
                           </span>
                         </div>
-                        <h3 className="text-xs font-bold text-[#1E201C] dark:text-[#EDEAE2] line-clamp-2 group-hover:underline">
+                        <h3 className="text-xs font-bold text-[var(--sthira-text)] line-clamp-2 group-hover:underline">
                           {item.title}
                         </h3>
                         {item.snippet && (
-                          <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] line-clamp-2">
+                          <p className="text-[11px] text-[var(--sthira-text-muted)] line-clamp-2">
                             {item.snippet}
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center justify-between text-[11px] text-[#7A7870] pt-1 border-t border-[#E8E5DC]/50 dark:border-[#262822]/50">
+                      <div className="flex items-center justify-between text-[11px] text-[#7A7870] pt-1 border-t border-[var(--sthira-border)]/50">
                         <span className="flex items-center gap-1 truncate max-w-[140px]">
                           <Folder className="w-3 h-3 flex-shrink-0" />
                           <span>{item.project_name || 'Standalone'}</span>
@@ -841,7 +841,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   ))}
                 </div>
               ) : (
-                <div className="p-8 text-center rounded-xl bg-white/40 dark:bg-[#181915]/40 border border-dashed border-[#E8E5DC] dark:border-[#2C2E27] text-xs text-[#8C8A82]">
+                <div className="p-8 text-center rounded-xl bg-[var(--sthira-surface)]/40 border border-dashed border-[var(--sthira-border)] text-xs text-[var(--sthira-text-muted)]">
                   No research notes recorded yet. Enter a topic above to conduct your first
                   investigation.
                 </div>
@@ -856,12 +856,12 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Input Card */}
             <div
               data-testid="plan-input-card"
-              className="rounded-2xl bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] p-6 shadow-2xs space-y-4"
+              className="rounded-2xl bg-[var(--sthira-surface)] border border-[var(--sthira-border)] p-6 shadow-2xs space-y-4"
             >
               <div className="space-y-1">
                 <label
                   htmlFor="plan-goal-textarea"
-                  className="text-xs font-bold uppercase tracking-wider text-[#7A7870] dark:text-[#9E9C93]"
+                  className="text-xs font-bold uppercase tracking-wider text-[var(--sthira-text-muted)]"
                 >
                   Milestone &amp; Architecture Planning
                 </label>
@@ -878,7 +878,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     }
                   }}
                   placeholder="What project, feature, or milestone set are we planning?"
-                  className="w-full bg-[#FAF8F3]/50 dark:bg-[#121310]/50 border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl p-3.5 text-sm text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] dark:placeholder:text-[#6E6D66] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93] transition-colors resize-none"
+                  className="w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none"
                 />
               </div>
 
@@ -887,7 +887,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                 <div className="flex flex-wrap items-center gap-2.5">
                   {/* Model Selector */}
                   <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-[#8C8A82] dark:text-[#7A786F]" />
+                    <Sparkles className="w-3.5 h-3.5 text-[var(--sthira-text-muted)]" />
                     <ModelSelector
                       dataTestId="select-plan-model"
                       models={models}
@@ -901,7 +901,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     data-testid="select-plan-project"
                     value={selectedPlanProject || ''}
                     onChange={(e) => setSelectedPlanProject(e.target.value || null)}
-                    className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                   >
                     <option value="">No Project (Standalone)</option>
                     {projects.map((p) => (
@@ -916,7 +916,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     data-testid="select-synthesis-template"
                     value={selectedPlanTemplate}
                     onChange={(e) => setSelectedPlanTemplate(e.target.value)}
-                    className="px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                     title="Select synthesis markdown skeleton template"
                   >
                     {templates
@@ -935,7 +935,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   data-testid="btn-start-plan"
                   disabled={!planGoal.trim() || isSubmittingPlan}
                   onClick={handleSubmitPlan}
-                  className="px-5 py-2 bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
+                  className="px-5 py-2 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
                 >
                   {isSubmittingPlan ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -943,7 +943,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     <ClipboardList className="w-3.5 h-3.5" />
                   )}
                   <span>Create Plan</span>
-                  <span className="text-[10px] opacity-60 font-mono">⌘↵</span>
+                  <span className="text-xs opacity-60 font-mono">⌘↵</span>
                 </button>
               </div>
             </div>
@@ -951,7 +951,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Recent Plans Section */}
             <div data-testid="recent-plans-section" className="space-y-4">
               <div className="flex items-center justify-between border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60 pb-2">
-                <h2 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2">
+                <h2 className="text-sm font-bold text-[var(--sthira-text)] flex items-center gap-2">
                   <span>Recent Plans</span>
                   <span className="text-xs text-[#8C8A81] font-normal">
                     (last {recentPlans.length})
@@ -964,7 +964,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     setActiveTab('digests');
                     setDigestTypeFilter('plan');
                   }}
-                  className="text-xs font-semibold text-[#282C25] dark:text-[#EDEAE2] hover:underline flex items-center gap-1 cursor-pointer"
+                  className="text-xs font-semibold text-[var(--sthira-text)] hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <span>View all plans →</span>
                 </button>
@@ -980,27 +980,27 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       key={item.id}
                       data-testid={`recent-plan-item-${item.id}`}
                       onClick={() => onOpenArtifact?.(item.id, item.project_id)}
-                      className="group p-4 bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] rounded-xl hover:border-[#282C25] dark:hover:border-[#9E9C93] transition-all cursor-pointer shadow-2xs flex flex-col justify-between space-y-3"
+                      className="group p-4 bg-[var(--sthira-surface)] border border-[var(--sthira-border)] rounded-xl hover:border-[var(--sthira-primary)] transition-all cursor-pointer shadow-2xs flex flex-col justify-between space-y-3"
                     >
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#F2ECE1] dark:bg-[#2A261D] text-[#875F1A] dark:text-[#E8C582]">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F2ECE1] dark:bg-[#2A261D] text-[#875F1A] dark:text-[#E8C582]">
                             📋 Plan
                           </span>
-                          <span className="text-[10px] text-[#8C8A82]">
+                          <span className="text-xs text-[var(--sthira-text-muted)]">
                             {formatRelativeTime(item.updated_at || item.created_at)}
                           </span>
                         </div>
-                        <h3 className="text-xs font-bold text-[#1E201C] dark:text-[#EDEAE2] line-clamp-2 group-hover:underline">
+                        <h3 className="text-xs font-bold text-[var(--sthira-text)] line-clamp-2 group-hover:underline">
                           {item.title}
                         </h3>
                         {item.snippet && (
-                          <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] line-clamp-2">
+                          <p className="text-[11px] text-[var(--sthira-text-muted)] line-clamp-2">
                             {item.snippet}
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center justify-between text-[11px] text-[#7A7870] pt-1 border-t border-[#E8E5DC]/50 dark:border-[#262822]/50">
+                      <div className="flex items-center justify-between text-[11px] text-[#7A7870] pt-1 border-t border-[var(--sthira-border)]/50">
                         <span className="flex items-center gap-1 truncate max-w-[140px]">
                           <Folder className="w-3 h-3 flex-shrink-0" />
                           <span>{item.project_name || 'Standalone'}</span>
@@ -1011,7 +1011,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   ))}
                 </div>
               ) : (
-                <div className="p-8 text-center rounded-xl bg-white/40 dark:bg-[#181915]/40 border border-dashed border-[#E8E5DC] dark:border-[#2C2E27] text-xs text-[#8C8A82]">
+                <div className="p-8 text-center rounded-xl bg-[var(--sthira-surface)]/40 border border-dashed border-[var(--sthira-border)] text-xs text-[var(--sthira-text-muted)]">
                   No project plans synthesized yet. Enter a goal above to draft milestones.
                 </div>
               )}
@@ -1025,11 +1025,11 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Action Bar */}
             <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2">
+                <h2 className="text-sm font-bold text-[var(--sthira-text)] flex items-center gap-2">
                   <span>Active Background Trackers</span>
                   <span className="text-xs text-[#8C8A81] font-normal">({topics.length} total)</span>
                 </h2>
-                <p className="text-xs text-[#6E6D66] dark:text-[#9E9C93]">
+                <p className="text-xs text-[var(--sthira-text-muted)]">
                   Recurring investigations that autonomously gather new developments and generate
                   digests.
                 </p>
@@ -1038,7 +1038,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                 type="button"
                 data-testid="btn-new-tracker"
                 onClick={() => setIsNewTrackerOpen(true)}
-                className="px-3.5 py-2 bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] rounded-xl text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                className="px-3.5 py-2 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer flex items-center gap-1.5 shadow-2xs"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>+ New Tracker</span>
@@ -1049,10 +1049,10 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {isNewTrackerOpen && (
               <div
                 data-testid="modal-new-tracker"
-                className="rounded-2xl bg-white dark:bg-[#181915] border-2 border-[#282C25] dark:border-[#EDEAE2] p-6 shadow-md space-y-4 animate-fadeIn"
+                className="rounded-2xl bg-[var(--sthira-surface)] border-2 border-[var(--sthira-primary)] p-6 shadow-md space-y-4 animate-fadeIn"
               >
-                <div className="flex items-center justify-between border-b border-[#E8E5DC] dark:border-[#2C2E27] pb-3">
-                  <h3 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2] flex items-center gap-2">
+                <div className="flex items-center justify-between border-b border-[var(--sthira-border)] pb-3">
+                  <h3 className="text-sm font-bold text-[var(--sthira-text)] flex items-center gap-2">
                     <Clock className="w-4 h-4" />
                     <span>Configure Recurring Tracker</span>
                   </h3>
@@ -1060,7 +1060,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     type="button"
                     data-testid="btn-cancel-scheduled-topic"
                     onClick={() => setIsNewTrackerOpen(false)}
-                    className="p-1 rounded-lg hover:bg-[#EFECE4] dark:hover:bg-[#2C2E27] text-[#8C8A82] cursor-pointer"
+                    className="p-1 rounded-lg hover:bg-[var(--sthira-surface-muted)] text-[var(--sthira-text-muted)] cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1079,8 +1079,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                         onClick={() => setNewTrackerType('research')}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
                           newTrackerType === 'research'
-                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310]'
-                            : 'bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] text-[#6E6D66]'
+                            ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)]'
+                            : 'bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] text-[#6E6D66]'
                         }`}
                       >
                         🔍 Research Investigation
@@ -1091,8 +1091,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                         onClick={() => setNewTrackerType('plan')}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
                           newTrackerType === 'plan'
-                            ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310]'
-                            : 'bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] text-[#6E6D66]'
+                            ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)]'
+                            : 'bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] text-[#6E6D66]'
                         }`}
                       >
                         📋 Plan Review
@@ -1111,7 +1111,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       value={newTrackerTitle}
                       onChange={(e) => setNewTrackerTitle(e.target.value)}
                       placeholder="e.g. SSD NVMe Streaming Benchmarks"
-                      className="w-full px-3 py-2 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none"
+                      className="w-full px-3 py-2 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none"
                     />
                   </div>
 
@@ -1126,7 +1126,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       value={newTrackerPrompt}
                       onChange={(e) => setNewTrackerPrompt(e.target.value)}
                       placeholder="Inquiry query executed during each automated run..."
-                      className="w-full px-3 py-2 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none resize-none"
+                      className="w-full px-3 py-2 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none resize-none"
                     />
                   </div>
 
@@ -1142,7 +1142,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                         onChange={(e) =>
                           setNewTrackerCadence(e.target.value as ScheduledTopicCadence)
                         }
-                        className="w-full px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                        className="w-full px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                       >
                         <option value="daily">Daily (Autonomous)</option>
                         <option value="weekly">Weekly</option>
@@ -1160,7 +1160,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           data-testid="input-topic-time"
                           value={newTrackerTime}
                           onChange={(e) => setNewTrackerTime(e.target.value)}
-                          className="w-full px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                          className="w-full px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                         />
                       </div>
                     )}
@@ -1174,7 +1174,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                           data-testid="select-topic-weekday"
                           value={newTrackerWeekday}
                           onChange={(e) => setNewTrackerWeekday(parseInt(e.target.value, 10))}
-                          className="w-full px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                          className="w-full px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                         >
                           {WEEKDAY_NAMES.map((name, idx) => (
                             <option key={name} value={idx}>
@@ -1193,7 +1193,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                         data-testid="select-topic-project"
                         value={newTrackerProject}
                         onChange={(e) => setNewTrackerProject(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] outline-none cursor-pointer"
+                        className="w-full px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                       >
                         <option value="">Standalone (Workspace)</option>
                         {projects.map((p) => (
@@ -1210,7 +1210,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsNewTrackerOpen(false)}
-                      className="px-4 py-1.5 rounded-xl text-xs text-[#6E6D66] hover:bg-[#EFECE4] dark:hover:bg-[#2C2E27] cursor-pointer"
+                      className="px-4 py-1.5 rounded-xl text-xs text-[#6E6D66] hover:bg-[var(--sthira-surface-muted)] cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -1218,7 +1218,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       type="submit"
                       data-testid="btn-save-scheduled-topic"
                       disabled={!newTrackerTitle.trim() || !newTrackerPrompt.trim() || isSavingTracker}
-                      className="px-4 py-1.5 bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 cursor-pointer"
+                      className="px-4 py-1.5 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 cursor-pointer"
                     >
                       {isSavingTracker ? 'Saving...' : 'Save Tracker'}
                     </button>
@@ -1231,7 +1231,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             <div data-testid="scheduled-section-research" className="space-y-3">
               <div className="flex items-center gap-2">
                 <Search className="w-4 h-4 text-[#7A7870]" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-[#7A7870] dark:text-[#9E9C93]">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--sthira-text-muted)]">
                   Research Trackers
                 </h3>
               </div>
@@ -1253,7 +1253,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     />
                   ))}
                 {topics.filter((t) => t.topic_type === 'research').length === 0 && (
-                  <div className="col-span-full p-6 text-center rounded-xl bg-white/40 dark:bg-[#181915]/40 border border-dashed border-[#E8E5DC] dark:border-[#2C2E27] text-xs text-[#8C8A82]">
+                  <div className="col-span-full p-6 text-center rounded-xl bg-[var(--sthira-surface)]/40 border border-dashed border-[var(--sthira-border)] text-xs text-[var(--sthira-text-muted)]">
                     No research trackers configured. Click &ldquo;+ New Tracker&rdquo; to set up an
                     autonomous query.
                   </div>
@@ -1264,7 +1264,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             <div data-testid="scheduled-section-plan" className="space-y-3 pt-4">
               <div className="flex items-center gap-2">
                 <ClipboardList className="w-4 h-4 text-[#7A7870]" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-[#7A7870] dark:text-[#9E9C93]">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--sthira-text-muted)]">
                   Plan Review Trackers
                 </h3>
               </div>
@@ -1283,7 +1283,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     />
                   ))}
                 {topics.filter((t) => t.topic_type === 'plan').length === 0 && (
-                  <div className="col-span-full p-6 text-center rounded-xl bg-white/40 dark:bg-[#181915]/40 border border-dashed border-[#E8E5DC] dark:border-[#2C2E27] text-xs text-[#8C8A82]">
+                  <div className="col-span-full p-6 text-center rounded-xl bg-[var(--sthira-surface)]/40 border border-dashed border-[var(--sthira-border)] text-xs text-[var(--sthira-text-muted)]">
                     No plan review trackers configured.
                   </div>
                 )}
@@ -1299,20 +1299,20 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               {/* Search filter */}
               <div className="relative flex-1 max-w-md">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8C8A82]" />
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--sthira-text-muted)]" />
                 <input
                   type="text"
                   data-testid="input-search-digests"
                   value={digestSearch}
                   onChange={(e) => setDigestSearch(e.target.value)}
                   placeholder="Filter past research & plan notes..."
-                  className="w-full pl-9 pr-8 py-2 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl text-xs text-[#1E201C] dark:text-[#EDEAE2] placeholder:text-[#8C8A82] outline-none focus:border-[#282C25] dark:focus:border-[#9E9C93] transition-colors shadow-2xs"
+                  className="w-full pl-9 pr-8 py-2 bg-[var(--sthira-surface)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors shadow-2xs"
                 />
                 {digestSearch && (
                   <button
                     type="button"
                     onClick={() => setDigestSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[#8C8A82] hover:text-[#1E201C] dark:hover:text-white"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)]"
                   >
                     Clear
                   </button>
@@ -1321,7 +1321,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
 
               {/* Type Filter Pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto select-none">
-                <span className="text-[11px] font-semibold text-[#8C8A82] mr-1 flex items-center gap-1">
+                <span className="text-[11px] font-semibold text-[var(--sthira-text-muted)] mr-1 flex items-center gap-1">
                   <Filter className="w-3 h-3" />
                   <span>Type:</span>
                 </span>
@@ -1331,8 +1331,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   onClick={() => setDigestTypeFilter('all')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                     digestTypeFilter === 'all'
-                      ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] shadow-2xs'
-                      : 'bg-white/70 dark:bg-[#1C1D19]/70 text-[#6E6D66] border border-[#E8E5DC] dark:border-[#2C2E27]'
+                      ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] shadow-2xs'
+                      : 'bg-[var(--sthira-surface)]/70 text-[#6E6D66] border border-[var(--sthira-border)]'
                   }`}
                 >
                   All ({allDigests.length})
@@ -1343,8 +1343,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   onClick={() => setDigestTypeFilter('research')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                     digestTypeFilter === 'research'
-                      ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] shadow-2xs'
-                      : 'bg-white/70 dark:bg-[#1C1D19]/70 text-[#6E6D66] border border-[#E8E5DC] dark:border-[#2C2E27]'
+                      ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] shadow-2xs'
+                      : 'bg-[var(--sthira-surface)]/70 text-[#6E6D66] border border-[var(--sthira-border)]'
                   }`}
                 >
                   🔍 Research ({allDigests.filter((d) => d.artifact_type === 'research').length})
@@ -1355,8 +1355,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   onClick={() => setDigestTypeFilter('plan')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                     digestTypeFilter === 'plan'
-                      ? 'bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] shadow-2xs'
-                      : 'bg-white/70 dark:bg-[#1C1D19]/70 text-[#6E6D66] border border-[#E8E5DC] dark:border-[#2C2E27]'
+                      ? 'bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] shadow-2xs'
+                      : 'bg-[var(--sthira-surface)]/70 text-[#6E6D66] border border-[var(--sthira-border)]'
                   }`}
                 >
                   📋 Plan ({allDigests.filter((d) => d.artifact_type === 'plan').length})
@@ -1367,11 +1367,11 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
             {/* Filterable Table */}
             <div
               data-testid="digests-table"
-              className="rounded-2xl bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] shadow-2xs overflow-hidden"
+              className="rounded-2xl bg-[var(--sthira-surface)] border border-[var(--sthira-border)] shadow-2xs overflow-hidden"
             >
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="border-b border-[#E8E5DC] dark:border-[#262822] bg-[#FAF8F3]/60 dark:bg-[#141511]/60 text-[11px] font-bold text-[#7A7870] dark:text-[#9E9C93] uppercase">
+                  <tr className="border-b border-[var(--sthira-border)] bg-[var(--sthira-canvas)]/60 text-[11px] font-bold text-[var(--sthira-text-muted)] uppercase">
                     <th className="py-3 px-4">Title</th>
                     <th className="py-3 px-3 w-28">Type</th>
                     <th className="py-3 px-3 w-36">Project</th>
@@ -1379,21 +1379,21 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     <th className="py-3 px-3 w-12 text-center">•••</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#E8E5DC]/60 dark:divide-[#262822]/60">
+                <tbody className="divide-y divide-[var(--sthira-border)]/60">
                   {filteredDigests.map((item) => (
                     <tr
                       key={item.id}
                       data-testid={`digest-row-${item.id}`}
                       onClick={() => onOpenArtifact?.(item.id, item.project_id)}
-                      className="group hover:bg-[#FAF8F3] dark:hover:bg-[#1F201B] transition-colors cursor-pointer"
+                      className="group hover:bg-[var(--sthira-canvas)] transition-colors cursor-pointer"
                     >
                       {/* Title */}
                       <td className="py-3.5 px-4">
-                        <div className="font-semibold text-[#1E201C] dark:text-[#EDEAE2] group-hover:underline flex items-center gap-2">
+                        <div className="font-semibold text-[var(--sthira-text)] group-hover:underline flex items-center gap-2">
                           <span>{item.title}</span>
                         </div>
                         {item.snippet && (
-                          <div className="text-[11px] text-[#7A7870] dark:text-[#8C8A81] line-clamp-1 mt-0.5">
+                          <div className="text-[11px] text-[var(--sthira-text-muted)] line-clamp-1 mt-0.5">
                             {item.snippet}
                           </div>
                         )}
@@ -1404,14 +1404,14 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                         {item.artifact_type === 'research' ? (
                           <span
                             data-testid={`badge-type-${item.id}`}
-                            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#E8EEF5] dark:bg-[#1F2633] text-[#2B4C6F] dark:text-[#A2C2E8]"
+                            className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md bg-[#E8EEF5] dark:bg-[#1F2633] text-[#2B4C6F] dark:text-[#A2C2E8]"
                           >
                             🔍 Research
                           </span>
                         ) : (
                           <span
                             data-testid={`badge-type-${item.id}`}
-                            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#F2ECE1] dark:bg-[#2A261D] text-[#875F1A] dark:text-[#E8C582]"
+                            className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F2ECE1] dark:bg-[#2A261D] text-[#875F1A] dark:text-[#E8C582]"
                           >
                             📋 Plan
                           </span>
@@ -1419,19 +1419,19 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       </td>
 
                       {/* Project Chip */}
-                      <td className="py-3.5 px-3 text-[#7A7870] dark:text-[#9E9C93]">
+                      <td className="py-3.5 px-3 text-[var(--sthira-text-muted)]">
                         {item.project_name ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-[#EFECE4] dark:bg-[#252820] text-[#1E201C] dark:text-[#EDEAE2] truncate max-w-[130px]">
+                          <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-[var(--sthira-surface-muted)] text-[var(--sthira-text)] truncate max-w-[130px]">
                             <Folder className="w-3 h-3 flex-shrink-0" />
                             <span className="truncate">{item.project_name}</span>
                           </span>
                         ) : (
-                          <span className="text-[11px] text-[#8C8A82]">Standalone</span>
+                          <span className="text-[11px] text-[var(--sthira-text-muted)]">Standalone</span>
                         )}
                       </td>
 
                       {/* Date Generated */}
-                      <td className="py-3.5 px-3 text-[#7A7870] dark:text-[#8C8A81]">
+                      <td className="py-3.5 px-3 text-[var(--sthira-text-muted)]">
                         {formatDate(item.created_at || item.updated_at)}
                       </td>
 
@@ -1457,7 +1457,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                     <tr>
                       <td
                         colSpan={5}
-                        className="py-12 text-center text-xs text-[#8C8A82] dark:text-[#6E6D66]"
+                        className="py-12 text-center text-xs text-[var(--sthira-text-muted)]"
                       >
                         No generated research or plan notes found matching your criteria.
                       </td>
@@ -1493,7 +1493,7 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
   return (
     <div
       data-testid={`topic-card-${topic.id}`}
-      className="p-5 rounded-2xl bg-white dark:bg-[#181915] border border-[#E8E5DC] dark:border-[#262822] shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between space-y-4"
+      className="p-5 rounded-2xl bg-[var(--sthira-surface)] border border-[var(--sthira-border)] shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between space-y-4"
     >
       <div className="space-y-2.5">
         {/* Top Badges */}
@@ -1501,13 +1501,13 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
           <div className="flex items-center gap-1.5 flex-wrap">
             <span
               data-testid={`cadence-badge-${topic.id}`}
-              className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase font-mono bg-[#EFECE4] dark:bg-[#252820] text-[#6E6D66] dark:text-[#A8A69E]"
+              className="text-xs font-semibold px-2 py-0.5 rounded-md uppercase font-mono bg-[var(--sthira-surface-muted)] text-[var(--sthira-text-muted)]"
             >
               {topic.cadence}
             </span>
             <span
               data-testid={`status-badge-${topic.id}`}
-              className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+              className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
                 topic.is_active
                   ? 'bg-[#E3EBE3] dark:bg-[#1E2B1E] text-[#2D5A27] dark:text-[#7BC274]'
                   : 'bg-[#F2ECE1] dark:bg-[#28251E] text-[#8C7A58] dark:text-[#D1B886]'
@@ -1518,7 +1518,7 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
           </div>
           <span
             data-testid={`schedule-label-${topic.id}`}
-            className="text-[10px] text-[#8C8A82] font-mono"
+            className="text-xs text-[var(--sthira-text-muted)] font-mono"
           >
             {topic.schedule_label || topic.cadence}
           </span>
@@ -1526,34 +1526,34 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
 
         {/* Title & Prompt */}
         <div>
-          <h4 className="text-sm font-bold text-[#1E201C] dark:text-[#EDEAE2]">
+          <h4 className="text-sm font-bold text-[var(--sthira-text)]">
             {topic.title}
           </h4>
-          <p className="text-[11px] text-[#6E6D66] dark:text-[#9E9C93] line-clamp-2 mt-1">
+          <p className="text-[11px] text-[var(--sthira-text-muted)] line-clamp-2 mt-1">
             {topic.prompt_query}
           </p>
         </div>
 
         {/* Meta / Links */}
-        <div className="space-y-1 text-[11px] text-[#7A7870] dark:text-[#8C8A81] pt-1 border-t border-[#E8E5DC]/50 dark:border-[#262822]/50">
+        <div className="space-y-1 text-[11px] text-[var(--sthira-text-muted)] pt-1 border-t border-[var(--sthira-border)]/50">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Folder className="w-3 h-3 flex-shrink-0" />
               <span>{topic.project_name || 'Standalone'}</span>
             </span>
-            <span data-testid={`next-run-${topic.id}`} className="text-[10px]">
+            <span data-testid={`next-run-${topic.id}`} className="text-xs">
               {topic.next_run_at ? `Next in ${formatUntil(topic.next_run_at)}` : ''}
             </span>
           </div>
-          <div className="text-[10px] text-[#8C8A82]">
+          <div className="text-xs text-[var(--sthira-text-muted)]">
             Last run: {formatRelativeTime(topic.last_run_at)}
           </div>
         </div>
 
         {/* Previous Runs (if any) */}
         {topic.runs && topic.runs.length > 0 && (
-          <div className="pt-2 border-t border-[#E8E5DC]/50 dark:border-[#262822]/50 space-y-1">
-            <span className="text-[10px] font-bold text-[#8C8A82] uppercase">
+          <div className="pt-2 border-t border-[var(--sthira-border)]/50 space-y-1">
+            <span className="text-xs font-bold text-[var(--sthira-text-muted)] uppercase">
               Latest Digest:
             </span>
             {topic.runs.slice(0, 1).map((run) => (
@@ -1562,7 +1562,7 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
                 type="button"
                 data-testid={`digest-link-${run.artifact_id}`}
                 onClick={() => onOpenArtifact?.(run.artifact_id, topic.project_id)}
-                className="w-full text-left text-[11px] font-medium text-[#282C25] dark:text-[#EDEAE2] hover:underline flex items-center justify-between gap-1 p-1.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121310] border border-[#E8E5DC] dark:border-[#262822] cursor-pointer"
+                className="w-full text-left text-[11px] font-medium text-[var(--sthira-text)] hover:underline flex items-center justify-between gap-1 p-1.5 rounded-lg bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] cursor-pointer"
               >
                 <span className="truncate">{run.artifact_title}</span>
                 <ChevronRight className="w-3 h-3 flex-shrink-0" />
@@ -1573,13 +1573,13 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
       </div>
 
       {/* Action Buttons Row */}
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E8E5DC] dark:border-[#262822]">
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--sthira-border)]">
         <button
           type="button"
           data-testid={`btn-run-now-${topic.id}`}
           disabled={isRunning}
           onClick={onRun}
-          className="px-2.5 py-1.5 rounded-xl bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] text-[11px] font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer flex items-center gap-1 shadow-2xs"
+          className="px-2.5 py-1.5 rounded-xl bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] text-[11px] font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity cursor-pointer flex items-center gap-1 shadow-2xs"
         >
           {isRunning ? (
             <Loader2 className="w-3 h-3 animate-spin" />
@@ -1594,7 +1594,7 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
             type="button"
             data-testid={`btn-toggle-active-${topic.id}`}
             onClick={onToggle}
-            className="p-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#252820] hover:bg-[#E5E1D6] dark:hover:bg-[#2C3027] text-[#6E6D66] dark:text-[#A8A69E] transition-colors cursor-pointer text-xs"
+            className="p-1.5 rounded-xl bg-[var(--sthira-surface-muted)] hover:bg-[#E5E1D6] dark:hover:bg-[#2C3027] text-[var(--sthira-text-muted)] transition-colors cursor-pointer text-xs"
             title={topic.is_active ? 'Pause Tracker' : 'Resume Tracker'}
           >
             {topic.is_active ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
@@ -1603,7 +1603,7 @@ const TrackerCard: React.FC<TrackerCardProps> = ({
             type="button"
             data-testid={`btn-delete-tracker-${topic.id}`}
             onClick={onDelete}
-            className="p-1.5 rounded-xl bg-[#EFECE4] dark:bg-[#252820] hover:bg-[#FBEBEB] dark:hover:bg-[#3D1E1E] text-[#6E6D66] dark:text-[#A8A69E] hover:text-[#C53030] dark:hover:text-[#F87171] transition-colors cursor-pointer text-xs"
+            className="p-1.5 rounded-xl bg-[var(--sthira-surface-muted)] hover:bg-[#FBEBEB] dark:hover:bg-[#3D1E1E] text-[var(--sthira-text-muted)] hover:text-[#C53030] dark:hover:text-[#F87171] transition-colors cursor-pointer text-xs"
             title="Delete Tracker"
           >
             <Trash2 className="w-3.5 h-3.5" />

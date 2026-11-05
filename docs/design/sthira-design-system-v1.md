@@ -1,6 +1,6 @@
 # Sthira — Visual Design System & Redesign Blueprint (v1)
 
-**Status:** Proposed visual specification for implementation, not a change to canonical product behavior.  
+**Status:** Detailed design reference. The permanent [design policy](../policies/design.md) and [product contract](../policies/product.md) govern current decisions. This document is not a verification report.
 **Date:** 2 November 2026  
 **Inputs:** `sthira_product_understanding.md` (v4), `plan(1).md`, the current screenshots, and the generated Sthira concept mockups.
 
@@ -16,7 +16,7 @@ Existing functionality is the contract: the redesign must preserve the universal
 
 - **Resume-first:** concise grounded Level 1 brief (up to 75 visible words); expanded Level 2 review on demand.
 - **Knowledge is durable:** show evidence paths and ownership/AI-provenance distinctions; never invent progress, history, sources, or graph edges.
-- **Editor first:** open actual work; the resume block contextualizes it. The right epistemic margin stays **collapsed by default**.
+- **Context first:** project navigation opens the overview; selecting a document opens the editor. Optional evidence contextualizes work without dominating it.
 - **Local-first:** do not require online fonts, image assets, cloud search, or model access for the app shell to render.
 - **Calm AI:** no persistent popups, competing CTAs, or automatically accepted structural changes.
 - **UI architecture:** existing Tauri v2 + React 19 + TypeScript + Tailwind CSS + Lucide icons. Keep Rust APIs and storage behavior unchanged during the visual pass.
@@ -140,14 +140,14 @@ Dark mode should be deliberately tuned, **not** a CSS-inverted light mode. Maint
 
 ### 6.2 Project & Focus document view — highest priority
 
-**What works:** Breadcrumbs, resume card, Markdown Edit/Preview, Refine, Derive, Canvas, History, Margin.
+**Current contract:** Project overview and explicit document selection, one rich Markdown-backed editor, Refine/Derive, History, Connections, and save state. Canvas is in sidebar navigation; evidence opens through Page actions → Sources & insights.
 
 **Changes:**
 1. Keep the document as the primary workspace. Resume Quick Brief is **collapsible and up to 75 words**, with one “Expanded review” action.
 2. Resume does not require the user to read a large card before editing. On active frequent return it may stay collapsed; on cold return follow product hint behavior.
-3. Limit document measure to 720–820px; improve Markdown editor and preview typography separately. **Do not turn Edit into an unimplemented WYSIWYG editor.**
+3. Limit document measure to 720–820px. Use one formatted editable document with Markdown storage; do not restore separate Edit/Preview modes. Reference previews remain read-only.
 4. Separate formatting actions from AI actions visually; Refine and Derive should look secondary, with preview/undo before substantive mutations.
-5. Keep the epistemic right margin closed by default. When opened, it displays actual sourced claims, questions, and relevant artifacts; no invented takeaways or task lists.
+5. Sources & insights opens on demand and displays actual sourced claims, questions, and relevant artifacts. Connections has its own contextual rail/drawer behavior; neither may invent takeaways or task lists.
 6. Protect long titles, wide tables, code blocks, lineage chips, and small-window layouts.
 
 ### 6.3 All Files
@@ -216,18 +216,18 @@ Dark mode should be deliberately tuned, **not** a CSS-inverted light mode. Maint
 
 **Definition of done per screen:** all existing functions work; no new static fake data; loading/empty/error/success states are designed; keyboard operation and focus are correct; layout scales; light and dark modes both pass; screenshots compared against the visual anchor.
 
-## 9. Agent execution prompt
+## 9. Implementation and verification
 
-> Refactor the existing Sthira frontend to use `sthira-design-system-v1.md` and `sthira-theme-tokens.css` as the visual source of truth. Preserve all current behavior, Tauri IPC commands, keyboard shortcuts, authentication/provider handling, storage and provenance rules, and tests. Do not rebuild the app, add fake data, invent graph relationships or claim inferred summaries are recorded facts. Do this screen by screen, beginning with tokens, shared components, app shell and Home. Before changing a component, inspect current props, state, callbacks, loading/error handling and tests. Commit only visual/interaction improvements needed to reach the target. Verify both themes and 1366×768 before moving to the next screen. Use the provided mockups as visual reference but prefer canonical product behavior where a mockup contradicts it. Provide before/after screenshots and a regression checklist.
+Follow the permanent [policies](../policies/README.md). Inspect current callbacks, state, API/storage boundaries, and tests before changing a surface. Reuse semantic tokens and coherent shared components; preserve actual data and behavior. Verify affected surfaces with fresh rendered evidence and relevant functional tests. Keep generated output in ignored temporary storage rather than adding another execution prompt or audit album.
 
 ## 10. Known mockup limitations (don't reproduce blindly)
 
 - Generated mockups sometimes show **an extra project**, fabricated research findings, invented nodes or links, or category badges unrelated to real data.
 - Some show **Home active** on a different screen.
-- Some imply a styled WYSIWYG editor in Edit; the current product deliberately uses Markdown Edit versus rich Preview.
+- Some show obsolete Edit/Preview modes and header controls. The current product uses one rich editable surface and the simplified header defined in policy.
 - Decorative mountain textures and oversized serif headings look good at full-screen but need aggressive moderation in the real density and responsive states.
 - The mockups do not cover all dark mode, loading, failure, privacy, provenance, keyboard or narrow-display conditions.
 
 ---
 
-**Recommended first implementation unit:** global color tokens + 8–10 shared primitives + sidebar/header + Home; evaluate it in the running app before proceeding to all other views.
+**Maintenance:** use current policies and actual implementation; earlier phase order does not imply that a surface is finished or verified.

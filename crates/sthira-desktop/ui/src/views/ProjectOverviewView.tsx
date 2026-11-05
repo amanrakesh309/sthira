@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownUp, ArrowLeft, ArrowUpRight, CalendarDays, Check, ChevronLeft, ChevronRight, FileText, Folder, Layers, LayoutGrid, Link2, List, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, CalendarDays, Check, ChevronLeft, ChevronRight, FileText, Folder, Layers, LayoutGrid, Link2, List, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { getProjectOverview } from '../api/projects';
 import { createPage, linkArtifactToProject } from '../api/ipc';
 import { searchConnectionTargets } from '../api/connections';
@@ -178,10 +178,54 @@ export function ProjectOverviewView({ projectId, onBack, onOpenArtifact, onOpenC
         {actionError && <div className="project-error" role="alert"><span>{actionError}</span><button type="button" onClick={() => setActionError(null)}>Dismiss</button></div>}
         <section className="project-contents" aria-labelledby="project-contents-title">
           <div className="project-contents-heading"><div><h2 id="project-contents-title">Project contents <span>{data.items.length}</span></h2><p>Pages, objects, canvases, and directly linked items.</p></div><div className="project-layout-control" role="group" aria-label="Project contents layout"><button type="button" aria-label="List view" aria-pressed={browse.layout === 'list'} onClick={() => change({ layout: 'list', page })}><List size={17} /></button><button type="button" aria-label="Grid view" aria-pressed={browse.layout === 'grid'} onClick={() => change({ layout: 'grid', page })}><LayoutGrid size={17} /></button></div></div>
-          <div className="project-toolbar"><label className="project-search"><Search size={17} /><input ref={search} aria-label="Search project contents" placeholder="Search names, types, and summaries…" value={browse.query} onChange={(event) => change({ query: event.target.value })} />{browse.query && <button type="button" aria-label="Clear project search" onClick={() => { change({ query: '' }); search.current?.focus(); }}><X size={15} /></button>}</label>
-            <label className="project-select"><span>Type</span><select aria-label="Filter project type" value={browse.type} onChange={(event) => change({ type: event.target.value })}><option value="all">All types</option><option value="note">Pages</option><option value="object">All objects</option>{types.map(([id, name]) => <option key={id} value={`object:${id}`}>Object · {name}</option>)}<option value="source">Sources</option><option value="snippet">Snippets</option><option value="canvas">Canvases</option><option value="project">Projects</option></select></label>
-            <label className="project-select"><span>Relationship</span><select aria-label="Filter project relationship" value={browse.relationship} onChange={(event) => change({ relationship: event.target.value as ProjectBrowseState['relationship'] })}><option value="all">All relationships</option><option value="member">In project</option><option value="reference">References</option><option value="backlink">Linked from</option></select></label>
-            <label className="project-select project-sort"><span><ArrowDownUp size={13} />Sort by</span><select aria-label="Sort project contents" value={browse.sort} onChange={(event) => change({ sort: event.target.value as ProjectBrowseState['sort'] })}><option value="updated">Recently edited</option><option value="oldest">Oldest edited</option><option value="created">Recently created</option><option value="title">Name A–Z</option><option value="title_desc">Name Z–A</option></select></label>
+          <div className="project-toolbar">
+            <div className="project-toolbar-search">
+              <label className="project-search">
+                <Search size={16} aria-hidden="true" />
+                <input ref={search} aria-label="Search project contents" placeholder="Search names, types, and summaries…" value={browse.query} onChange={(event) => change({ query: event.target.value })} />
+                {browse.query && <button type="button" aria-label="Clear project search" onClick={() => { change({ query: '' }); search.current?.focus(); }}><X size={15} /></button>}
+              </label>
+            </div>
+            <div className="project-toolbar-filters">
+              <label className="project-select">
+                <span>Type</span>
+                <div className="project-select-field">
+                  <select aria-label="Filter project type" value={browse.type} onChange={(event) => change({ type: event.target.value })}>
+                    <option value="all">All types</option>
+                    <option value="note">Pages</option>
+                    <option value="object">All objects</option>
+                    {types.map(([id, name]) => <option key={id} value={`object:${id}`}>Object · {name}</option>)}
+                    <option value="source">Sources</option>
+                    <option value="snippet">Snippets</option>
+                    <option value="canvas">Canvases</option>
+                    <option value="project">Projects</option>
+                  </select>
+                </div>
+              </label>
+              <label className="project-select">
+                <span>Relationship</span>
+                <div className="project-select-field">
+                  <select aria-label="Filter project relationship" value={browse.relationship} onChange={(event) => change({ relationship: event.target.value as ProjectBrowseState['relationship'] })}>
+                    <option value="all">All relationships</option>
+                    <option value="member">In project</option>
+                    <option value="reference">References</option>
+                    <option value="backlink">Linked from</option>
+                  </select>
+                </div>
+              </label>
+              <label className="project-select project-sort">
+                <span>Sort by</span>
+                <div className="project-select-field">
+                  <select aria-label="Sort project contents" value={browse.sort} onChange={(event) => change({ sort: event.target.value as ProjectBrowseState['sort'] })}>
+                    <option value="updated">Recently edited</option>
+                    <option value="oldest">Oldest edited</option>
+                    <option value="created">Recently created</option>
+                    <option value="title">Name A–Z</option>
+                    <option value="title_desc">Name Z–A</option>
+                  </select>
+                </div>
+              </label>
+            </div>
           </div>
           {filtered && <div className="project-filter-summary"><span>{items.length} matching {items.length === 1 ? 'item' : 'items'}</span><button type="button" onClick={() => change({ query: '', type: 'all', relationship: 'all' })}>Clear filters</button></div>}
           {items.length === 0 ? <div className="project-empty"><Layers size={28} /><h3>{filtered ? 'No items match these filters' : 'No items in this project yet'}</h3><p>{filtered ? 'Try another search or clear the filters to see everything.' : 'Create a page, add a saved item, or connect another part of your workspace.'}</p><button type="button" className="project-secondary-button" onClick={() => filtered ? change({ query: '', type: 'all', relationship: 'all' }) : setAdding(true)}>{filtered ? 'Clear search & filters' : 'Add an existing item'}</button></div> : browse.layout === 'list' ? <div className="project-table-scroll"><table className="project-table"><thead><tr><th scope="col">Name & summary</th><th scope="col">Type</th><th scope="col">Relationship</th><th scope="col">Edited</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{visible.map((item) => <tr key={`${item.kind}-${item.id}`}><td><button type="button" className="project-item-title" aria-label={`Open ${item.title}`} onClick={() => open(item)}>{icon(item)}<span><strong>{item.title}{item.is_draft && <small className="project-draft">Draft</small>}</strong><small>{description(item)}</small></span></button><div className="project-item-mobile-meta">{type(item)}{relationships(item)}<span className="project-modified">{directoryDate(item.updated_at)}</span></div></td><td>{type(item)}</td><td>{relationships(item)}</td><td className="project-modified" title={new Date(item.updated_at).toLocaleString()}>{directoryDate(item.updated_at)}</td><td>{actions(item)}</td></tr>)}</tbody></table></div> : <ul className="project-card-grid">{visible.map((item) => <li key={`${item.kind}-${item.id}`}><div className="project-card-top">{icon(item)}{actions(item)}</div><button type="button" className="project-card-title" aria-label={`Open ${item.title}`} onClick={() => open(item)}><strong>{item.title}</strong><span>{description(item)}</span></button><div className="project-card-meta">{type(item)}{item.is_draft && <span className="project-draft">Draft</span>}<span>{directoryDate(item.updated_at)}</span></div>{relationships(item)}</li>)}</ul>}

@@ -164,4 +164,20 @@ describe('Project overview', () => {
     fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
     expect(screen.getByRole('textbox', { name: 'Search project contents' })).toHaveFocus();
   });
+
+  it('groups search and filter controls with aligned label-field pairs', async () => {
+    const { container } = render(<ProjectOverviewView {...props()} />);
+    await screen.findByRole('table');
+    const toolbar = container.querySelector('.project-toolbar');
+    expect(toolbar).toBeInTheDocument();
+    expect(toolbar?.querySelector('.project-toolbar-search')).toBeInTheDocument();
+    const filterGroup = toolbar?.querySelector('.project-toolbar-filters');
+    expect(filterGroup).toBeInTheDocument();
+    const selects = filterGroup?.querySelectorAll('.project-select');
+    expect(selects).toHaveLength(3);
+    expect(selects?.[0].querySelector('span')).toHaveTextContent('Type');
+    expect(selects?.[1].querySelector('span')).toHaveTextContent('Relationship');
+    expect(selects?.[2].querySelector('span')).toHaveTextContent('Sort by');
+    expect(selects?.[0].querySelector('.project-select-field')).toBeInTheDocument();
+  });
 });

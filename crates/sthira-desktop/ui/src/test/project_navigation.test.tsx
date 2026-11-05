@@ -89,4 +89,13 @@ describe('Project overview routing', () => {
     await user.click(screen.getByRole('button', { name: 'Projects' }));
     await waitFor(() => expect(screen.getByTestId('workspace-index-view')).toBeInTheDocument());
   });
+
+  it('handles invalid project query parameters gracefully without crashing (NAV-06)', async () => {
+    vi.mocked(getProjectOverview).mockRejectedValueOnce(new Error('Project not found'));
+    const user = userEvent.setup(); render(<App />);
+    await user.click(await screen.findByRole('button', { name: 'Open project: Knowledge platform' }));
+    expect(await screen.findByRole('heading', { name: 'Project unavailable' })).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t load this project/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
 });

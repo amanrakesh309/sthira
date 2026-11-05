@@ -208,3 +208,132 @@ async fn test_ipc_bridge_all_12_commands_roundtrip() {
     .expect("handle_answer_question failed");
     assert!(!answer.is_empty());
 }
+
+#[tokio::test]
+async fn test_native_persistence_and_restart_recovery() {
+    let tmp = tempdir().unwrap();
+    let db_path = tmp.path().join("restart_test.db");
+    let vault_dir = tmp.path().join("restart_vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+
+    let clock = Arc::new(FakeClock::new(1_700_000_000_000));
+    let model = Arc::new(DeterministicFakeModel::new("test-model"));
+
+    let note_id;
+    let proj_id;
+    let canvas_id;
+    let tracker_id;
+
+    // Session 1: Create entities in first Engine instance
+    {
+        let engine1 = Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap();
+        let proj = engine1.create_project("Restart Verification Project", None).unwrap();
+        proj_id = proj.id;
+        engine1.set_project_purpose(&proj_id, "Verify that native SQLite & disk recovery survives engine restart").unwrap();
+
+        let note = engine1.create_artifact(
+            sthira_core::ArtifactType::Note,
+            sthira_core::Authorship::User,
+            Some("Persistent Architecture Note"),
+            "# Persistent Architecture Note\n\nThis content was created in Session 1.",
+            None,
+        ).unwrap();
+        note_id = note.id;
+
+        engine1.attach_artifact(&proj_id, &note_id, "user_explicit", None).unwrap();
+
+        let canvas = engine1.create_canvas(Some(&proj_id), "Architecture Map").unwrap();
+        canvas_id = canvas;
+
+        engine1.add_canvas_item(
+            &canvas_id,
+            "item-1",
+            sthira_core::CanvasItemKind::Artifact,
+            Some(&note_id),
+            120.0,
+            240.0,
+            Some(280.0),
+            Some(140.0),
+            1,
+        ).unwrap();
+
+        engine1.move_canvas_item(&canvas_id, "item-1", 150.0, 300.0).unwrap();
+
+        // Add a scheduled topic / tracker
+        tracker_id = sthira_desktop::handle_create_scheduled_topic(
+            &engine1,
+            sthira_desktop::CreateScheduledTopicInput {
+                title: "Daily Storage Benchmark".into(),
+                prompt_query: "Track disk throughput across write loads".into(),
+                topic_type: "research".into(),
+                project_id: Some(proj_id.clone()),
+                cadence: Some("daily".into()),
+                model_id: None,
+                search_provider_id: None,
+                schedule_time: Some("09:00".into()),
+                schedule_weekday: None,
+            },
+        ).unwrap();
+
+        // engine1 is dropped here when exiting scope, simulating engine shutdown
+    }
+
+    // Session 2: Open a completely fresh Engine instance pointing at the exact same db and vault
+    {
+        let engine2 = Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap();
+
+        // 1. Verify project survived
+        let recovered_proj = engine2.get_project(&proj_id).unwrap();
+        assert_eq!(recovered_proj.name, "Restart Verification Project");
+
+        // 2. Verify note survived in SQLite
+        let recovered_note = engine2.get_artifact(&note_id).unwrap();
+        assert_eq!(recovered_note.title.as_deref(), Some("Persistent Architecture Note"));
+        assert!(recovered_note.content_md.contains("This content was created in Session 1."));
+
+        // 3. Verify raw Markdown file exists on physical disk in vault_dir
+        let mut raw_found = false;
+        if let Ok(entries) = std::fs::read_dir(&vault_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().is_some_and(|e| e == "md") {
+                    if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+                        if raw.contains("This content was created in Session 1.") {
+                            raw_found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(raw_found, "Raw Markdown file must be physically preserved on disk in vault");
+
+        // 4. Verify exact recovered geometry of canvas item (x, y, w, h, z)
+        let canvas_res = sthira_desktop::handle_canvas_ops(
+            &engine2,
+            sthira_desktop::CanvasOpsRequest::GetCanvas {
+                canvas_id: Some(canvas_id.clone()),
+                project_id: None,
+            },
+        ).unwrap();
+        let canvas_view = canvas_res.canvas.expect("Canvas must exist after restart");
+        let item = canvas_view.items.iter().find(|i| i.item_id == "item-1").expect("item-1 must survive");
+        assert_eq!(item.x, 150.0);
+        assert_eq!(item.y, 300.0);
+        assert_eq!(item.w, Some(280.0));
+        assert_eq!(item.h, Some(140.0));
+        assert_eq!(item.z, 1);
+
+        // 5. Verify scheduled tracker survived across restart
+        let topics = sthira_desktop::handle_list_scheduled_topics(&engine2, None).unwrap();
+        let topic = topics.iter().find(|t| t.id == tracker_id).expect("Scheduled tracker must survive");
+        assert_eq!(topic.title, "Daily Storage Benchmark");
+        assert_eq!(topic.cadence, "daily");
+        assert!(topic.is_active);
+
+        // 6. Verify project membership and purpose survived across restart
+        let overview = sthira_desktop::handle_get_project_overview(&engine2, proj_id.clone()).unwrap();
+        assert_eq!(overview.project.purpose, "Verify that native SQLite & disk recovery survives engine restart");
+        assert!(overview.items.iter().any(|item| item.id == note_id && item.roles.contains(&"member".to_string())));
+        assert!(overview.items.iter().any(|item| item.id == canvas_id && item.kind == "canvas"));
+    }
+}

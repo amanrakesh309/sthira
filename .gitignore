@@ -110,3 +110,9 @@ scratch/
 tmp/
 *.tmp
 .agent_state/
+
+# Generated verification evidence stays temporary; approved design references stay tracked.
+/tmp/verification/
+/docs/design/visual-audit/
+/gate_reports/
+/fixtures/qa_vault/

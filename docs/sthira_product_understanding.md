@@ -3,6 +3,8 @@
 **Status:** Canonical product understanding, experience specification & architecture manual  
 **Last updated:** November 2026
 
+Permanent requirements and source precedence are maintained in [policies](policies/README.md). This architecture manual provides context; historical implementation claims are not current verification evidence. See [known limitations](known-limitations.md) for outstanding execution gaps.
+
 This document captures the product vision, experience decisions, and epistemic invariants for **Sthira**. It serves as the canonical source of truth for product behavior, guiding principles, and resolved experience mechanics.
 
 ---
@@ -171,7 +173,7 @@ Users can start anywhere (spontaneous thought, URL paste, quick question) or sta
 Typing into the Universal Input and submitting without selecting an explicit mode triggers frictionless capture:
 - Immediately saves a durable user-authored note (`authorship = 'user'`).
 - Triggers background epistemic extraction.
-- Checks active project goals and links the note automatically if strong alignment is detected.
+- May propose project associations when alignment is detected; membership changes require an explicit user action or accepted proposal. Capture does not silently impose structure.
 - Never interrupts the user with modal dialogs or configuration screens.
 
 ### 6.2 Mode Steering (`Capture`, `Research`, `Plan`, `Act`)
@@ -207,7 +209,7 @@ A structured navigation aid into the project's preserved knowledge base:
 - **Open Questions** ranked by relevance to recent work.
 
 ### 7.3 Persistent Working Memory & Deterministic Cache Invalidation
-To ensure returning to work feels instantaneous ($<5\text{ms}$ on cold return):
+To make returning to work feel immediate (cached core-read performance is a measured target, not a universal GUI latency guarantee):
 - Pre-computed **Level 1 Briefs**, **Level 2 Reviews**, and **Global Working Context** are stored in `derived_briefs`, keyed by a cryptographic **`basis_fingerprint`** (computed from the sorted hashes of all attached artifacts, epistemic nodes, and active project purposes).
 - **Zero Stale Flag Bugs:** Sthira never relies on a manual `is_stale` boolean. Whenever a note is edited (in-app or on disk), a decision is updated, or a proposal is accepted, the `basis_fingerprint` changes automatically, invalidating the cached brief by construction.
 - **Isolated Read-Only Memory Mirrors:** Sthira exports Markdown snapshots to `.sthira_meta/memory_mirrors/` (outside the watched `artifacts/` vault and stamped with `<!-- STHIRA_DERIVED_MEMORY: DO_NOT_INGEST -->`) so external tools or models can inspect current project memory with zero risk of Sthira re-ingesting its own AI summary as a user note.
@@ -251,9 +253,9 @@ Enables structured knowledge entities alongside freeform Markdown:
 - **Top-Right Mode Toggle:** Users can switch at any time between `[ 🎛️ Interactive Widgets ]` and `[ 📄 Plain Markdown ]`.
 - **Zero-Stub Production Invariant:** The core runtime and UI strictly invoke the active selected model provider (`OllamaProvider`, `OpenAiCompatibleProvider`) for real inference streaming. Hardcoded static template stubs are permanently eliminated from live runtime paths.
 
-### 8.9 Full-Height Canvas Workspace & Collapsed Epistemic Margin (`FocusView`)
+### 8.9 Full-Height Document Workspace & On-Demand Evidence (`FocusView`)
 - **Full-Viewport Canvas:** Focus View expands to the full viewport height (`flex-1 h-full overflow-y-auto bg-[#FAF8F3]`) with a generous responsive document sheet (`max-w-4xl lg:max-w-5xl mx-auto px-12 py-10 min-h-full bg-white border-x border-[#E8E5DC]`), eliminating cramped "postage-stamp" floating cards.
-- **Collapsed Epistemic Margin by Default:** Extracted claims, verified quotes, and epistemic badges are docked in a dedicated right sidebar (`w-80 border-l border-[#E8E5DC] bg-[#FAF9F6]`). The margin is collapsed by default (`showMargin: false`) to give users maximum writing canvas, and smoothly opens on demand with the `[ 📖 Margin ]` toolbar button.
+- **On-Demand Evidence:** Extracted claims, verified quotes, and epistemic badges open through Page actions → Sources & insights. The note header has History, Connections, and save status. Theme and Spatial canvas remain in sidebar/settings navigation as defined by policy; there is no Margin header button.
 
 ### 8.10 Notion-Style Slash Command Menu (`/`) & Component-Decorated Rich Workspace
 - **Caret-Positioned `/` Menu:** Typing `/` at the beginning of a line or after whitespace opens an interactive popover with keyboard navigation (Arrow Up/Down, Enter, Escape):

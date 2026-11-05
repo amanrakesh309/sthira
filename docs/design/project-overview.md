@@ -16,4 +16,4 @@ New page explicitly creates and opens a project member. Add existing attaches a 
 
 The layout follows the Warm Stone + Forest Sage system. The sidebar project overflow menu retains New page, Pin, Duplicate, Rename, and Delete. Reserving its action space prevents controls from shifting the project label on hover.
 
-See [validation](visual-audit/project-overview-validation.md) for tests, screenshots, and verification limits.
+See the permanent [design policy](../policies/design.md) and [verification policy](../policies/verification.md) for alignment rules and required checks. Current unverified work is tracked in [known limitations](../known-limitations.md).
