@@ -1,0 +1,9 @@
+# Internal references
+
+Saved research citations are navigable within Sthira. Both `sthira://artifact/<id>` / `sthira://project/<id>` and existing `#/sthira/...` destinations resolve stable workspace identities. Normal Markdown links, raw internal URLs and the older `Title – ` + code-wrapped URL style are supported. The older list displays the source title as a link instead of a technical URI. Other inline code and fenced examples remain literal.
+
+The editor uses a display node that retains each legacy reference's original Markdown. Opening a note does not invoke onChange or migrate its contents; surrounding edits serialize the original reference syntax. Read-only previews perform the corresponding display-only Markdown transformation. Internal links open the existing Connections reference preview and nested reading trail. Open full page uses the established source-save guard, preserving the originating draft if saving fails. Malformed paths/unsupported schemes do not become internal navigation, and pasted HTML cannot bypass validation through reference attributes.
+
+Workspace search and connection-target search accept a copied internal URL, its code/angle-wrapped representation, or an exact UUID. The backend resolves the entity directly rather than searching for that string in a report's body. Source renames therefore retain navigation and return the current saved title. Missing/deleted artifacts yield no match. Project/artifact kinds remain distinct, and a shared artifact produces one exact URI result. Search drops late results from superseded queries.
+
+New local research sources and evidence attribution use escaped, named Markdown links. Existing citation records remain readable without bulk changes to the vault. Citation navigation/search does not add manual reference edges, membership, or AI proposals. OS protocol registration and opening Sthira links from other applications are outside this change.

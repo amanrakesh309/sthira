@@ -188,7 +188,36 @@ async fn test_ipc_bridge_all_12_commands_roundtrip() {
         .expect("handle_revert_change_set failed");
     assert!(!revert_cs_id.is_empty());
 
-    // 13. cmd_synthesize_and_create_research
+    // 13. Native synthesis uses a deterministic localhost HTTP fixture, never the
+    // owner's Ollama endpoint seeded into the provider catalog.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let n = socket.read(&mut buffer).await.unwrap();
+            request.extend_from_slice(&buffer[..n]);
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                let length: usize = headers.lines().find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|value| value.trim().parse().unwrap())).unwrap_or(0);
+                if request.len() >= end + 4 + length { break; }
+            }
+            if n == 0 { break; }
+        }
+        let content = serde_json::json!({"title":"Research fixture", "purpose":"Evaluate saved research", "document_title":"Research document", "sections":[{"heading":"Findings", "content":"Synthetic model response for IPC testing."}], "hypotheses":[], "open_questions":[]}).to_string();
+        let body = serde_json::json!({"choices":[{"message":{"content":content}}]}).to_string();
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    });
+    {
+        let writer = engine.db().writer();
+        writer.execute_batch("UPDATE provider_models SET is_default=0;").unwrap();
+        writer.execute("INSERT INTO providers(id,display_name,provider_type,base_url,is_enabled,created_at) VALUES('ipc-fixture','IPC fixture','openai_compatible',?1,1,0)",[format!("http://{address}/v1")]).unwrap();
+        writer.execute_batch("INSERT INTO provider_models(id,provider_id,model_identifier,display_name,is_enabled,is_default,created_at) VALUES('ipc-model','ipc-fixture','test','Test model',1,1,0);").unwrap();
+    }
+    sthira_desktop::workflow_settings::save_workflow_setting(&engine, "research", sthira_desktop::workflow_settings::WorkflowSetting { enabled: true, ..Default::default() }).unwrap();
     let res_proj = handle_synthesize_and_create_research(
         &engine,
         "Local specialized model for Kotlin and Java".to_string(),
@@ -196,6 +225,7 @@ async fn test_ipc_bridge_all_12_commands_roundtrip() {
     )
     .await
     .expect("handle_synthesize_and_create_research failed");
+    server.await.unwrap();
     assert!(!res_proj.project_id.is_empty());
     assert!(!res_proj.artifact_id.is_empty());
 

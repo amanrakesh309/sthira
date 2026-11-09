@@ -139,6 +139,14 @@ describe('All Files Fidelity and Interaction Tests', () => {
     });
   });
 
+  it('opens the Notes category directly with only standalone notes visible', async () => {
+    render(<WorkspaceIndexView initialTab="notes" initialNoteScope="standalone" onOpenProject={vi.fn()} onOpenArtifact={vi.fn()} />);
+    expect(await screen.findByText('Quick Capture Thoughts')).toBeInTheDocument();
+    expect(screen.queryByText('Thermal Shielding Analysis')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tab-notes')).toHaveAttribute('aria-selected','true');
+    expect(screen.getByTestId('note-scope-standalone')).toHaveAttribute('aria-pressed','true');
+  });
+
   it('renders directory header, search bar, and category tabs with authentic counts', async () => {
     render(
       <WorkspaceIndexView
@@ -156,7 +164,7 @@ describe('All Files Fidelity and Interaction Tests', () => {
     expect(screen.getByTestId('tab-all')).toHaveTextContent('5');
     expect(screen.getByTestId('tab-projects')).toHaveTextContent(/Projects/);
     expect(screen.getByTestId('tab-projects')).toHaveTextContent('2');
-    expect(screen.getByTestId('tab-notes')).toHaveTextContent(/Notes & Pages/);
+    expect(screen.getByTestId('tab-notes')).toHaveTextContent(/Pages/);
     expect(screen.getByTestId('tab-notes')).toHaveTextContent('2');
     expect(screen.getByTestId('tab-objects')).toHaveTextContent(/Custom Objects/);
     expect(screen.getByTestId('tab-objects')).toHaveTextContent('1');
@@ -242,6 +250,7 @@ describe('All Files Fidelity and Interaction Tests', () => {
     );
 
     const searchInput = await screen.findByTestId('search-input');
+    await screen.findByTestId('index-item-proj-1');
     fireEvent.change(searchInput, { target: { value: 'Thermal' } });
 
     await waitFor(() => expect(screen.queryByTestId('index-item-proj-1')).not.toBeInTheDocument());

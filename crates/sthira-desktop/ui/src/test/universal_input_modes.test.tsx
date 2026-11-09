@@ -8,7 +8,14 @@ import { App } from '../App';
 // Mock Tauri invoke
 const mockInvoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+  invoke: (...args: unknown[]) => {
+    if (args[0] === 'cmd_stream_adaptive_run') {
+      const channel = (args[1] as { onChunk: { onmessage: (message: unknown) => void } }).onChunk;
+      channel.onmessage({ type: 'text_token', payload: '# Mock model response\n\nA response supplied explicitly by this test.' });
+      channel.onmessage({ type: 'complete', payload: {total_tokens:12,duration_ms:1,basis_fingerprint:'test'} });
+    }
+    return mockInvoke(...args);
+  },
   // `streamAdaptiveRun` constructs a Tauri Channel to receive progressive chunks.
   Channel: class {
     onmessage: ((message: unknown) => void) | null = null;
@@ -64,7 +71,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
       />
     );
 
-    const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
     await user.type(input, 'My First Quick Capture');
     await user.keyboard('{Enter}');
 
@@ -75,6 +82,27 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
     expect(onRefresh).toHaveBeenCalled();
   });
 
+  it('preserves multiline Unicode capture and only submits on Enter without Shift', async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'cmd_get_provider_catalog') return [];
+      if (cmd === 'cmd_create_page') return { id: 'multiline-capture' };
+      return {};
+    });
+    render(<UniversalInputBar />);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
+    await user.type(input, 'First thought');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    await user.type(input, 'नमस्ते — second thought');
+    expect(input).toHaveValue('First thought\nनमस्ते — second thought');
+    expect(mockInvoke).not.toHaveBeenCalledWith('cmd_create_page', expect.anything());
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('cmd_save_artifact',
+      expect.objectContaining({ artifactId: 'multiline-capture',
+        contentMd: '# First thought\n\nFirst thought\nनमस्ते — second thought' })));
+    expect(input).toHaveValue('');
+  });
+
   it('Research mode: typing inquiry and pressing Enter creates research note and opens note (no project created)', async () => {
     const user = userEvent.setup();
     const onOpenArtifact = vi.fn();
@@ -82,7 +110,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
 
     mockInvoke.mockImplementation(async (cmd: string, args: any) => {
       if (cmd === 'cmd_get_provider_catalog') {
-        return [];
+        return [{ id: 'qa-provider', is_enabled: true, models: [{ id: 'qa-model', display_name: 'QA model', model_identifier: 'qa', is_enabled: true, is_default: true }] }];
       }
       if (cmd === 'cmd_create_page') {
         return {
@@ -119,7 +147,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
     const researchBtn = screen.getByTestId('mode-btn-research');
     await user.click(researchBtn);
 
-    const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
     await user.type(input, 'How does local KV cache quantization work?');
     await user.keyboard('{Enter}');
 
@@ -154,7 +182,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
 
     mockInvoke.mockImplementation(async (cmd: string, args: any) => {
       if (cmd === 'cmd_get_provider_catalog') {
-        return [];
+        return [{ id: 'qa-provider', is_enabled: true, models: [{ id: 'qa-model', display_name: 'QA model', model_identifier: 'qa', is_enabled: true, is_default: true }] }];
       }
       if (cmd === 'cmd_create_page') {
         return {
@@ -190,7 +218,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
     const planBtn = screen.getByTestId('mode-btn-plan');
     await user.click(planBtn);
 
-    const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
     await user.type(input, 'Design distributed cache system');
     await user.keyboard('{Enter}');
 
@@ -225,7 +253,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
 
     mockInvoke.mockImplementation(async (cmd: string, args: any) => {
       if (cmd === 'cmd_get_provider_catalog') {
-        return [];
+        return [{ id: 'qa-provider', is_enabled: true, models: [{ id: 'qa-model', display_name: 'QA model', model_identifier: 'qa', is_enabled: true, is_default: true }] }];
       }
       if (cmd === 'cmd_create_page') {
         return {
@@ -261,7 +289,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
     const actBtn = screen.getByTestId('mode-btn-act');
     await user.click(actBtn);
 
-    const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
     await user.type(input, 'Refactor database migrations');
     await user.keyboard('{Enter}');
 
@@ -364,7 +392,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
       expect(screen.getByText(/Make room to think/i)).toBeInTheDocument();
     });
 
-    const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+    const input = screen.getByRole('textbox', { name: 'Your thought or question' });
     await user.type(input, 'Quick thought on architecture');
     await user.keyboard('{Enter}');
 
@@ -378,7 +406,7 @@ describe('Universal Input Bar Actions: Capture, Research, Plan, Act', () => {
     expect(editorMarkdown(editor)).toContain('Quick thought on architecture');
 
     // Breadcrumb should display "Notes", NOT "Project Workspace"
-    expect(screen.getByText('Notes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pages' })).toBeInTheDocument();
 
     // Verify project creation was NEVER invoked
     expect(mockInvoke).not.toHaveBeenCalledWith('cmd_create_project', expect.anything());

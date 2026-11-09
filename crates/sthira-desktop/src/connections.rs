@@ -88,7 +88,28 @@ pub fn handle_get_workspace_entity(engine: &Engine, entity: EntityRef) -> Result
     Ok(detail)
 }
 
+
+pub fn reference_from_query(query: &str) -> Option<EntityRef> {
+    let reference = sthira_core::references::parse_workspace_reference(query)?;
+    Some(EntityRef { kind: if reference.kind == "project" { EntityKind::Project } else { EntityKind::Artifact }, id: reference.id })
+}
+
+pub fn lookup_reference_query(engine: &Engine, query: &str) -> Option<Vec<WorkspaceEntity>> {
+    let reader = engine.db().reader().ok()?;
+    if let Some(reference) = reference_from_query(query) {
+        return Some(resolve(&reader, &reference).into_iter().collect());
+    }
+    let id = query.trim();
+    if uuid::Uuid::parse_str(id).is_ok() {
+        let matches: Vec<_> = [EntityKind::Artifact, EntityKind::Project].into_iter()
+            .filter_map(|kind| resolve(&reader, &EntityRef { kind, id: id.into() }).ok()).collect();
+        return Some(matches);
+    }
+    None
+}
+
 pub fn handle_search_connection_targets(engine: &Engine, query: String) -> Result<Vec<WorkspaceEntity>, String> {
+    if let Some(matches) = lookup_reference_query(engine, &query) { return Ok(matches); }
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
     let mut stmt = reader.prepare(
         "SELECT kind, id FROM (

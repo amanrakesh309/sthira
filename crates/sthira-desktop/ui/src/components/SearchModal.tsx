@@ -57,19 +57,24 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
+    let cancelled = false;
+    setResults([]); setSelectedIndex(-1);
+    setIsSearching(!!query.trim());
     const timer = setTimeout(async () => {
       if (query.trim()) {
         setIsSearching(true);
         try {
           const res = await searchAll(query);
+          if(cancelled)return;
           setResults(res);
           setSelectedIndex(res.length > 0 ? 0 : -1);
         } catch (err) {
+          if(cancelled)return;
           console.error('Search failed', err);
           setResults([]);
           setSelectedIndex(-1);
         } finally {
-          setIsSearching(false);
+          if(!cancelled)setIsSearching(false);
         }
       } else {
         setResults([]);
@@ -77,7 +82,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
       }
     }, 150);
 
-    return () => clearTimeout(timer);
+    return () => { cancelled=true; clearTimeout(timer); };
   }, [query, isOpen]);
 
   const handleKeyDown = useCallback(

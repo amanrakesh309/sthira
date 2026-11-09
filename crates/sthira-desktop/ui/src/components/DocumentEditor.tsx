@@ -10,7 +10,9 @@ import TaskItem from '@tiptap/extension-task-item';
 import Image from '@tiptap/extension-image';
 import Blockquote from '@tiptap/extension-blockquote';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
+import { InternalReference } from '../editor/internalReferences';
 import { parseEntityHref } from '../api/connections';
+import { plainPageMarkdown } from '../editor/plainPageMarkdown';
 import type { EntityRef, ObjectType } from '../types/sthira';
 import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 
@@ -82,19 +84,19 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
   const notifySlash = (editor: Editor) => {
     const { $from, from, empty } = editor.state.selection;
     const match = empty && !$from.parent.type.spec.code && $from.parent.textBetween(0, $from.parentOffset).match(/(?:^|\s)\/([\w-]*)$/);
-    const sheet = editor.view.dom.closest('.focus-document-sheet')?.getBoundingClientRect();
+    const body = editor.view.dom.closest('.focus-editor-body')?.getBoundingClientRect();
     let position = { top: 120, left: 24 };
-    if (match && sheet) {
+    if (match && body) {
       const caret = editor.view.coordsAtPos(from);
-      position = { top: caret.bottom - sheet.top + 8, left: Math.max(16, caret.left - sheet.left) };
+      position = { top: caret.bottom - body.top + 8, left: Math.max(0, caret.left - body.left) };
     }
     latest.current.onSlash(match ? match[1] : null, position);
   };
   const editor = useEditor({
     immediatelyRender: true,
     extensions: [
-      StarterKit.configure({ codeBlock: false, blockquote: false, link: { openOnClick: false }, trailingNode: false }),
-      Markdown, TableKit, TaskList, TaskItem.configure({ nested: true }), Image, RawHtml, RawInlineHtml,
+      StarterKit.configure({ codeBlock: false, blockquote: false, link: { openOnClick: false, protocols: ['sthira'] }, trailingNode: false }),
+      Markdown, InternalReference, TableKit, TaskList, TaskItem.configure({ nested: true }), Image, RawHtml, RawInlineHtml,
       Blockquote.extend({
         addNodeView() {
           return ReactNodeViewRenderer(({ node }: NodeViewProps) => <NodeViewWrapper as="blockquote">
@@ -118,13 +120,15 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
                 <RichDocumentRenderer content={`\`\`\`${language}\n${node.textContent}\n\`\`\``} objectTypes={latest.current.objectTypes} onUpdateObject={updateObject} onOpenEntity={latest.current.onOpenEntity} />
               </NodeViewWrapper>;
             }
-            return <NodeViewWrapper as="pre"><NodeViewContent<'code'> as="code" /></NodeViewWrapper>;
+            return <NodeViewWrapper>
+              <pre><NodeViewContent<'code'> as="code" /></pre>
+            </NodeViewWrapper>;
           };
           return ReactNodeViewRenderer(CodeView);
         },
       }),
     ],
-    content: splitTitle(props.content), contentType: 'markdown',
+    content: splitTitle(plainPageMarkdown(props.content)), contentType: 'markdown',
     editable: !props.disabled,
     editorProps: {
       attributes: { role: 'textbox', 'aria-label': 'Document content', 'aria-multiline': 'true', 'data-testid': 'document-editor', class: 'focus-prose document-rich-editor' },
@@ -133,20 +137,27 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
         const markdown = event.clipboardData.getData('text/markdown');
         const plain = markdown || event.clipboardData.getData('text/plain');
         if (!markdown && event.clipboardData.getData('text/html')) return false;
-        if (!markdown && !/^(?:#{1,6} |[-*+] |\d+\. |> |```|~~~|\|.+\|)/m.test(plain) && !/\[[^\]]+\]\([^)]+\)/.test(plain)) return false;
+        if (!markdown && !plain.includes('sthira://') && !/^(?:#{1,6} |[-*+] |\d+\. |> |```|~~~|\|.+\|)/m.test(plain) && !/\[[^\]]+\]\([^)]+\)/.test(plain)) return false;
         event.preventDefault();
-        editor?.commands.insertContent(plain, { contentType: 'markdown' });
+        editor?.commands.insertContent(plainPageMarkdown(plain), { contentType: 'markdown' });
         return true;
       },
-      handleClick: (_view, _pos, event) => {
+      handleDOMEvents: { click: (_view, event) => {
         const link = (event.target as HTMLElement).closest('a');
         const entity = parseEntityHref(link?.getAttribute('href') || undefined);
         if (entity) { event.preventDefault(); latest.current.onOpenEntity(entity); return true; }
         const href = link?.getAttribute('href');
+        if(href?.startsWith('sthira:')){event.preventDefault();return true;}
         if (href && /^(https?:|mailto:)/i.test(href)) { event.preventDefault(); window.open(href, '_blank', 'noopener,noreferrer'); return true; }
         return false;
-      },
+      } },
       handleKeyDown: (view, event) => {
+        if (event.isComposing) return false;
+        if(['Enter',' '].includes(event.key)) {
+          const anchor=(event.target as HTMLElement).closest('a[data-workspace-reference]');
+          const entity=parseEntityHref(anchor?.getAttribute('href')||undefined);
+          if(entity){event.preventDefault();latest.current.onOpenEntity(entity);return true;}
+        }
         // The slash popover owns these keys while it is open.
         const { $from, empty } = view.state.selection;
         const slash = empty && !$from.parent.type.spec.code && /(?:^|\s)\/[\w-]*$/.test($from.parent.textBetween(0, $from.parentOffset));
@@ -167,7 +178,7 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
   useEffect(() => {
     if (!editor || props.content === emitted.current) return;
     emitted.current = props.content;
-    editor.commands.setContent(splitTitle(props.content), { contentType: 'markdown', emitUpdate: false });
+    editor.commands.setContent(splitTitle(plainPageMarkdown(props.content)), { contentType: 'markdown', emitUpdate: false });
   }, [editor, props.content, props.title]);
   useEffect(() => { editor?.setEditable(!props.disabled, false); }, [editor, props.disabled]);
 
@@ -176,7 +187,7 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
     insertMarkdown: (markdown, replaceSlash = false) => {
       if (!editor) return;
       if (replaceSlash) removeSlash(editor);
-      editor.chain().focus().insertContent(markdown, { contentType: 'markdown' }).run();
+      editor.chain().focus().insertContent(plainPageMarkdown(markdown), { contentType: 'markdown' }).run();
     },
     insertLink: (label, href) => {
       editor?.chain().focus().insertContent({ type: 'text', text: label, marks: [{ type: 'link', attrs: { href } }] }).run();
@@ -189,7 +200,7 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
       return { replace: (markdown) => {
         if (editor.isDestroyed) return;
         const oldSize = editor.state.doc.content.size;
-        editor.commands.insertContentAt({ from, to }, markdown, { contentType: 'markdown', updateSelection: false });
+        editor.commands.insertContentAt({ from, to }, plainPageMarkdown(markdown), { contentType: 'markdown', updateSelection: false });
         to += editor.state.doc.content.size - oldSize;
       } };
     },
@@ -204,7 +215,13 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
         case 'todo': chain.toggleTaskList().run(); break;
         case 'code': chain.toggleCodeBlock().run(); break;
         case 'table': chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
-        case 'slash': chain.insertContent('/').run(); break;
+        case 'slash': {
+          if (editor.state.selection.$from.parent.type.spec.code) editor.chain().focus().exitCode().run();
+          const { $from } = editor.state.selection;
+          const before = $from.parent.textBetween(0, $from.parentOffset);
+          editor.chain().focus().insertContent(before && !/\s$/.test(before) ? ' /' : '/').run();
+          break;
+        }
       }
     },
   }), [editor]);

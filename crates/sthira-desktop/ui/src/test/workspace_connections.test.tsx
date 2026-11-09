@@ -1,3 +1,4 @@
+vi.mock('../api/conversation', () => ({ getDocumentConversation: vi.fn().mockResolvedValue({mode:'document', initial_prompt:'', turns:[]}), undoDocumentEdit: vi.fn() }));
 import { richEditor, editorMarkdown, setEditorMarkdown } from './editor-helpers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -113,6 +114,15 @@ describe('Workspace connections', () => {
     await user.click(screen.getByRole('button', { name: 'Close connections' }));
     expect(screen.getByRole('button', { name: 'Connections' })).toHaveFocus();
     expect(editorMarkdown(editor)).toBe('Unsaved text stays here');
+  });
+
+  it('previews a legacy generated citation without saving the source or creating a connection', async () => {
+    const original = (await ipc.getArtifactContext('a')).artifact;
+    vi.mocked(ipc.getArtifactContext).mockResolvedValue({artifact:{...original,content_md:'# Working notes\n\n## References\n\n1. A decision – `sthira://artifact/b`'},epistemic_nodes:[],pending_proposals:[],project_id:null,is_unfinished_draft:false});
+    const user=userEvent.setup();render(<FocusView artifactId="a" onBack={vi.fn()} onOpenCanvas={vi.fn()}/>);
+    await user.click(await screen.findByRole('link',{name:'A decision'}));
+    expect(await screen.findByText('Saved content for b')).toBeInTheDocument();
+    expect(ipc.saveArtifact).not.toHaveBeenCalled();expect(connections.createWorkspaceConnection).not.toHaveBeenCalled();
   });
 
   it('opens stable inline entity links locally while leaving ordinary web links intact', async () => {

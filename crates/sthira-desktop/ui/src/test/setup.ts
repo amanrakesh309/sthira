@@ -1,4 +1,14 @@
 import '@testing-library/jest-dom/vitest';
+import { vi, beforeEach } from 'vitest';
+beforeEach(() => { localStorage.removeItem('sthira.tabs.v1:preview'); });
+
+// Existing interaction suites represent an explicitly configured workspace.
+// Workflow settings/gating suites unmock this hook and test the fresh/off state,
+// persistence, updates and failures through the real hook and API boundary.
+vi.mock('../hooks/useWorkflowSettings', () => {
+  const settings = Object.fromEntries(['research', 'plan', 'draft', 'chat', 'resume'].map(id => [id, { enabled: true, model_id: null, templates_enabled: true }]));
+  return { useWorkflowSettings: () => ({ settings, loading: false, error: null, retry: vi.fn() }) };
+});
 
 // ProseMirror measures selections; jsdom supplies no layout geometry.
 const testRect = () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) }) as DOMRect;

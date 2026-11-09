@@ -228,3 +228,134 @@
 
 .document-rich-editor :is(td, th) p { margin: 0; }
 .document-rich-editor blockquote button { padding-inline: 12px; border-radius: 20px; font-size: 12px; }
+
+/* Document conversation shares the auxiliary rail; the editor remains the main column. */
+.focus-workspace[data-chat-open="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr) 360px; }
+.document-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--sthira-surface); border-left: 1px solid var(--sthira-border); color: var(--sthira-text); }
+.document-chat[hidden] { display: none; }
+.document-chat-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--sthira-border); }
+.document-chat-header > div { display: flex; align-items: center; gap: 8px; }
+.document-chat-header h2 { font-size: 14px; font-weight: 600; }
+.document-chat-context { padding: 12px 16px; color: var(--sthira-text-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.document-chat-messages, .document-chat-review { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.document-chat-empty { padding: 24px 0; color: var(--sthira-text-muted); }
+.document-chat-empty h3 { font: 500 24px/1.3 var(--sthira-font-editorial); color: var(--sthira-text); margin-bottom: 8px; }
+.document-chat-goal { font-size: 12px; color: var(--sthira-text-muted); margin-bottom: 20px; }
+.document-chat-goal summary { cursor: pointer; min-height: 40px; }
+.document-chat-turn { margin-bottom: 24px; }
+.document-chat-turn p { white-space: pre-wrap; margin: 8px 0; }
+.document-chat-turn span:first-child { font-size: 12px; color: var(--sthira-text-muted); font-weight: 600; }
+.document-chat-user { background: var(--sthira-surface-muted); border-radius: var(--sthira-radius-md); padding: 12px; margin-bottom: 16px; }
+.document-chat-assistant { padding-inline: 4px; }
+.document-chat-assistant pre, .document-chat-review pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sthira-canvas); padding: 12px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-sm); font: 12px/1.7 var(--sthira-font-mono); }
+.document-chat-assistant a { color: var(--sthira-primary); text-decoration: underline; }
+.document-chat-review h3 { font-weight: 600; margin: 20px 0 8px; }
+.document-chat-review-button, .document-chat-text-button, .document-chat-review-actions button { min-height: 40px; padding: 8px 12px; display: inline-flex; align-items: center; gap: 4px; border-radius: var(--sthira-radius-sm); }
+.document-chat-review-button { margin-top: 8px; background: var(--sthira-primary-tint); color: var(--sthira-primary); border: 1px solid var(--sthira-border-strong); }
+.document-chat-text-button { color: var(--sthira-text-muted); padding-left: 0; font-size: 12px; }
+.document-chat-decision { font-size: 12px; color: var(--sthira-text-muted); }
+.document-chat-compose, .document-chat-review-actions { border-top: 1px solid var(--sthira-border); padding: 16px; }
+.document-chat-compose textarea { display: block; width: 100%; resize: none; background: var(--sthira-canvas); border: 1px solid var(--sthira-border-strong); padding: 12px; border-radius: var(--sthira-radius-md); font-size: 14px; margin-block: 12px; }
+.document-chat-compose > div, .document-chat-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.document-chat-compose > div > span { font-size: 12px; color: var(--sthira-text-muted); }
+.document-chat-compose button { min-height: 40px; min-width: 40px; padding: 8px; border-radius: var(--sthira-radius-sm); }
+.document-chat-edit-option { display: flex; align-items: center; gap: 8px; font-size: 12px; min-height: 32px; }
+.document-chat input { accent-color: var(--sthira-primary); }
+.document-chat button:disabled { opacity: .5; cursor: not-allowed; }
+.document-chat-error { color: var(--sthira-danger); padding: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.document-chat-error button { display: block; min-height: 40px; text-decoration: underline; }
+.document-chat-pending { display: flex; align-items: center; gap: 8px; color: var(--sthira-text-muted); }
+@container focus (max-width: 1040px) {
+  .focus-workspace[data-chat-open="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr); }
+  .document-chat { position: absolute; inset: 0 0 0 auto; width: min(400px, 100%); z-index: 35; box-shadow: var(--sthira-shadow-popover); }
+}
+@container focus (max-width: 800px) {
+  .focus-header-action[aria-controls="document-chat"] > span { display: none; }
+}
+.document-chat textarea:focus-visible { outline: 2px solid var(--sthira-focus); outline-offset: 2px; }
+
+.document-edit-review-layer { position: fixed; inset: 0; z-index: 100; background: color-mix(in srgb, var(--sthira-text) 28%, transparent); display: grid; place-items: center; padding: 24px; }
+.document-edit-review-dialog { width: min(1440px, 100%); height: min(940px, 94vh); display: flex; flex-direction: column; min-height: 0; background: var(--sthira-canvas); color: var(--sthira-text); border: 1px solid var(--sthira-border-strong); border-radius: var(--sthira-radius-lg); box-shadow: var(--sthira-shadow-popover); overflow: hidden; }
+.document-edit-review-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--sthira-border); }
+.document-edit-review-dialog > header p { font-size: 12px; color: var(--sthira-text-muted); margin-bottom: 4px; }
+.document-edit-review-dialog h2 { font: 500 28px/1.25 var(--sthira-font-editorial); }
+.document-edit-review-summary { padding: 16px 24px; max-height: 120px; overflow-y: auto; font-size: 14px; line-height: 1.6; border-bottom: 1px solid var(--sthira-border); }
+.document-edit-review-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.document-edit-review-columns > section { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.document-edit-review-columns > section + section { border-left: 1px solid var(--sthira-border); }
+.document-edit-review-columns h3 { font-size: 13px; font-weight: 600; padding: 16px 24px; color: var(--sthira-text-muted); border-bottom: 1px solid var(--sthira-border); }
+.document-edit-review-prose { flex: 1; min-height: 0; overflow: auto; padding: 24px 32px 48px; background: var(--sthira-surface-raised); font: 400 16px/1.75 var(--sthira-font-ui); overflow-wrap: anywhere; }
+.document-edit-review-prose h1 { font: 600 30px/1.3 var(--sthira-font-editorial); margin: 0 0 24px; }
+.document-edit-review-prose h2 { font: 600 24px/1.4 var(--sthira-font-editorial); margin: 24px 0 12px; }
+.document-edit-review-prose h3 { padding: 0; margin: 20px 0 8px; border: 0; color: var(--sthira-text); font-size: 18px; }
+.document-edit-review-prose :is(p,ul,ol,blockquote,pre,table) { margin-block: 12px; }
+.document-edit-review-prose ul { list-style: disc; padding-left: 24px; }
+.document-edit-review-prose ol { list-style: decimal; padding-left: 24px; }
+.document-edit-review-prose blockquote { border-left: 3px solid var(--sthira-border-strong); padding-left: 16px; color: var(--sthira-text-muted); }
+.document-edit-review-prose a { color: var(--sthira-primary); text-decoration: underline; }
+.document-edit-review-prose :not(pre) > code { font: 13px var(--sthira-font-mono); background: var(--sthira-surface-muted); padding: 2px 4px; border-radius: 4px; }
+.document-edit-review-prose pre { padding: 16px; overflow: auto; background: var(--sthira-surface-muted); font: 13px/1.6 var(--sthira-font-mono); border-radius: var(--sthira-radius-sm); }
+.document-edit-review-table { overflow-x: auto; }
+.document-edit-review-prose table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.document-edit-review-prose :is(th,td) { padding: 8px 12px; border: 1px solid var(--sthira-border-strong); text-align: left; }
+.document-edit-review-prose th { background: var(--sthira-surface-muted); }
+.document-edit-review-prose input[type="checkbox"] { margin-right: 8px; }
+.document-edit-review-dialog > footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--sthira-border); }
+.document-edit-review-dialog > footer p { font-size: 12px; color: var(--sthira-text-muted); }
+.document-edit-review-dialog > footer > div { display: flex; gap: 12px; flex-shrink: 0; }
+@media (max-width: 800px) {
+ .document-edit-review-layer { padding: 8px; }
+ .document-edit-review-dialog { height: calc(100dvh - 16px); }
+ .document-edit-review-columns { grid-template-columns: minmax(0, 1fr); overflow-y: auto; display: block; }
+ .document-edit-review-columns > section + section { border-left: 0; border-top: 1px solid var(--sthira-border); }
+ .document-edit-review-prose { overflow: visible; padding: 20px; }
+ .document-edit-review-dialog > footer { flex-wrap: wrap; padding: 12px 16px; }
+ .document-edit-review-dialog > footer > div { margin-left: auto; }
+}
+.document-chat-model-control { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; padding: 0 16px 16px; font-size: 12px; color: var(--sthira-text-muted); }
+.document-chat-model-control select { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid var(--sthira-border-strong); border-radius: var(--sthira-radius-sm); color: var(--sthira-text); background: var(--sthira-surface-raised); text-overflow: ellipsis; }
+.document-chat-model-control > :is(p,span) { grid-column: 1 / -1; line-height: 1.5; }
+.document-chat-model-control button { min-height: 32px; text-decoration: underline; }
+.document-chat-model-control select:disabled { opacity: .6; }
+.document-chat-model-attribution { display: block; overflow-wrap: anywhere; line-height: 1.5; }
+.focus-breadcrumb-link { min-width: 0; min-height: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border-radius: var(--sthira-radius-sm); }
+.focus-breadcrumb-link:hover:not(:disabled) { color: var(--sthira-primary); text-decoration: underline; text-underline-offset: 4px; }
+.sthira-slash-menu { position: fixed; z-index: 70; width: min(320px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; background: var(--sthira-surface); color: var(--sthira-text); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); box-shadow: var(--sthira-shadow-popover); overflow: hidden; font: 400 13px/1.5 var(--sthira-font-ui); }
+.sthira-slash-options { overflow-y: auto; max-height: min(320px, calc(100dvh - 72px)); min-height: 0; }
+.sthira-slash-options button { min-height: 44px; }
+.sthira-slash-options button[data-selected="true"] { background: var(--sthira-primary); color: var(--sthira-on-primary); }
+.sthira-slash-options button[data-selected="true"] .sthira-slash-description { color: inherit; opacity: .85; }
+.sthira-slash-options button[data-selected="true"] svg { color: var(--sthira-on-primary); }
+.sthira-slash-options button[data-selected="false"]:hover { background: var(--sthira-primary-tint); color: var(--sthira-text); }
+.sthira-slash-empty { padding: 12px; color: var(--sthira-text-muted); }
+.sthira-slash-options button:disabled { opacity: .5; cursor: not-allowed; }
+.sthira-slash-setup { flex-shrink: 0; min-height: 44px; padding: 8px 12px; border-top: 1px solid var(--sthira-border); color: var(--sthira-primary); font-size: 12px; text-align: left; }
+
+/* Document tabs preserve working contexts around one active editor. */
+.document-tabs { flex: 0 0 auto; min-width: 0; padding: 8px 16px 0; border-bottom: 1px solid var(--sthira-border); background: var(--sthira-app); }
+.document-tab-list { display: flex; gap: 4px; overflow-x: auto; align-items: stretch; }
+.document-tab { display: flex; align-items: center; flex: 0 0 auto; max-width: 320px; min-width: 140px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--sthira-text-muted); }
+.document-tab.is-active { background: var(--sthira-surface); border-color: var(--sthira-border); color: var(--sthira-text); }
+.document-tab > button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 12px; max-width: 230px; text-align: left; font-size: 13px; flex: 1; }
+.document-tab-actions { display: flex; padding-right: 4px; }
+.document-tab-actions button { display: grid; place-items: center; width: 24px; height: 32px; border-radius: 4px; }
+.document-tab-actions button:hover { background: var(--sthira-surface-muted); }
+.document-tab-actions button:disabled { opacity: .3; }
+.document-tab button:focus-visible { outline: 2px solid var(--sthira-text-muted); outline-offset: -3px; }
+.focus-title-tools { display: flex; gap: 16px; margin: 8px 0 16px; flex-wrap: wrap; }
+.focus-title-tools button { display: inline-flex; gap: 6px; align-items: center; min-height: 32px; }
+.title-suggestions { margin-bottom: 24px; padding: 16px; border: 1px solid var(--sthira-border); border-radius: 12px; background: var(--sthira-surface); font-size: 13px; }
+.title-suggestions header, .title-suggestions header > div { display: flex; align-items: center; gap: 8px; }
+.title-suggestions header { justify-content: space-between; }
+.title-suggestions p { margin: 8px 0 12px; color: var(--sthira-text-muted); }
+.title-suggestion-controls { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.title-suggestion-controls label { flex: 1; min-width: 180px; display: grid; gap: 6px; }
+.title-suggestion-controls select, .resume-model-choice select { min-height: 40px; padding: 8px 12px; max-width: 100%; border: 1px solid var(--sthira-border); border-radius: 8px; background: var(--sthira-surface); color: var(--sthira-text); }
+.title-suggestions ul { display: grid; gap: 8px; margin-top: 12px; }
+.title-suggestions li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--sthira-border); padding-top: 8px; }
+.title-suggestions li > span { overflow-wrap: anywhere; }
+.title-suggestions li button { flex-shrink: 0; }
+.resume-model-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; }
+.resume-model-choice label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.resume-model-choice select { max-width: 320px; }
+@media (max-width: 1000px) { .document-tabs { padding: 4px 8px 0; } .resume-model-choice select { max-width: 230px; } }

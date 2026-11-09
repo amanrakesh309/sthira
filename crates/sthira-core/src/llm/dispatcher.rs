@@ -1,6 +1,9 @@
 use crate::{
     db::providers_repo,
-    llm::{anthropic::AnthropicProvider, OllamaProvider, OpenAiCompatibleProvider},
+    llm::{
+        anthropic::AnthropicProvider, lifecycle::RequestPolicy, OllamaProvider,
+        OpenAiCompatibleProvider,
+    },
     CoreError, Locality, ModelProvider,
 };
 use rusqlite::Connection;
@@ -19,8 +22,18 @@ pub fn resolve_model_provider(
     selected_model_id: Option<&str>,
     fallback: &Arc<dyn ModelProvider>,
 ) -> Result<ResolvedModel, CoreError> {
+    resolve_model_provider_with_policy(conn, selected_model_id, fallback, RequestPolicy::standard())
+}
+
+pub fn resolve_model_provider_with_policy(
+    conn: &Connection,
+    selected_model_id: Option<&str>,
+    fallback: &Arc<dyn ModelProvider>,
+    policy: RequestPolicy,
+) -> Result<ResolvedModel, CoreError> {
     let resolved = if let Some(mid) = selected_model_id {
-        providers_repo::get_model_entry(conn, mid)?
+        Some(providers_repo::get_model_entry(conn, mid)?.ok_or_else(||
+            CoreError::Model("The selected model is no longer configured. Select an available model in Settings.".into()))?)
     } else {
         None
     };
@@ -40,23 +53,40 @@ pub fn resolve_model_provider(
         });
     };
 
+    if !model.is_enabled || !provider.is_enabled {
+        return Err(CoreError::Model(
+            "The selected model or provider is disabled. Select an enabled model in Settings."
+                .into(),
+        ));
+    }
+
     let model_prov: Arc<dyn ModelProvider> = match provider.provider_type.as_str() {
-        "ollama" => Arc::new(OllamaProvider::with_host(
-            model.model_identifier.clone(),
-            provider.base_url.clone(),
-            Locality::Local,
-        )),
-        "anthropic" => Arc::new(AnthropicProvider::with_credentials(
-            model.model_identifier.clone(),
-            provider.base_url.clone(),
-            api_key.unwrap_or_default(),
-        )),
-        _ => Arc::new(OpenAiCompatibleProvider::with_credentials(
-            model.model_identifier.clone(),
-            provider.base_url.clone(),
-            api_key.unwrap_or_default(),
-            Locality::Cloud,
-        )),
+        "ollama" => Arc::new(
+            OllamaProvider::with_host(
+                model.model_identifier.clone(),
+                provider.base_url.clone(),
+                Locality::Local,
+            )
+            .with_api_key(api_key.unwrap_or_default())
+            .with_policy(policy),
+        ),
+        "anthropic" => Arc::new(
+            AnthropicProvider::with_credentials(
+                model.model_identifier.clone(),
+                provider.base_url.clone(),
+                api_key.unwrap_or_default(),
+            )
+            .with_policy(policy),
+        ),
+        _ => Arc::new(
+            OpenAiCompatibleProvider::with_credentials(
+                model.model_identifier.clone(),
+                provider.base_url.clone(),
+                api_key.unwrap_or_default(),
+                Locality::Cloud,
+            )
+            .with_policy(policy),
+        ),
     };
 
     Ok(ResolvedModel {

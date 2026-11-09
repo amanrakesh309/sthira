@@ -20,16 +20,46 @@ fn setup_test_engine() -> (Engine, Arc<FakeClock>, tempfile::TempDir) {
     (engine, clock, dir)
 }
 
+// Registry fixtures opt into a provider; startup no longer seeds one.
+fn connect_ollama_fixture(engine: &Engine, clock: &FakeClock) {
+    let provider = sthira_core::models::router::ProviderEntry {
+        id: "ollama".into(),
+        display_name: "Ollama".into(),
+        provider_type: "ollama".into(),
+        base_url: "http://localhost:11434".into(),
+        has_api_key: false,
+        is_enabled: true,
+        models: vec![ProviderModelEntry {
+            id: "ollama:llama3.2".into(),
+            provider_id: "ollama".into(),
+            model_identifier: "llama3.2:latest".into(),
+            display_name: "Llama 3.2".into(),
+            context_window: 131072,
+            supports_structured_output: true,
+            is_enabled: true,
+            is_default: true,
+            web_search_capability: Default::default(),
+        }],
+    };
+    providers_repo::upsert_provider(&engine.db().writer(), &provider, None, clock.now_ms())
+        .unwrap();
+}
+
 #[tokio::test]
-async fn test_9_1_provider_grouping_and_seed_defaults() {
+async fn test_9_1_provider_grouping_and_explicit_setup() {
     let (engine, clock, _dir) = setup_test_engine();
     let reader = engine.db().reader().expect("reader failed");
 
     let catalog = providers_repo::list_providers_with_models(&reader)
         .expect("Failed to list providers");
 
-    // Only local Ollama is pre-seeded by default
-    assert_eq!(catalog.len(), 1, "Only local Ollama is pre-seeded by default");
+    assert!(catalog.is_empty(), "Fresh workspaces must not assume an installed runtime");
+    assert!(providers_repo::get_default_model(&reader).unwrap().is_none());
+    drop(reader);
+    connect_ollama_fixture(&engine, &clock);
+    let reader = engine.db().reader().expect("reader failed");
+    let catalog = providers_repo::list_providers_with_models(&reader).unwrap();
+    assert_eq!(catalog.len(), 1, "The explicitly connected provider should be visible");
 
     let ollama = catalog.iter().find(|p| p.id == "ollama").expect("Ollama provider missing");
     assert_eq!(ollama.provider_type, "ollama");
@@ -87,6 +117,7 @@ async fn test_9_1_provider_grouping_and_seed_defaults() {
 #[tokio::test]
 async fn test_9_2_ollama_autodiscover_and_sync() {
     let (engine, clock, _dir) = setup_test_engine();
+    connect_ollama_fixture(&engine, &clock);
     let writer = engine.db().writer();
 
     let discovered = vec![
@@ -341,6 +372,7 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
     let (engine, clock, _dir) = setup_test_engine();
 
     // Dynamically connect Groq and Anthropic (user-added)
+    connect_ollama_fixture(&engine, &clock);
     let writer = engine.db().writer();
     let groq_provider = sthira_core::models::router::ProviderEntry {
         id: "groq".to_string(),

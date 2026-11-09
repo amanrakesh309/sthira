@@ -53,13 +53,15 @@ impl SearchProvider for MockSearchProvider {
             SearchResultItem {
                 title: "PCIe Gen5 NVMe Streaming".to_string(),
                 url: NVME_URL.to_string(),
-                snippet: "PCIe Gen5 NVMe streaming sustains fourteen gigabytes per second.".to_string(),
+                snippet: "PCIe Gen5 NVMe streaming sustains fourteen gigabytes per second."
+                    .to_string(),
                 score: 1.0,
             },
             SearchResultItem {
                 title: "DirectStorage Benchmarks".to_string(),
                 url: CUDA_URL.to_string(),
-                snippet: "DirectStorage queue depth yields diminishing latency returns.".to_string(),
+                snippet: "DirectStorage queue depth yields diminishing latency returns."
+                    .to_string(),
                 score: 0.9,
             },
         ])
@@ -88,6 +90,34 @@ fn seed_scrape_cache(engine: &Engine) {
     }
 }
 
+// Explicit model fixture: successful synthesis is supplied by the test, never by a runtime template.
+struct ResearchFixtureModel;
+#[async_trait]
+impl sthira_core::ModelProvider for ResearchFixtureModel {
+    fn id(&self) -> &str {
+        "test-research-fixture"
+    }
+    fn locality(&self) -> sthira_core::Locality {
+        sthira_core::Locality::Local
+    }
+    async fn generate_json(
+        &self,
+        schema: &serde_json::Value,
+        _system: &str,
+        _user: &str,
+    ) -> Result<String, sthira_core::CoreError> {
+        if schema.to_string().contains("contradictions_and_evolution") {
+            Ok(serde_json::json!({"synthesis":"Model fixture synthesis based on the supplied evidence.","contradictions_and_evolution":[],"open_questions":[]}).to_string())
+        } else {
+            Ok("{}".into())
+        }
+    }
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, sthira_core::CoreError> {
+        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("test-embedding"), texts)
+            .await
+    }
+}
+
 fn setup() -> (tempfile::TempDir, Arc<Engine>) {
     let tmp = tempdir().unwrap();
     let db_path = tmp.path().join("research_engine_test.db");
@@ -95,7 +125,7 @@ fn setup() -> (tempfile::TempDir, Arc<Engine>) {
     std::fs::create_dir_all(&vault_dir).unwrap();
 
     let clock = Arc::new(FakeClock::new(1_700_000_000_000));
-    let model = Arc::new(DeterministicFakeModel::new("test-model"));
+    let model = Arc::new(ResearchFixtureModel);
 
     let engine = Arc::new(
         Engine::open(
@@ -123,7 +153,10 @@ async fn test_query_without_url_drives_autonomous_search_and_grounded_citations(
     // Note: the caller supplies a plain-language question and nothing else — no URL,
     // no domain, no source hint of any kind.
     let query = "What are the current PCIe Gen5 NVMe streaming throughput limits?";
-    assert!(!query.contains("http"), "the inquiry must not contain a URL");
+    assert!(
+        !query.contains("http"),
+        "the inquiry must not contain a URL"
+    );
 
     // Capture the live progress stages exactly as the UI would receive them.
     let observed: Mutex<Vec<ResearchStage>> = Mutex::new(Vec::new());
@@ -142,9 +175,15 @@ async fn test_query_without_url_drives_autonomous_search_and_grounded_citations(
     .expect("query-only research must succeed");
 
     // 1. The search provider WAS called, and only with model-generated query strings.
-    assert!(provider.call_count() > 0, "search provider must be dispatched to");
+    assert!(
+        provider.call_count() > 0,
+        "search provider must be dispatched to"
+    );
     for q in provider.queries() {
-        assert!(!q.contains("http"), "generated queries must not be URLs: {q}");
+        assert!(
+            !q.contains("http"),
+            "generated queries must not be URLs: {q}"
+        );
     }
 
     // 2. Live progress was streamed in real time, in order.
@@ -170,12 +209,24 @@ async fn test_query_without_url_drives_autonomous_search_and_grounded_citations(
     // 3. Grounded evidence with numbered [Source N] citations + favicons.
     let md = &result.synthesized_markdown;
     assert!(md.contains("## Grounded Web Evidence & Verified Findings"));
-    assert!(md.contains("[Source 1]"), "findings must carry numbered citations");
-    assert!(md.contains("## Sources"), "a numbered source index must be emitted");
+    assert!(
+        md.contains("[Source 1]"),
+        "findings must carry numbered citations"
+    );
+    assert!(
+        md.contains("## Sources"),
+        "a numbered source index must be emitted"
+    );
     assert!(md.contains(NVME_URL), "the real source URL must be cited");
-    assert!(md.contains("nvme.example.test"), "the source domain must be cited");
+    assert!(
+        md.contains("nvme.example.test"),
+        "the source domain must be cited"
+    );
     assert!(md.contains("favicon"), "citations must carry a favicon");
-    assert!(!result.findings.is_empty(), "quotes must survive VerifiedQuote::verify");
+    assert!(
+        !result.findings.is_empty(),
+        "quotes must survive VerifiedQuote::verify"
+    );
     assert_eq!(result.sources.len(), 2);
     assert_eq!(result.sources[0].index, 1);
 
@@ -226,12 +277,20 @@ async fn test_local_vault_only_never_calls_the_search_provider() {
         "Local Vault Only must never dispatch a web search"
     );
     assert_eq!(result.mode_used, WebSearchMode::LocalVaultOnly);
-    assert!(result.synthesized_markdown.contains("## Local Vault Evidence"));
+    assert!(result
+        .synthesized_markdown
+        .contains("## Local Vault Evidence"));
     assert!(result.synthesized_markdown.contains("local vault only"));
-    assert!(!result.findings.is_empty(), "vault quotes must still be grounded");
+    for source in &result.sources {
+        assert!(result.synthesized_markdown.contains(&sthira_core::references::markdown_reference(&source.title, &source.url)));
+        assert!(!result.synthesized_markdown.contains(&format!("`{}`", source.url)));
+    }
+    assert!(
+        !result.findings.is_empty(),
+        "vault quotes must still be grounded"
+    );
     assert_eq!(result.sources[0].domain, "vault");
     assert!(result.sources[0].url.starts_with("sthira://artifact/"));
-
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +376,9 @@ async fn test_missing_provider_degrades_to_vault_without_failing() {
     .expect("a missing provider must degrade, not fail the run");
 
     assert_eq!(result.mode_used, WebSearchMode::LocalVaultOnly);
-    assert!(result.synthesized_markdown.contains("## Local Vault Evidence"));
+    assert!(result
+        .synthesized_markdown
+        .contains("## Local Vault Evidence"));
     assert!(
         result
             .stages
@@ -336,19 +397,34 @@ async fn test_web_search_mode_parsing_and_keyword_extraction() {
         WebSearchMode::from_str_lossy("local_vault_only"),
         WebSearchMode::LocalVaultOnly
     );
-    assert_eq!(WebSearchMode::from_str_lossy("Local Vault Only"), WebSearchMode::LocalVaultOnly);
-    assert_eq!(WebSearchMode::from_str_lossy("always_search"), WebSearchMode::AlwaysSearch);
-    assert_eq!(WebSearchMode::from_str_lossy("always"), WebSearchMode::AlwaysSearch);
+    assert_eq!(
+        WebSearchMode::from_str_lossy("Local Vault Only"),
+        WebSearchMode::LocalVaultOnly
+    );
+    assert_eq!(
+        WebSearchMode::from_str_lossy("always_search"),
+        WebSearchMode::AlwaysSearch
+    );
+    assert_eq!(
+        WebSearchMode::from_str_lossy("always"),
+        WebSearchMode::AlwaysSearch
+    );
     assert_eq!(WebSearchMode::from_str_lossy("auto"), WebSearchMode::Auto);
     // Unknown values default to the safe middle ground.
-    assert_eq!(WebSearchMode::from_str_lossy("nonsense"), WebSearchMode::Auto);
+    assert_eq!(
+        WebSearchMode::from_str_lossy("nonsense"),
+        WebSearchMode::Auto
+    );
     assert_eq!(WebSearchMode::Auto.as_str(), "auto");
 
     // Keywords: only meaningful tokens (len >= 4), de-duplicated, capped.
     let kws = inquiry_keywords("What are the current PCIe Gen5 NVMe streaming limits?");
     assert!(kws.contains(&"current".to_string()));
     assert!(kws.contains(&"streaming".to_string()));
-    assert!(!kws.contains(&"the".to_string()), "short stop-words must be dropped");
+    assert!(
+        !kws.contains(&"the".to_string()),
+        "short stop-words must be dropped"
+    );
     assert!(kws.len() <= 8);
     assert_eq!(inquiry_keywords("a b c").len(), 0);
 }
@@ -386,7 +462,9 @@ async fn test_local_vault_search_ranks_by_keyword_overlap() {
         "the highest-overlap artifact must rank first"
     );
     assert!(
-        !hits.iter().any(|(_, title, _)| title == "Unrelated Cooking Notes"),
+        !hits
+            .iter()
+            .any(|(_, title, _)| title == "Unrelated Cooking Notes"),
         "artifacts with zero keyword overlap must be excluded"
     );
 }
@@ -466,14 +544,18 @@ async fn test_research_engine_sets_external_sources_count_zero_and_no_fake_compl
 
     // Must clearly inform the user in markdown evidence basis
     assert!(
-        result.synthesized_markdown.contains("⚠️ Web search returned no results; synthesized using local context"),
+        result
+            .synthesized_markdown
+            .contains("⚠️ Web search returned no results; synthesized using local context"),
         "evidence basis must inform user that web search returned no results"
     );
 
     // Stages must not claim complete web search without warning
     let last_stage = result.stages.last().unwrap();
     assert!(
-        last_stage.message.contains("⚠️ Web search returned no results; synthesized using local context"),
+        last_stage
+            .message
+            .contains("⚠️ Web search returned no results; synthesized using local context"),
         "stage banner must reflect local context fallback warning: {}",
         last_stage.message
     );
@@ -500,12 +582,7 @@ async fn test_strict_relevance_filter_rejects_unrelated_vault_notes() {
         )
         .unwrap();
 
-    let hits = search_local_vault(
-        &engine,
-        "Amazon KDP Global Publishing Strategy",
-        8,
-    )
-    .unwrap();
+    let hits = search_local_vault(&engine, "Amazon KDP Global Publishing Strategy", 8).unwrap();
 
     // Unrelated note MUST NOT be injected
     assert!(
@@ -599,7 +676,9 @@ async fn test_research_engine_inspects_capability_and_injects_scraped_chunks() {
 
     assert_eq!(result.search_status, "web_search_success");
     assert_eq!(result.external_sources_count, 2);
-    assert!(stages_recorded.lock().unwrap().iter().any(|s| s.message.contains("Querying and injecting scraped web context via SearXNG")));
+    assert!(stages_recorded.lock().unwrap().iter().any(|s| s
+        .message
+        .contains("Searching web via SearXNG")));
 
     // Case 2: Unsupported model disables web search even if requested
     stages_recorded.lock().unwrap().clear();
@@ -619,7 +698,9 @@ async fn test_research_engine_inspects_capability_and_injects_scraped_chunks() {
     assert_eq!(unsupp_result.search_status, "unsupported_model");
     assert_eq!(unsupp_result.external_sources_count, 0);
     assert_eq!(unsupp_result.mode_used, WebSearchMode::LocalVaultOnly);
-    assert!(stages_recorded.lock().unwrap().iter().any(|s| s.message.contains("Selected model does not support web search grounding")));
+    assert!(stages_recorded.lock().unwrap().iter().any(|s| s
+        .message
+        .contains("Selected model does not support web search grounding")));
 }
 
 // ---------------------------------------------------------------------------
@@ -645,19 +726,66 @@ fn test_update_model_search_capability_updates_db() {
         is_default: true,
         web_search_capability: WebSearchCapability::EngineAugmentedOnly,
     };
+    // Provider setup is explicit; startup does not assume Ollama is installed.
+    providers_repo::upsert_provider(
+        &writer,
+        &sthira_core::models::router::ProviderEntry {
+            id: "ollama".into(),
+            display_name: "Ollama".into(),
+            provider_type: "ollama".into(),
+            base_url: "http://localhost:11434".into(),
+            has_api_key: false,
+            is_enabled: true,
+            models: vec![],
+        },
+        None,
+        1000,
+    ).unwrap();
     providers_repo::upsert_model(&writer, &model, 1000).unwrap();
 
     let reader = engine.db().reader().unwrap();
-    let (fetched, _, _) = providers_repo::get_model_entry(&reader, "ollama:llama3.2").unwrap().unwrap();
-    assert_eq!(fetched.web_search_capability, WebSearchCapability::EngineAugmentedOnly);
+    let (fetched, _, _) = providers_repo::get_model_entry(&reader, "ollama:llama3.2")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fetched.web_search_capability,
+        WebSearchCapability::EngineAugmentedOnly
+    );
     drop(reader);
 
     // Update to AgenticToolCall
-    providers_repo::update_model_search_capability(&writer, "ollama:llama3.2", WebSearchCapability::AgenticToolCall).unwrap();
+    providers_repo::update_model_search_capability(
+        &writer,
+        "ollama:llama3.2",
+        WebSearchCapability::AgenticToolCall,
+    )
+    .unwrap();
 
     let reader2 = engine.db().reader().unwrap();
-    let (updated, _, _) = providers_repo::get_model_entry(&reader2, "ollama:llama3.2").unwrap().unwrap();
-    assert_eq!(updated.web_search_capability, WebSearchCapability::AgenticToolCall);
+    let (updated, _, _) = providers_repo::get_model_entry(&reader2, "ollama:llama3.2")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        updated.web_search_capability,
+        WebSearchCapability::AgenticToolCall
+    );
 }
 
-
+#[tokio::test]
+async fn failed_model_synthesis_is_an_error_not_a_successful_template_report() {
+    let (_tmp, engine) = setup();
+    let failing = engine.with_model(Arc::new(DeterministicFakeModel::new(
+        "test-empty-synthesis",
+    )));
+    let result = execute_research(
+        &failing,
+        "A community garden",
+        WebSearchMode::LocalVaultOnly,
+        None,
+        "none",
+        4,
+        None,
+    )
+    .await;
+    assert!(result.is_err());
+}

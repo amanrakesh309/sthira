@@ -1,3 +1,4 @@
+import { ProjectResume } from '../components/ProjectResume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, CalendarDays, Check, ChevronLeft, ChevronRight, FileText, Folder, Layers, LayoutGrid, Link2, List, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { getProjectOverview } from '../api/projects';
@@ -88,6 +89,8 @@ export function ProjectOverviewView({ projectId, onBack, onOpenArtifact, onOpenC
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [briefExpanded, setBriefExpanded] = useState(false);
+  const [showResume,setShowResume]=useState(false);
+  useEffect(()=>setShowResume(false),[projectId]);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [adding, setAdding] = useState(false);
@@ -169,8 +172,9 @@ export function ProjectOverviewView({ projectId, onBack, onOpenArtifact, onOpenC
       {!data && loading ? <div className="project-loading" role="status"><Loader2 size={22} className="animate-spin" />Opening project…</div> : !data && error ? <div className="project-empty" role="alert"><Folder size={28} /><h1 id="project-title">Project unavailable</h1><p>{error}</p><button type="button" className="project-secondary-button" onClick={() => { void load(); }}>Try again</button></div> : data && <>
         <div className="project-hero">
           <div className="project-hero-copy"><div className="project-kicker"><span className="project-eyebrow">PROJECT WORKSPACE</span><span className="project-status" data-status={data.project.status}>{data.project.status}</span></div><h1 id="project-title">{data.project.name}</h1><p>Browse saved work, shared items, and project references.</p></div>
-          <div className="project-hero-actions"><button type="button" ref={addButton} className="project-secondary-button" onClick={() => setAdding(true)}><Link2 size={16} />Add existing</button><button type="button" className="project-primary-button" disabled={creating} onClick={() => { void newPage(); }}>{creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}New page</button></div>
+          <div className="project-hero-actions"><button type="button" className="project-secondary-button" aria-expanded={showResume} onClick={()=>setShowResume(value=>!value)}>Resume</button><button type="button" ref={addButton} className="project-secondary-button" onClick={() => setAdding(true)}><Link2 size={16} />Add existing</button><button type="button" className="project-primary-button" disabled={creating} onClick={() => { void newPage(); }}>{creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}New page</button></div>
         </div>
+        {showResume && <ProjectResume key={projectId} projectId={projectId} onSelectArtifact={id=>onOpenArtifact(id,projectId)} />}
         <div className="project-summary"><section className="project-brief" aria-label="Project brief" data-expanded={briefExpanded}><span className="project-summary-icon"><Folder size={21} /></span><div><h2>Project brief</h2><p>{data.project.purpose || 'No project brief has been recorded yet.'}</p>{(data.project.purpose.length > 240 || data.project.purpose.split('\n').length > 3) && <button type="button" aria-expanded={briefExpanded} onClick={() => setBriefExpanded((value) => !value)}>{briefExpanded ? 'Show less' : 'Read full brief'}</button>}</div></section>
           <dl className="project-facts"><div><dt>In this project</dt><dd>{members.length}<span>{members.length === 1 ? 'item' : 'items'}</span></dd></div><div><dt>Connected</dt><dd>{connected.length}<span>{connected.length === 1 ? 'linked item' : 'linked items'}</span></dd></div><div><dt>Last worked on</dt><dd className="project-fact-date">{directoryDate(data.project.last_substantive_at)}</dd></div></dl>
         </div>

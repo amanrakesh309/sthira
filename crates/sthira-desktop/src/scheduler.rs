@@ -55,7 +55,7 @@ async fn run_due_topics_once(app_handle: &AppHandle, engine: &Arc<Engine>) {
     eprintln!("[scheduler] {} scheduled topic(s) due", due.len());
 
     for topic in due {
-        match sthira_core::engines::scheduled_runner::execute_topic_run(engine, &topic.id).await {
+        match crate::commands::handle_trigger_scheduled_topic_run(engine, topic.id.clone()).await {
             Ok(artifact_id) => {
                 let _ = app_handle.emit(
                     "sthira://scheduled-topic-ready",

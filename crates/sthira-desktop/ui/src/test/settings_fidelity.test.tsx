@@ -99,13 +99,13 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     expect(screen.getByText('Sthira')).toBeInTheDocument();
 
     // Fraunces serif heading
-    const heading = screen.getByRole('heading', { level: 2, name: /Model & Workspace Settings/i });
+    const heading = screen.getByRole('heading', { level: 2, name: /Settings/i });
     expect(heading).toBeInTheDocument();
     expect(heading).toHaveClass('settings-title');
 
     // Subtitle
     expect(
-      screen.getByText(/Configure your models, tools, and workspace experience/i)
+      screen.getByText(/Make room for the way you work/i)
     ).toBeInTheDocument();
 
     // Close button
@@ -114,133 +114,40 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     expect(closeBtn).toHaveClass('settings-close-btn');
   });
 
-  it('renders horizontal navigation tab pills and switches active tabs', async () => {
-    render(
-      <ThemeProvider>
-        <ModelSettingsModal isOpen={true} onClose={vi.fn()} onVaultMutated={vi.fn()} />
-      </ThemeProvider>
-    );
-
-    const tabsRow = document.querySelector('.settings-tabs-row');
-    expect(tabsRow).toBeInTheDocument();
-
-    // Verify all 4 tab pills exist
-    const modelsTab = screen.getByRole('button', { name: /Connected Providers & Models/i });
-    const searchTab = screen.getByRole('button', { name: /Web Search Providers/i });
-    const appearanceTab = screen.getByRole('button', { name: /Appearance/i });
-    const vaultTab = screen.getByRole('button', { name: /Vault & Storage/i });
-
-    expect(modelsTab).toHaveClass('active');
-    expect(searchTab).not.toHaveClass('active');
-
-    // Switch to Appearance tab
-    fireEvent.click(appearanceTab);
-    expect(appearanceTab).toHaveClass('active');
-    expect(modelsTab).not.toHaveClass('active');
-    expect(screen.getAllByText(/Warm Stone/i).length).toBeGreaterThan(0);
-
-    // Switch to Vault & Storage tab
-    fireEvent.click(vaultTab);
-    expect(vaultTab).toHaveClass('active');
-    expect(screen.getByText(/Vault Invariants & Local Storage/i)).toBeInTheDocument();
+  it('uses one navigation for models, workflows, search, appearance and data', async () => {
+    render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
+    const navigation = screen.getByRole('navigation', { name: 'Settings categories' });
+    expect(navigation.querySelectorAll('button')).toHaveLength(5);
+    expect(document.querySelector('.settings-tabs-row')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+    expect(screen.getByTestId('theme-option-system')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Web Search' }));
+    expect(screen.getByRole('heading', { name: 'Web Search Providers' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'AI & Models' }));
+    expect(await screen.findByText('Ollama (Local)')).toBeInTheDocument();
+    expect(screen.getAllByText('Not checked')).toHaveLength(2);
   });
 
-  it('renders 2-column layout with guidance card, quick setup navigation, and provider card', async () => {
-    render(
-      <ThemeProvider>
-        <ModelSettingsModal isOpen={true} onClose={vi.fn()} onVaultMutated={vi.fn()} />
-      </ThemeProvider>
-    );
-
-    // Left guidance column
-    expect(screen.getByText('Your AI workspace, your way.')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Connect the model providers you use, choose your models, and set up a default/i)
-    ).toBeInTheDocument();
-
-    // Quick setup shortcuts
-    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
-
-    // Click quick setup shortcut to navigate to search
-    fireEvent.click(screen.getByTestId('quick-setup-search'));
-    const searchTab = screen.getByRole('button', { name: /Web Search Providers/i });
-    expect(searchTab).toHaveClass('active');
-
-    // Switch back to models tab
-    fireEvent.click(screen.getByRole('button', { name: /Connected Providers & Models/i }));
-
-    // Right column: Provider cards
-    await waitFor(() => {
-      expect(screen.getByText('Ollama (Local)')).toBeInTheDocument();
-      expect(screen.getByText('OpenRouter')).toBeInTheDocument();
-    });
-
-    // Connection states: Ollama has 2 models (Connected), OpenRouter has 0 models (Not Connected)
-    expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Not Connected')).toBeInTheDocument();
-  });
-
-  it('supports model filtering, capability display, and setting default model', async () => {
-    render(
-      <ThemeProvider>
-        <ModelSettingsModal isOpen={true} onClose={vi.fn()} onVaultMutated={vi.fn()} />
-      </ThemeProvider>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Llama 3 8B')).toBeInTheDocument();
-      expect(screen.getByText('Mistral 7B')).toBeInTheDocument();
-    });
-
-    // Verify context window badges
-    expect(screen.getByText('8K context')).toBeInTheDocument();
-    expect(screen.getByText('32K context')).toBeInTheDocument();
-
-    // Verify default badge
+  it('keeps model details on demand and supports setting the workspace default', async () => {
+    render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
+    await screen.findByText('Llama 3 8B');
+    expect(screen.queryByText('Context window')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search models…')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Information about Llama 3 8B' }));
+    expect(screen.getByText('8,192 tokens (catalog value)')).toBeInTheDocument();
     expect(screen.getByText('Default')).toBeInTheDocument();
-
-    // Test model search filtering
-    const searchInputs = screen.getAllByPlaceholderText('Search models...');
-    const searchInput = searchInputs[0];
-    fireEvent.change(searchInput, { target: { value: 'llama' } });
-
-    expect(screen.getByText('Llama 3 8B')).toBeInTheDocument();
-    expect(screen.queryByText('Mistral 7B')).not.toBeInTheDocument();
-
-    // Clear search
-    fireEvent.change(searchInput, { target: { value: '' } });
-    expect(screen.getByText('Mistral 7B')).toBeInTheDocument();
-
-    // Set Mistral 7B as default model
-    const radioButtons = document.querySelectorAll('.settings-radio-btn');
-    expect(radioButtons.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(radioButtons[1]);
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('cmd_set_default_model', {
-        modelId: 'model-2',
-      });
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use Mistral 7B as workspace default' }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('cmd_set_default_model', { modelId: 'model-2' }));
   });
 
-  it('footer preserves Cancel and Save buttons and calls onClose', () => {
-    const handleClose = vi.fn();
-    render(
-      <ThemeProvider>
-        <ModelSettingsModal isOpen={true} onClose={handleClose} onVaultMutated={vi.fn()} />
-      </ThemeProvider>
-    );
-
-    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
-    expect(cancelBtn).toBeInTheDocument();
-
-    const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
-    expect(saveBtn).toBeInTheDocument();
-
-    fireEvent.click(cancelBtn);
-    expect(handleClose).toHaveBeenCalledTimes(1);
+  it('offers Done and explains which settings save immediately', () => {
+    const close = vi.fn();
+    render(<ThemeProvider><ModelSettingsModal isOpen onClose={close} onVaultMutated={vi.fn()} /></ThemeProvider>);
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Workflow preferences save automatically/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('clicking Settings in LeftSidebar opens ModelSettingsModal without blanking page, and can be closed', async () => {
@@ -282,7 +189,7 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     // Modal renders successfully with title and tabs without crashing or blanking page
     await waitFor(() => {
       expect(screen.getByTestId('model-settings-modal')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { level: 2, name: /Model & Workspace Settings/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 2, name: /Settings/i })).toBeInTheDocument();
     });
 
     // Close button dismisses the modal
@@ -334,48 +241,14 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     });
   });
 
-  it('persists 2-column layout and left guidance/navigation pane across all 4 tabs', async () => {
-    render(
-      <ThemeProvider>
-        <ModelSettingsModal isOpen={true} onClose={vi.fn()} onVaultMutated={vi.fn()} />
-      </ThemeProvider>
-    );
-
-    // Initial tab: models
-    expect(screen.getByTestId('quick-setup-models')).toHaveClass('active');
-    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
-
-    // 1. Switch to search via left pane
-    fireEvent.click(screen.getByTestId('quick-setup-search'));
-    expect(screen.getByTestId('quick-setup-search')).toHaveClass('active');
-    // Ensure left guidance and all quick setup buttons remain mounted!
-    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Web Search Providers/i })).toBeInTheDocument();
-
-    // 2. Switch to appearance via left pane
-    fireEvent.click(screen.getByTestId('quick-setup-appearance'));
-    expect(screen.getByTestId('quick-setup-appearance')).toHaveClass('active');
-    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-vault')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Theme & Visual Appearance/i })).toBeInTheDocument();
-
-    // 3. Switch to vault via left pane
-    fireEvent.click(screen.getByTestId('quick-setup-vault'));
-    expect(screen.getByTestId('quick-setup-vault')).toHaveClass('active');
-    expect(screen.getByTestId('quick-setup-models')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-search')).toBeInTheDocument();
-    expect(screen.getByTestId('quick-setup-appearance')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Vault Invariants & Local Storage/i })).toBeInTheDocument();
-
-    // 4. Switch back to models via left pane
-    fireEvent.click(screen.getByTestId('quick-setup-models'));
-    expect(screen.getByTestId('quick-setup-models')).toHaveClass('active');
-    expect(screen.getByRole('heading', { name: /Connected Providers & Models/i })).toBeInTheDocument();
-    expect(screen.getByText('Your AI workspace, your way.')).toBeInTheDocument();
+  it('keeps navigation available across sections and contains destructive actions', () => {
+    render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
+    for (const name of ['Workflows', 'Web Search', 'Appearance', 'Workspace & Data', 'AI & Models']) {
+      fireEvent.click(screen.getByRole('button', { name }));
+      expect(screen.getByRole('navigation', { name: 'Settings categories' }).querySelectorAll('button')).toHaveLength(5);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace & Data' }));
+    expect(screen.getByText('Delete workspace data').closest('details')).not.toHaveAttribute('open');
+    expect(screen.queryByText('Aesthetic Design Invariants')).not.toBeInTheDocument();
   });
 });

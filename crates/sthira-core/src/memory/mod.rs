@@ -51,6 +51,8 @@ pub struct ResumeBrief {
     pub conflicting_decisions: Vec<BriefClaim>,
     pub active_working_breadcrumb: String,
     pub pane_hint: ResumePaneHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<crate::resume::ResumeGeneration>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -514,6 +516,7 @@ impl Engine {
             conflicting_decisions,
             active_working_breadcrumb,
             pane_hint,
+            generation: None,
         };
 
         // Save precomputed snapshot to derived_briefs

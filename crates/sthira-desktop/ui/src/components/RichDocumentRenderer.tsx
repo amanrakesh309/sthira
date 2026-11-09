@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Copy,
@@ -15,7 +15,9 @@ import { EpistemicBadge } from './EpistemicBadge';
 import { EmbeddedObjectCard, type EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 import type { ObjectType } from '../types/sthira';
 import type { EntityRef } from '../types/sthira';
-import { parseEntityHref } from '../api/connections';
+import { remarkInternalReferences } from '../editor/internalReferences';
+import { entityHref, parseEntityHref } from '../api/connections';
+import { plainPageMarkdown } from '../editor/plainPageMarkdown';
 
 export interface RichDocumentRendererProps {
   content: string;
@@ -294,7 +296,7 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
   // Pre-process: Clean orphaned bullets and tab-separated tables into clean GFM
   const processedContent = useMemo(() => {
     if (!content) return '';
-    const rawLines = content.split('\n');
+    const rawLines = plainPageMarkdown(content).split('\n');
     const normalizedLines: string[] = [];
 
     for (let idx = 0; idx < rawLines.length; idx++) {
@@ -368,7 +370,8 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
       className={`prose dark:prose-invert max-w-none text-sm text-[#1E201C] dark:text-[#EDEAE2] leading-relaxed ${className}`}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm,remarkInternalReferences]}
+        urlTransform={url => {const entity=parseEntityHref(url);return entity?entityHref(entity):defaultUrlTransform(url);}}
         components={{
           // -----------------------------------------------------------------
           // 1. Table override -> Interactive Comparison Table
@@ -548,8 +551,9 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
           // -----------------------------------------------------------------
           // 5. Code blocks -> Embedded Objects, Mermaid, or Styled Syntax
           // -----------------------------------------------------------------
+          pre: ({ children }) => <>{children}</>,
           code: ({ node: _node, className: codeClass, children, ...props }) => {
-            const match = /language-([a-zA-Z0-9_-]+)/.exec(codeClass || '');
+            const match = /language-([^\s]+)/.exec(codeClass || '');
             const lang = match ? match[1] : (codeClass || '').replace(/^language-/, '');
             const rawCode = String(children).replace(/\n$/, '');
 

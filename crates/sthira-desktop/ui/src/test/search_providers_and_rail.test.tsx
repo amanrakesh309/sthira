@@ -103,7 +103,7 @@ describe('Phase 10: Search Providers UI Tests', () => {
     );
 
     // Switch to "Web Search Providers" tab
-    const searchTabBtn = screen.getByRole('button', { name: /Web Search Providers/i });
+    const searchTabBtn = screen.getByRole('button', { name: /^Web Search$/i });
     fireEvent.click(searchTabBtn);
 
     // Assert provider titles are displayed
@@ -121,6 +121,7 @@ describe('Phase 10: Search Providers UI Tests', () => {
     // Verify test search results are rendered
     await waitFor(() => {
       expect(screen.getByText(/Returned 1 Live Results/i)).toBeInTheDocument();
+      expect(screen.getByText(/Test Search checks this search provider only/)).toBeInTheDocument();
       expect(screen.getByText(/Official Architectural Reference & Standard/i)).toBeInTheDocument();
     });
   });

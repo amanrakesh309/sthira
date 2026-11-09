@@ -155,31 +155,15 @@ export async function getResumeBrief(projectId: string, level: number = 1): Prom
   if (isTauri) {
     return await invoke<ResumeBrief>('cmd_get_resume_brief', { projectId, level });
   }
+  const documents = [...mockArtifactStore.values()].filter(({artifact}) => browserHasProject(artifact.id,projectId));
+  const first = documents[0]?.artifact;
   return {
-    project_id: projectId,
-    level,
-    purpose: 'Evaluate fast local inference engines vs cloud synthesis models for knowledge extraction.',
-    recent_progress: [
-      {
-        text: 'The 3B local model processes routing requests in under 15ms with 100% intent classification accuracy.',
-        origin: 'source_backed',
-        rendering: 'verbatim_quote',
-        evidence_node_ids: ['node-1'],
-        artifact_ids: ['art-demo-1'],
-      },
-      {
-        text: 'We decided to allocate 16GB VRAM for local execution to ensure deterministic responsiveness.',
-        origin: 'user_recorded',
-        rendering: 'verbatim_quote',
-        evidence_node_ids: ['node-2'],
-        artifact_ids: ['art-demo-1'],
-      },
-    ],
-    continuation_point: 'Continue research in Model performance notes',
-    primary_continuation_artifact_id: 'art-demo-1',
-    conflicting_decisions: [],
-    active_working_breadcrumb: 'Local AI research > Active Thread',
-    pane_hint: { show: { reason: 'cold_return' } },
+    project_id: projectId, level, purpose: 'Saved project working state',
+    recent_progress: documents.slice(0,8).map(({artifact})=>({ text: `Saved document: ${artifact.title || 'Untitled'}`, origin: 'source_backed' as const, rendering: 'deterministic_template' as const, evidence_node_ids: [], artifact_ids: [artifact.id] })),
+    continuation_point: first ? `Continue in ${first.title || 'Untitled'}` : null,
+    primary_continuation_artifact_id: first?.id || null, conflicting_decisions: [],
+    active_working_breadcrumb: 'Saved project', pane_hint: { collapse: { reason: 'active_session' } },
+    generation: { mode: 'factual', model_id: null, model_name: null, generated_at: null, notice: null },
   };
 }
 
@@ -553,7 +537,12 @@ export async function searchAll(query: string): Promise<SearchResultItem[]> {
   if (isTauri) {
     return await invoke<SearchResultItem[]>('cmd_search_all', { query });
   }
-  return [];
+  if(!query.trim())return [];
+  const {parseReferenceQuery,sameEntity}=await import('./connections');
+  const reference=parseReferenceQuery(query);
+  const directId=/^[0-9a-f-]{36}$/i.test(query.trim());
+  return getBrowserConnectionItems().filter(item=>reference?sameEntity(item.entity,reference):directId?item.entity.id===query.trim():`${item.entity.title} ${item.content_md}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .slice(0,25).map(item=>({id:item.entity.id,title:item.entity.title,kind:item.entity.kind==='project'?'project':'document',project_id:item.entity.project_id,excerpt:item.content_md.slice(0,120)}));
 }
 
 export async function synthesizeAndCreateResearch(
@@ -621,104 +610,9 @@ export async function getProviderCatalog(): Promise<ProviderEntry[]> {
   if (isTauri) {
     return await invoke<ProviderEntry[]>('cmd_get_provider_catalog');
   }
-  return [
-    {
-      id: 'ollama',
-      display_name: 'Ollama (Local)',
-      provider_type: 'ollama',
-      base_url: 'http://localhost:11434',
-      has_api_key: false,
-      is_enabled: true,
-      models: [
-        {
-          id: 'ollama-gpt-oss-120b',
-          provider_id: 'ollama',
-          model_identifier: 'gpt-oss:120b-cloud',
-          display_name: 'gpt-oss:120b-cloud',
-          context_window: 131072,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: true,
-          web_search_capability: 'agentic_tool_call',
-        },
-        {
-          id: 'ollama-gemma3-1b',
-          provider_id: 'ollama',
-          model_identifier: 'gemma3:1b',
-          display_name: 'gemma3:1b',
-          context_window: 8192,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: false,
-          web_search_capability: 'agentic_tool_call',
-        },
-        {
-          id: 'ollama-gemma4-31b',
-          provider_id: 'ollama',
-          model_identifier: 'gemma4:31b-cloud',
-          display_name: 'gemma4:31b-cloud',
-          context_window: 262144,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: false,
-          web_search_capability: 'unsupported',
-        },
-        {
-          id: 'ollama-llama3.2',
-          provider_id: 'ollama',
-          model_identifier: 'llama3.2:latest',
-          display_name: 'llama3.2',
-          context_window: 131072,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: false,
-          web_search_capability: 'engine_augmented_only',
-        },
-      ],
-    },
-    {
-      id: 'groq',
-      display_name: 'Groq Cloud',
-      provider_type: 'openai_compatible',
-      base_url: 'https://api.groq.com/openai/v1',
-      has_api_key: false,
-      is_enabled: true,
-      models: [
-        {
-          id: 'groq-llama-3.3-70b',
-          provider_id: 'groq',
-          model_identifier: 'llama-3.3-70b-versatile',
-          display_name: 'Llama 3.3 (70B Versatile)',
-          context_window: 131072,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: false,
-          web_search_capability: 'agentic_tool_call',
-        },
-      ],
-    },
-    {
-      id: 'anthropic',
-      display_name: 'Anthropic',
-      provider_type: 'anthropic',
-      base_url: 'https://api.anthropic.com/v1',
-      has_api_key: false,
-      is_enabled: true,
-      models: [
-        {
-          id: 'anthropic-claude-3-7-sonnet',
-          provider_id: 'anthropic',
-          model_identifier: 'claude-3-7-sonnet',
-          display_name: 'Claude 3.7 Sonnet',
-          context_window: 200000,
-          supports_structured_output: true,
-          is_enabled: true,
-          is_default: false,
-          web_search_capability: 'agentic_tool_call',
-        },
-      ],
-    },
-  ];
+  // Browser previews start unconfigured too. Synthetic provider catalogs belong
+  // in explicit test fixtures, never in a fresh user-facing settings page.
+  return [];
 }
 
 export async function listAvailableModels(): Promise<ModelView[]> {
@@ -767,6 +661,11 @@ export async function saveProvider(entry: ProviderEntry, apiKey?: string): Promi
   if (isTauri) {
     await invoke('cmd_save_provider', { entry, apiKey: apiKey || null });
   }
+}
+
+export async function openAIAppDownload(app: 'ollama' | 'lmstudio'): Promise<void> {
+  if (isTauri) await invoke('cmd_open_ai_app_download', { app });
+  else window.open(app === 'ollama' ? 'https://ollama.com/download' : 'https://lmstudio.ai/download', '_blank', 'noopener,noreferrer');
 }
 
 export async function discoverOllamaModels(endpoint?: string): Promise<ProviderModelEntry[]> {
@@ -1842,7 +1741,8 @@ export async function streamAdaptiveRun(
   rawInput: string,
   mode: OperationalMode,
   modelId: string | null | undefined,
-  onChunk: (chunk: ProgressiveStreamChunk) => void
+  onChunk: (chunk: ProgressiveStreamChunk) => void,
+  templateId?: string | null
 ): Promise<void> {
   if (isTauri) {
     const channel = new Channel<ProgressiveStreamChunk>();
@@ -1853,6 +1753,7 @@ export async function streamAdaptiveRun(
       rawInput,
       raw_input: rawInput,
       mode,
+      templateId: templateId || null,
       modelId: modelId || null,
       model_id: modelId || null,
       onChunk: channel,
@@ -1861,183 +1762,9 @@ export async function streamAdaptiveRun(
     return;
   }
 
-  // Fallback simulator for browser preview and vitest
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  const trimmed = rawInput.trim();
-
-  if (mode === 'plan') {
-    onChunk({ type: 'text_token', payload: '### Deconstructed Execution Plan\n\n' });
-    await delay(20);
-    onChunk({
-      type: 'text_token',
-      payload: `Analyzing objectives and architectural constraints for: **${trimmed}**\n\n`,
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'plan_phase',
-      payload: {
-        phase_number: 1,
-        title: 'Phase 1: Architecture, Invariants & Schemas',
-        milestones: [
-          'Formalize immutable data contracts and DB migrations',
-          'Define strict zero-unsolicited-writes invariants',
-          'Establish testkit mock models and harness',
-        ],
-        prerequisites: [],
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'text_token',
-      payload: 'System boundaries and core traits are stabilized before progressive components are wired.\n\n',
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'plan_phase',
-      payload: {
-        phase_number: 2,
-        title: 'Phase 2: Progressive Streaming Engine & Parser',
-        milestones: [
-          'Implement fail-safe token buffer parser',
-          'Wire tokio MPSC channel to IPC webview stream',
-          'Add automated malformed JSON fallback verification',
-        ],
-        prerequisites: ['Phase 1'],
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'decision_point',
-      payload: {
-        id: 'streaming_transport',
-        question: 'Which streaming IPC transport should bridge Rust and React UI?',
-        options: [
-          'Tauri v2 Typed IPC Channel (zero websocket overhead)',
-          'Local WebSocket server (port 8765)',
-          'Server-Sent Events (SSE) via localhost HTTP',
-        ],
-        recommended: 'Tauri v2 Typed IPC Channel (zero websocket overhead)',
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'plan_phase',
-      payload: {
-        phase_number: 3,
-        title: 'Phase 3: Interactive Generative UI Widgets & Reversibility',
-        milestones: [
-          'Mount MilestonePlanDagWidget with 1-click project creation',
-          'Mount EvidenceComparisonMatrixWidget with Warm Stone theme',
-          'Bind global UndoToast for atomic change_set reversibility',
-        ],
-        prerequisites: ['Phase 1', 'Phase 2'],
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'text_token',
-      payload: 'All proposed milestones remain interactive and can be promoted directly into your workspace.\n',
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'complete',
-      payload: {
-        total_tokens: 38,
-        duration_ms: 240,
-        basis_fingerprint: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-      },
-    });
-  } else if (mode === 'research') {
-    onChunk({ type: 'text_token', payload: '### Synthesized Research & Comparative Evidence\n\n' });
-    await delay(20);
-    onChunk({
-      type: 'text_token',
-      payload: `Investigating technical specifications and trade-offs for: *${trimmed}*\n\n`,
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'comparison_row',
-      payload: {
-        criteria: 'IPC Latency & Serialization',
-        aspect_a: 'Tauri v2 Channel (<0.5ms directly in-process)',
-        aspect_b: 'WebSocket HTTP loopback (2.8ms - 5.0ms)',
-        verdict: 'Tauri v2 Channel eliminates port conflicts and network socket allocation',
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'comparison_row',
-      payload: {
-        criteria: 'Failure Recovery (Zero-Broken-JSON)',
-        aspect_a: 'Fail-safe adaptive parser (auto-degrades to Markdown)',
-        aspect_b: 'Strict JSON parser (throws syntax error on partial tokens)',
-        verdict: 'Fail-safe parser prevents layout flashing and unhandled UI exceptions',
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'comparison_row',
-      payload: {
-        criteria: 'Provenance & Verification',
-        aspect_a: 'Grounding with VerifiedQuote::verify() against scraped web text',
-        aspect_b: 'Unverified LLM confidence scores',
-        verdict: 'Verified quotes enforce absolute fidelity against source artifacts',
-      },
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'text_token',
-      payload: 'Citations verified against local vault records and active search provider engines.\n',
-    });
-    await delay(20);
-
-    onChunk({
-      type: 'complete',
-      payload: {
-        total_tokens: 42,
-        duration_ms: 270,
-        basis_fingerprint: 'f0e1d2c3b4a5968778695a4b3c2d1e0f',
-      },
-    });
-  } else {
-    onChunk({
-      type: 'text_token',
-      payload: `### Synthesis Deliverable\n\n*Inquiry: ${trimmed}*\n\n`,
-    });
-    await delay(20);
-    onChunk({
-      type: 'text_token',
-      payload:
-        'Sthira processes incoming streams adaptively, matching model locality and task structure.\n\n',
-    });
-    await delay(20);
-    onChunk({
-      type: 'text_token',
-      payload:
-        '- [x] Streaming buffer tracks token metrics with zero UI jitter.\n- [x] Zero unsolicited writes invariant preserved.\n- [x] Reversible changesets generated for user actions.\n',
-    });
-    await delay(20);
-    onChunk({
-      type: 'complete',
-      payload: {
-        total_tokens: 28,
-        duration_ms: 180,
-        basis_fingerprint: '3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e',
-      },
-    });
-  }
+  throw new Error('Live model generation is unavailable in browser preview. Open the desktop app with a configured model.');
 }
+
 
 export async function getSidebarItems(): Promise<SidebarItemsResponse> {
   if (isTauri) {
@@ -2189,7 +1916,8 @@ export async function runResearchIntoPage(
   query: string,
   webSearchMode: WebSearchMode,
   onStage?: (stage: ResearchStage) => void,
-  templateId?: string | null
+  templateId?: string | null,
+  modelId?: string | null
 ): Promise<WebResearchResult> {
   if (isTauri) {
     const channel = new Channel<ResearchStage>();
@@ -2204,32 +1932,37 @@ export async function runResearchIntoPage(
       web_search_mode: webSearchMode,
       templateId: templateId || null,
       template_id: templateId || null,
+      modelId: modelId || null,
+      model_id: modelId || null,
       onProgress: channel,
       on_progress: channel,
     });
   }
 
-  // Browser-preview fallback: replay the same stage narrative locally.
-  onStage?.({ stage: 'searching', message: `Searching web for "${query}" via DuckDuckGo...` });
-  onStage?.({ stage: 'scraped', message: 'Scraped 3 sources...' });
-  onStage?.({ stage: 'synthesizing', message: 'Synthesizing research...' });
-  return {
-    query,
-    search_queries_used: [`${query} overview`],
-    documents: [],
-    findings: [],
-    synthesized_markdown: `# ${query}\n\n## Synthesis\nPreview mode — no live pipeline available.\n\n## Contradictions & Evolution\n_None detected._\n`,
-    mode_used: webSearchMode,
-    stages: [],
-    sources: [],
-  };
+  throw new Error('Live research is unavailable in browser preview. Open the desktop app with a configured model and search provider.');
+}
+
+
+export async function cancelRequest(requestId: string): Promise<boolean> {
+  if (isTauri) {
+    try {
+      return await invoke<boolean>('cmd_cancel_request', {
+        requestId,
+        request_id: requestId,
+      });
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function refineArtifact(
   artifactId: string,
   critique: string,
   modelId?: string | null,
-  webSearch: boolean = false
+  webSearch: boolean = false,
+  requestId?: string | null
 ): Promise<string> {
   if (isTauri) {
     return await invoke<string>('cmd_refine_artifact', {
@@ -2240,6 +1973,8 @@ export async function refineArtifact(
       model_id: modelId || null,
       webSearch,
       web_search: webSearch,
+      requestId: requestId || null,
+      request_id: requestId || null,
     });
   }
 
@@ -2250,7 +1985,9 @@ export async function deriveArtifact(
   sourceArtifactId: string,
   derivationType: string,
   templateId?: string | null,
-  modelId?: string | null
+  modelId?: string | null,
+  projectId?: string | null,
+  requestId?: string | null
 ): Promise<string> {
   if (isTauri) {
     return await invoke<string>('cmd_derive_artifact', {
@@ -2262,6 +1999,10 @@ export async function deriveArtifact(
       template_id: templateId || null,
       modelId: modelId || null,
       model_id: modelId || null,
+      projectId: projectId || null,
+      project_id: projectId || null,
+      requestId: requestId || null,
+      request_id: requestId || null,
     });
   }
 
@@ -2324,3 +2065,9 @@ export async function listSynthesisTemplates(
   return allTemplates.filter((t) => t.target_mode === targetMode);
 }
 
+
+/** Persist model output as an AI revision; callers invoke this only after a successful run. */
+export async function saveGeneratedArtifact(artifactId: string, contentMd: string, title: string, projectId?: string | null): Promise<Artifact> {
+  if (isTauri) return invoke('cmd_save_generated_artifact', { artifactId, contentMd, title, projectId: projectId || null });
+  return saveArtifact(artifactId, contentMd, title, projectId);
+}

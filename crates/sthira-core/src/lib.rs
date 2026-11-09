@@ -1,3 +1,4 @@
+pub mod conversation;
 pub mod db;
 pub mod discovery;
 pub mod engines;
@@ -5,6 +6,9 @@ pub mod epistemic;
 pub mod history;
 pub mod materiality;
 pub mod memory;
+pub mod resume;
+pub mod references;
+pub mod naming;
 pub mod models;
 pub mod reversibility;
 pub mod router;
@@ -119,6 +123,8 @@ pub enum CoreError {
     ApprovalRequired(String),
     #[error("Model error: {0}")]
     Model(String),
+    #[error("Request error: {0}")]
+    Request(#[from] crate::llm::lifecycle::RequestErrorKind),
     #[error("Not found: {0}")]
     NotFound(String),
     #[error("Invariant violation: {0}")]
@@ -283,7 +289,8 @@ impl Engine {
             let writer = db.writer();
             let now_ms = clock.now_ms();
             let _ = db::providers_repo::clean_duplicate_models(&writer);
-            let _ = db::providers_repo::seed_default_providers_if_empty(&writer, now_ms);
+            // AI setup is explicit. An empty catalog must stay empty until the user
+            // connects a provider; installed runtimes and models are never assumed.
             let _ = db::objects_repo::seed_default_object_types_if_empty(&writer, now_ms);
             let _ = db::search_repo::seed_default_search_providers_if_empty(&writer, now_ms);
             let _ = db::templates_repo::seed_default_synthesis_templates(&writer, now_ms);
@@ -308,6 +315,11 @@ impl Engine {
 
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
+    }
+
+    /// Scope an individual run to its resolved model without changing other runs.
+    pub fn with_model(&self, model: Arc<dyn ModelProvider>) -> Self {
+        Self { model, ..self.clone() }
     }
 
     pub fn model(&self) -> &Arc<dyn ModelProvider> {
@@ -550,7 +562,8 @@ impl Engine {
             })
     }
 
-    pub fn create_derived_artifact(
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_derived_artifact_with_cancellation(
         &self,
         artifact_type: ArtifactType,
         authorship: Authorship,
@@ -559,8 +572,25 @@ impl Engine {
         source_url: Option<&str>,
         derived_from_artifact_id: Option<&str>,
         derivation_type: Option<&str>,
+        target_project_id: Option<&str>,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
     ) -> Result<Artifact, CoreError> {
+        let mut writer = self.db.writer();
+
+        if let Some(token) = cancel_token {
+            if token.is_cancelled() {
+                return Err(CoreError::Request(
+                    crate::llm::lifecycle::RequestErrorKind::Cancelled,
+                ));
+            }
+        }
+
         let now_ms = self.clock.now_ms();
+
+        if let Some(token) = cancel_token {
+            token.try_begin_commit()?;
+        }
+
         let artifact_id = uuid::Uuid::new_v4().to_string();
         let normalized_body = vault::normalize_content(body);
         let content_hash = vault::compute_content_hash(&normalized_body);
@@ -580,8 +610,9 @@ impl Engine {
         let is_unfinished = epistemic::is_mid_sentence(&normalized_body);
         let draft_val = if is_unfinished { 1 } else { 0 };
 
-        let writer = self.db.writer();
-        writer.execute(
+        let tx = writer.transaction()?;
+
+        tx.execute(
             "INSERT INTO artifacts (id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, derived_from_artifact_id, derivation_type, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?7, ?9, ?10, ?11, ?12, ?12);",
             params![
@@ -601,11 +632,50 @@ impl Engine {
         )?;
 
         let rev_id = uuid::Uuid::new_v4().to_string();
-        writer.execute(
+        tx.execute(
             "INSERT INTO artifact_revisions (id, artifact_id, version, content_md, content_hash, actor, created_at)
              VALUES (?1, ?2, 1, ?3, ?4, 'ai', ?5);",
             params![rev_id, artifact_id, normalized_body, content_hash, now_ms],
         )?;
+
+        self.log_event_tx(
+            &tx,
+            target_project_id,
+            Some(&artifact_id),
+            Actor::Ai,
+            EventType::ArtifactCreated,
+            Materiality::Substantive,
+            serde_json::json!({
+                "title": title,
+                "derived_from": derived_from_artifact_id,
+                "derivation_type": derivation_type
+            }),
+            None,
+            now_ms,
+        )?;
+
+        if let Some(pid) = target_project_id {
+            tx.execute(
+                "INSERT INTO project_artifacts (project_id, artifact_id, added_at, link_origin, proposal_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(project_id, artifact_id) DO UPDATE SET detached_at = NULL;",
+                params![pid, artifact_id, now_ms, "user_explicit", Option::<&str>::None],
+            )?;
+
+            self.log_event_tx(
+                &tx,
+                Some(pid),
+                Some(&artifact_id),
+                Actor::User,
+                EventType::ArtifactAttached,
+                Materiality::Substantive,
+                serde_json::json!({ "link_origin": "user_explicit" }),
+                None,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
 
         let artifact = Artifact {
             id: artifact_id.clone(),
@@ -626,28 +696,186 @@ impl Engine {
             derivation_type: derivation_type.map(|s| s.to_string()),
         };
 
-        // Write file to vault disk
+        // Write file to vault disk only after database commit succeeds
         let full_path = self.vault_dir.join(artifact.file_path.as_ref().unwrap());
         let rendered = vault::render_file_with_frontmatter(&artifact);
         let _ = std::fs::write(&full_path, rendered);
 
+        if let Some(token) = cancel_token {
+            token.finish_commit();
+        }
+
+        Ok(artifact)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_derived_artifact(
+        &self,
+        artifact_type: ArtifactType,
+        authorship: Authorship,
+        title: Option<&str>,
+        body: &str,
+        source_url: Option<&str>,
+        derived_from_artifact_id: Option<&str>,
+        derivation_type: Option<&str>,
+        target_project_id: Option<&str>,
+    ) -> Result<Artifact, CoreError> {
+        self.create_derived_artifact_with_cancellation(
+            artifact_type,
+            authorship,
+            title,
+            body,
+            source_url,
+            derived_from_artifact_id,
+            derivation_type,
+            target_project_id,
+            None,
+        )
+    }
+
+    pub fn apply_refinement_with_cancellation(
+        &self,
+        artifact_id: &str,
+        new_content_md: &str,
+        summary: &str,
+        inverse_payload: &serde_json::Value,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+    ) -> Result<(Artifact, String), CoreError> {
+        let mut writer = self.db.writer();
+
+        if let Some(token) = cancel_token {
+            if token.is_cancelled() {
+                return Err(CoreError::Request(
+                    crate::llm::lifecycle::RequestErrorKind::Cancelled,
+                ));
+            }
+        }
+
+        let now_ms = self.clock.now_ms();
+
+        if let Some(token) = cancel_token {
+            token.try_begin_commit()?;
+        }
+
+        let cs_id = uuid::Uuid::new_v4().to_string();
+        let inverse_str = serde_json::to_string(inverse_payload)?;
+        let actor_str = "ai";
+
+        let tx = writer.transaction()?;
+
+        // 1. Insert change set for reversibility
+        tx.execute(
+            "INSERT INTO change_sets (id, actor, proposal_id, summary, inverse_payload, applied_at)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5);",
+            params![cs_id, actor_str, summary, inverse_str, now_ms],
+        )?;
+
+        // 2. Fetch current version to increment
+        let (current_version, _old_hash, old_content): (i64, String, String) = tx.query_row(
+            "SELECT version, content_hash, content_md FROM artifacts WHERE id = ?1;",
+            params![artifact_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+
+        let normalized = vault::normalize_content(new_content_md);
+        let materiality = materiality::compute_materiality(&old_content, &normalized);
+        let new_hash = vault::compute_content_hash(&normalized);
+        let is_unfinished = epistemic::is_mid_sentence(&normalized);
+        let draft_val = if is_unfinished { 1 } else { 0 };
+        let new_version = current_version + 1;
+
+        tx.execute(
+            "UPDATE artifacts
+             SET content_md = ?1, content_hash = ?2, version = ?3, is_unfinished_draft = ?4, updated_at = ?5
+             WHERE id = ?6;",
+            params![normalized, new_hash, new_version, draft_val, now_ms, artifact_id],
+        )?;
+
+        let rev_id = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO artifact_revisions (id, artifact_id, version, content_md, content_hash, actor, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![rev_id, artifact_id, new_version, normalized, new_hash, actor_str, now_ms],
+        )?;
+
+        let project_ids: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL ORDER BY added_at DESC;"
+            )?;
+            let rows = stmt.query_map(params![artifact_id], |r| r.get(0))?;
+            rows.flatten().collect()
+        };
+
+        if materiality == Materiality::Substantive {
+            for pid in &project_ids {
+                tx.execute(
+                    "UPDATE projects SET last_substantive_at = ?1 WHERE id = ?2;",
+                    params![now_ms, pid],
+                )?;
+            }
+        }
+
         self.log_event_tx(
-            &writer,
-            None,
-            Some(&artifact_id),
+            &tx,
+            project_ids.first().map(|s| s.as_str()),
+            Some(artifact_id),
             Actor::Ai,
-            EventType::ArtifactCreated,
-            Materiality::Substantive,
-            serde_json::json!({
-                "title": title,
-                "derived_from": derived_from_artifact_id,
-                "derivation_type": derivation_type
-            }),
-            None,
+            EventType::ArtifactUpdated,
+            materiality,
+            serde_json::json!({ "version": new_version }),
+            Some(&cs_id),
             now_ms,
         )?;
 
-        Ok(artifact)
+        let updated_art = tx.query_row(
+            "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, created_at, updated_at, derived_from_artifact_id, derivation_type
+             FROM artifacts WHERE id = ?1;",
+            params![artifact_id],
+            |r| {
+                let type_str: String = r.get(1)?;
+                let auth_str: String = r.get(2)?;
+                Ok(Artifact {
+                    id: r.get(0)?,
+                    artifact_type: match type_str.as_str() {
+                        "source" => ArtifactType::Source,
+                        "snippet" => ArtifactType::Snippet,
+                        _ => ArtifactType::Note,
+                    },
+                    authorship: match auth_str.as_str() {
+                        "ai_generated" => Authorship::AiGenerated,
+                        "external" => Authorship::External,
+                        _ => Authorship::User,
+                    },
+                    title: r.get(3)?,
+                    content_md: r.get(4)?,
+                    source_url: r.get(5)?,
+                    content_hash: r.get(6)?,
+                    version: r.get(7)?,
+                    file_path: r.get(8)?,
+                    last_synced_hash: r.get(9)?,
+                    is_unfinished_draft: r.get::<_, i64>(10)? != 0,
+                    deleted_at: None,
+                    created_at: r.get(11)?,
+                    updated_at: r.get(12)?,
+                    derived_from_artifact_id: r.get(13)?,
+                    derivation_type: r.get(14)?,
+                })
+            },
+        )?;
+
+        tx.commit()?;
+
+        if let Some(ref fp) = updated_art.file_path {
+            let full_path = self.vault_dir.join(fp);
+            let rendered = vault::render_file_with_frontmatter(&updated_art);
+            let _ = std::fs::write(&full_path, rendered);
+        }
+
+        if let Some(token) = cancel_token {
+            token.finish_commit();
+        }
+
+        Ok((updated_art, cs_id))
     }
 
     pub fn attach_artifact(

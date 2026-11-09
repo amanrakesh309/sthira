@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import { openWorkflowSettings } from '../api/workflowSettings';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   Heading1,
   Heading2,
@@ -166,6 +169,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
 
 interface SlashCommandMenuProps {
   filterQuery: string;
+  anchorElement?: HTMLElement | null;
   onSelect: (item: SlashCommandItem) => void;
   onClose: () => void;
   position?: { top: number; left: number } | null;
@@ -175,6 +179,7 @@ interface SlashCommandMenuProps {
 
 export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
   filterQuery,
+  anchorElement,
   onSelect,
   onClose,
   position,
@@ -182,7 +187,10 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
   customObjectTypes = [],
 }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const workflows = useWorkflowSettings();
+  const commandEnabled = (item: SlashCommandItem) => !item.isAiAction || (!workflows.loading && !workflows.error && workflows.settings[item.aiMode === 'expand' ? 'draft' : item.aiMode || 'plan'].enabled);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState({ top: 120, left: 24 });
 
   const cleanQuery = filterQuery.toLowerCase().replace(/^\//, '').trim();
 
@@ -223,12 +231,39 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
     );
   });
 
+  useLayoutEffect(() => {
+    const menu = containerRef.current;
+    if (!menu) return;
+    const anchor = anchorElement?.getBoundingClientRect();
+    const top = (anchor?.top || 0) + (position?.top ?? 120);
+    const left = (anchor?.left || 0) + (position?.left ?? 24);
+    const bounds = menu.getBoundingClientRect();
+    const next = {
+      top: Math.max(12, Math.min(top + bounds.height <= window.innerHeight - 12 ? top : top - bounds.height - 24, window.innerHeight - bounds.height - 12)),
+      left: Math.max(12, Math.min(left, window.innerWidth - bounds.width - 12)),
+    };
+    setPlacement(previous => previous.top === next.top && previous.left === next.left ? previous : next);
+  }, [anchorElement, position?.top, position?.left, cleanQuery, filteredCommands.length, workflows.loading, workflows.settings, workflows.error]);
+  useEffect(() => {
+    containerRef.current?.querySelector<HTMLElement>('[data-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedIndex, cleanQuery]);
+  useEffect(() => {
+    const closeOnMove = (event: Event) => {
+      if (event.target instanceof Node && containerRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    window.addEventListener('scroll', closeOnMove, true);
+    window.addEventListener('resize', closeOnMove);
+    return () => { window.removeEventListener('scroll', closeOnMove, true); window.removeEventListener('resize', closeOnMove); };
+  }, [onClose]);
+
   useEffect(() => {
     setSelectedIndex(0);
   }, [cleanQuery]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSelectedIndex((prev) => (prev + 1) % Math.max(1, filteredCommands.length));
@@ -237,7 +272,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
         setSelectedIndex((prev) => (prev - 1 + filteredCommands.length) % Math.max(1, filteredCommands.length));
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (filteredCommands[selectedIndex]) {
+        if (filteredCommands[selectedIndex] && commandEnabled(filteredCommands[selectedIndex])) {
           onSelect(filteredCommands[selectedIndex]);
         }
       } else if (e.key === 'Escape') {
@@ -261,10 +296,6 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
 
-  if (filteredCommands.length === 0) {
-    return null;
-  }
-
   const categoryLabels: Record<SlashCategory, string> = {
     formatting: 'Formatting Blocks',
     epistemic: 'Sthira Epistemic & Invariants',
@@ -274,19 +305,13 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 
   const categories: SlashCategory[] = ['formatting', 'epistemic', 'objects', 'ai'];
 
-  return (
+  return createPortal(
     <div
       ref={containerRef}
       id="slash-command-popover"
-      style={
-        position
-          ? {
-              top: `${position.top}px`,
-              left: `${Math.min(position.left, window.innerWidth - 320)}px`,
-            }
-          : undefined
-      }
-      className="absolute z-50 w-76 bg-white dark:bg-[#1C1D19] border border-[#E8E5DC] dark:border-[#2C2E27] rounded-xl shadow-xl overflow-hidden font-sans text-xs animate-in fade-in zoom-in-95 duration-100"
+      role="listbox" aria-label="Insert block or command"
+      style={{ top: placement.top, left: placement.left }}
+      className="sthira-slash-menu"
     >
       <div className="px-3 py-2 border-b border-[#ECE9E0] dark:border-[#2C2E27] bg-[#FAF8F3] dark:bg-[#161714] flex items-center justify-between">
         <span className="text-[10px] font-bold text-[#6E6D66] dark:text-[#9E9C93] uppercase tracking-wider">
@@ -297,7 +322,8 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
         </span>
       </div>
 
-      <div className="max-h-72 overflow-y-auto p-1.5 space-y-2">
+      <div className="sthira-slash-options p-1.5 space-y-2">
+        {filteredCommands.length === 0 && <p className="sthira-slash-empty" role="status">No matching commands. Press Escape to return to your document.</p>}
         {categories.map((cat) => {
           const catCommands = filteredCommands.filter((c) => c.category === cat);
           if (catCommands.length === 0) return null;
@@ -316,6 +342,10 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
                     key={item.id}
                     type="button"
                     data-testid={`slash-cmd-${item.id}`}
+                    disabled={!commandEnabled(item)}
+                    title={commandEnabled(item) ? item.description : 'Enable this workflow in Settings to use AI.'}
+                    role="option" aria-selected={isSelected} data-selected={isSelected}
+                    onMouseDown={event => event.preventDefault()}
                     onClick={() => onSelect(item)}
                     onMouseEnter={() => setSelectedIndex(globalIndex)}
                     className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer ${
@@ -345,7 +375,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
                         )}
                       </div>
                       <div
-                        className={`text-[10px] truncate ${
+                        className={`sthira-slash-description text-[10px] truncate ${
                           isSelected ? 'text-zinc-300' : 'text-[#6E6D66] dark:text-[#9E9C93]'
                         }`}
                       >
@@ -359,6 +389,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
           );
         })}
       </div>
-    </div>
+      {filteredCommands.some(item => !commandEnabled(item)) && <button type="button" className="sthira-slash-setup" onClick={() => { onClose(); openWorkflowSettings(); }}>Enable AI workflows in Settings</button>}
+    </div>, document.body
   );
 };

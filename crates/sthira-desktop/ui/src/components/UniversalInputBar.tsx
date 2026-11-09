@@ -1,3 +1,5 @@
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import { openWorkflowSettings } from '../api/workflowSettings';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowUp,
@@ -58,13 +60,13 @@ interface UniversalInputBarProps {
   onStartResearch?: (
     query: string,
     mode: WebSearchMode,
-    projectId?: string | null
+    projectId?: string | null, templateId?: string | null, modelId?: string | null
   ) => Promise<WebResearchResult | null>;
   /**
    * Phase 20: creates a `Plan: <Goal>` draft and streams LLM tokens into the center
    * workspace document editor.
    */
-  onStartPlan?: (goal: string, projectId?: string | null) => Promise<string | null>;
+  onStartPlan?: (goal: string, projectId?: string | null, templateId?: string | null, modelId?: string | null) => Promise<string | null>;
 }
 
 export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
@@ -77,6 +79,8 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
   onStartResearch,
   onStartPlan,
 }) => {
+  const workflows = useWorkflowSettings();
+  const sessionModels = useRef<Partial<Record<OperationalMode, string>>>({});
   const [inputVal, setInputVal] = useState('');
   const [currentMode, setCurrentMode] = useState<OperationalMode>('capture');
   const [catalog, setCatalog] = useState<ProviderEntry[]>([]);
@@ -125,20 +129,28 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
     streamDecisions.length > 0;
 
   const handleLiveAdaptiveStream = async () => {
-    if (!inputVal.trim() || isAdaptiveStreaming) return;
+    if (!inputVal.trim() || isAdaptiveStreaming || currentMode === 'capture' || !ready) return;
     setStructuredPreview(null);
     setStatusMsg(null);
-    await startStream(inputVal.trim(), currentMode, selectedModel?.id);
+    try { await startStream(inputVal.trim(), currentMode, selectedModel?.id); }
+    catch (error) { setStatusMsg(`Error: ${String(error)}`); }
   };
 
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 240)}px`;
+  }, [inputVal]);
 
   const modes: { mode: OperationalMode; label: string; icon: LucideIcon }[] = [
     { mode: 'capture', label: 'Capture', icon: Pencil },
     { mode: 'research', label: 'Research', icon: Search },
     { mode: 'plan', label: 'Plan', icon: BookOpen },
-    { mode: 'act', label: 'Act', icon: Zap },
+    { mode: 'act', label: 'Draft', icon: Zap },
   ];
 
   // Fetch catalog on mount or refresh
@@ -157,11 +169,6 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
           const def = prov.models.find((m) => m.is_default && m.is_enabled);
           if (def) return def;
         }
-        for (const prov of cat) {
-          if (!prov.is_enabled) continue;
-          const first = prov.models.find((m) => m.is_enabled);
-          if (first) return first;
-        }
         return null;
       });
     } catch (err) {
@@ -171,7 +178,21 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
 
   useEffect(() => {
     loadCatalog();
+    const refresh = () => { void loadCatalog(); };
+    window.addEventListener('sthira:catalog-changed', refresh);
+    return () => window.removeEventListener('sthira:catalog-changed', refresh);
   }, []);
+
+  const workflowId = currentMode === 'act' ? 'draft' : currentMode;
+  const workflowEnabled = currentMode === 'capture' || (!workflows.loading && !workflows.error && workflows.settings[workflowId as 'research' | 'plan' | 'draft'].enabled);
+  const ready = currentMode === 'capture' || (workflowEnabled && !!selectedModel);
+  useEffect(() => {
+    if (currentMode === 'capture') return;
+    const models = catalog.filter(provider => provider.is_enabled).flatMap(provider => provider.models.filter(model => model.is_enabled));
+    const preference = workflows.settings[currentMode === 'act' ? 'draft' : currentMode];
+    const id = sessionModels.current[currentMode] || preference.model_id;
+    setSelectedModel((id ? models.find(model => model.id === id) : models.find(model => model.is_default)) || null);
+  }, [currentMode, catalog, workflows.settings]);
 
   const handleToggleModelDropdown = () => {
     if (!isModelDropdownOpen) {
@@ -203,7 +224,7 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
   }, [isModelDropdownOpen]);
 
   // Tab key cycles through modes, Enter key executes
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault();
       const currentIndex = modes.findIndex((m) => m.mode === currentMode);
@@ -223,6 +244,7 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
     if (!trimmed || isLoading || isAdaptiveStreaming) return;
 
     const modeToRun = explicitMode || currentMode;
+    if (modeToRun !== 'capture' && (workflows.loading || workflows.error || !workflows.settings[modeToRun === 'act' ? 'draft' : modeToRun].enabled || !selectedModel)) { openWorkflowSettings(); return; }
 
     setIsLoading(true);
     setStatusMsg(null);
@@ -248,24 +270,26 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         // the full-width center workspace. Pressing Enter navigates immediately — there is
         // no intermediate "[Research in Workspace]" confirmation step.
         setStatusMsg('Researching...');
-        setInputVal('');
-        await onStartResearch(
+        const result = await onStartResearch(
           trimmed,
-          webSearchEnabled && !isUnsupported ? 'auto' : 'local_vault_only',
-          null
+          webSearchEnabled && !isUnsupported ? 'always_search' : 'local_vault_only',
+          null, null, selectedModel?.id
         );
+        if (!result) throw new Error('Research failed. Your original prompt is still here.');
+        setInputVal('');
         if (onRefresh) onRefresh();
       } else if (modeToRun === 'plan' && onStartPlan) {
         // Phase 20: Plan creates a `Plan: <Goal>` draft and streams tokens into it.
         setStatusMsg('Planning...');
+        const result = await onStartPlan(trimmed, null, null, selectedModel?.id);
+        if (!result) throw new Error('Planning failed. Your original prompt is still here.');
         setInputVal('');
-        await onStartPlan(trimmed, null);
         if (onRefresh) onRefresh();
       } else if (modeToRun === 'plan' || modeToRun === 'research' || modeToRun === 'act') {
         const title = trimmed.replace(/^#*\s*/, '').trim();
         const cleanTitle = title.length > 60 ? `${title.slice(0, 60)}...` : title;
         const modelName = selectedModel?.display_name || selectedModel?.model_identifier || 'Active Model';
-        const actionLabel = modeToRun === 'plan' ? 'Planning' : modeToRun === 'research' ? 'Researching' : 'Executing';
+        const actionLabel = modeToRun === 'plan' ? 'Planning' : modeToRun === 'research' ? 'Researching' : 'Drafting';
 
         setStatusMsg(`${actionLabel} with ${modelName}...`);
 
@@ -273,12 +297,8 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         const streamedContent = await startStream(trimmed, modeToRun, selectedModel?.id);
 
         // Prepare rich document content using live streamed LLM tokens
-        const hasStream = streamedContent && streamedContent.trim().length > 0;
-        const finalContent = hasStream
-          ? (streamedContent.trim().startsWith('#')
-              ? streamedContent.trim()
-              : `# ${cleanTitle}\n\n${streamedContent.trim()}`)
-          : `# ${cleanTitle}\n\n## Vision & Scope\n${trimmed}\n\n## Synthesis & Working Notes\nGenerated with ${modelName}.\n`;
+        if (!streamedContent.trim()) throw new Error('The model returned no content. Your prompt has been kept.');
+        const finalContent = streamedContent.trim().startsWith('#') ? streamedContent.trim() : `# ${cleanTitle}\n\n${streamedContent.trim()}`;
 
         // Create page with real LLM generated content and open in document editor
         const newArt = await createPage(null, cleanTitle);
@@ -389,21 +409,22 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         <button type="button" onClick={() => onOpenFlow?.('capture')}
           aria-label="Add item" className="universal-add"><Plus size={20} /></button>
         <label htmlFor="home-universal-input" className="sr-only">Your thought or question</label>
-        <input id="home-universal-input" ref={inputRef} type="text" value={inputVal}
+        <textarea id="home-universal-input" ref={inputRef} rows={2} value={inputVal}
           onChange={(event) => setInputVal(event.target.value)} onKeyDown={handleKeyDown}
-          placeholder="Ask, research, capture or plan…" aria-describedby="universal-key-hint" />
-        <button type="submit" disabled={isLoading || isAdaptiveStreaming || !inputVal.trim()}
+          placeholder={currentMode === 'capture' ? 'Save a thought in your own words…' : currentMode === 'research' ? 'What would you like to investigate?' : currentMode === 'plan' ? 'What would you like to achieve?' : 'What would you like to draft?'} aria-describedby="universal-key-hint" />
+        <button type="submit" disabled={!ready || isLoading || isAdaptiveStreaming || !inputVal.trim()}
           aria-label="Submit input" className="universal-submit">
           {isLoading ? <LoaderCircle size={20} className="animate-spin" /> : <ArrowUp size={22} />}
         </button>
       </form>
-      <span id="universal-key-hint" className="sr-only">Enter to submit. Tab to switch modes. Escape to move to mode controls; Shift Tab to leave the input.</span>
+      <span id="universal-key-hint" className="sr-only">Enter to submit. Tab to switch modes. Escape to move to mode controls; Shift Tab to leave the input. Shift Enter for a new line.</span>
 
+      {currentMode !== 'capture' && !ready && <p className="workflow-setup-notice" role="status">{workflows.loading ? 'Loading workflow settings…' : workflows.error ? 'Workflow settings are unavailable.' : !workflowEnabled ? 'Enable this workflow in Settings to continue.' : 'Choose an available model in Settings to continue.'} <button type="button" onClick={openWorkflowSettings}>Open Settings</button></p>}
       <div className="universal-controls">
         <div className="universal-modes" role="group" aria-label="Input mode">
           {modes.map(({ mode, label, icon: Icon }, index) => (
             <button key={mode} type="button" data-testid={`mode-btn-${mode}`}
-              aria-pressed={currentMode === mode} className="universal-mode"
+              aria-pressed={currentMode === mode} data-unavailable={mode !== 'capture' && !workflows.settings[mode === 'act' ? 'draft' : mode].enabled} className="universal-mode"
               onClick={() => { setCurrentMode(mode); inputRef.current?.focus(); }}
               onKeyDown={(event) => {
                 if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
@@ -418,27 +439,27 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
               }}><Icon size={16} /><span>{label}</span></button>
           ))}
         </div>
-        <div className="universal-options">
+        {currentMode !== 'capture' && <div className="universal-options">
           <div className="universal-search">
             <button type="button" data-testid="toggle-web-search" disabled={isUnsupported}
-              aria-pressed={webSearchEnabled && !isUnsupported}
+              aria-label="Web search" aria-pressed={webSearchEnabled && !isUnsupported}
               onClick={() => { if (!isUnsupported) setWebSearchEnabled((enabled) => !enabled); }}
               title={isUnsupported ? 'Web search is disabled because the selected model is offline/unsupported.' : webSearchEnabled ? 'Web search is enabled' : 'Web search is disabled'}>
-              <Globe size={16} /><span>Web Search</span>
+              <Globe size={16} /><span>Web {webSearchEnabled && !isUnsupported ? 'on' : 'off'}</span>
             </button>
             {isEngineAugmented && <span data-testid="web-search-engine-augmented-hint" title="Sthira provides web context to this model." className="universal-capability-hint"><Info size={14} /></span>}
             {isUnsupported && <span data-testid="web-search-unsupported-hint" className="universal-capability-hint">Offline</span>}
           </div>
           <div className="universal-model" ref={dropdownRef}>
-            <span className="universal-model-label">Model</span>
             <button type="button" data-testid="home-model-selector" onClick={handleToggleModelDropdown}
+              aria-label={selectedModel ? `Choose model: ${modelChipLabel}` : 'Select a model'}
               aria-expanded={isModelDropdownOpen} aria-controls="home-model-options"
               title={selectedModel ? `Switch model: ${modelChipLabel}` : 'Select a model or configure providers'} className="universal-model-trigger">
               <Cpu size={16} /><span>{modelChipLabel}</span><ChevronDown size={14} />
             </button>
             {isModelDropdownOpen && (
               <div id="home-model-options" className="universal-model-options sthira-popover" aria-label="Available models">
-                <div className="universal-model-heading">Available models</div>
+                <div className="universal-model-heading">Model for this session<span>{modelChipLabel}</span></div>
                 {catalog.length === 0 && <p className="universal-model-empty">No models configured. Capture works without a model.</p>}
                 {catalog.map((provider) => {
                   const enabledModels = provider.is_enabled ? provider.models.filter((model) => model.is_enabled) : [];
@@ -446,7 +467,7 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
                     <p>{getProviderIcon(provider.provider_type, provider.id)} {provider.display_name}</p>
                     {enabledModels.length === 0 ? <span className="universal-model-empty">No enabled models</span> : enabledModels.map((model) => (
                       <button type="button" key={model.id} aria-pressed={selectedModel?.id === model.id}
-                        onClick={() => { setSelectedModel(model); setIsModelDropdownOpen(false); dropdownRef.current?.querySelector('button')?.focus(); }}>
+                        onClick={() => { sessionModels.current[currentMode] = model.id; setSelectedModel(model); setIsModelDropdownOpen(false); dropdownRef.current?.querySelector('button')?.focus(); }}>
                         <span className="universal-model-name"><span>{model.display_name || model.model_identifier}</span><small>{model.model_identifier}</small></span>
                         <WebSearchCapabilityBadge capability={model.web_search_capability} />
                         {selectedModel?.id === model.id && <Check size={16} />}
@@ -454,16 +475,17 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
                     ))}
                   </div>;
                 })}
+                {(currentMode === 'plan' || currentMode === 'research') && (
+                  <button type="button" onClick={handleLiveAdaptiveStream} disabled={!ready || isLoading || isAdaptiveStreaming || !inputVal.trim()} className="universal-live" title="Preview a live formatted response">
+                    <Sparkles size={15} /> {isAdaptiveStreaming ? 'Streaming…' : 'Live Stream'}
+                  </button>
+                )}
                 {onOpenSettings && <button type="button" className="universal-manage-models" onClick={() => { setIsModelDropdownOpen(false); onOpenSettings(); }}>Connect Providers &amp; Fetch Models <Plus size={16} /></button>}
               </div>
             )}
           </div>
-          {(currentMode === 'plan' || currentMode === 'research') && (
-            <button type="button" onClick={handleLiveAdaptiveStream} disabled={isLoading || isAdaptiveStreaming || !inputVal.trim()} className="universal-live" title="Preview a live adaptive stream with interactive widgets">
-              <Sparkles size={15} /> {isAdaptiveStreaming ? 'Streaming…' : 'Live Stream'}
-            </button>
-          )}
-        </div>
+
+        </div>}
       </div>
 
       {/* Status Notice */}
@@ -644,13 +666,13 @@ export const UniversalInputBar: React.FC<UniversalInputBarProps> = ({
         </div>
       )}
 
-      {/* Live Adaptive Generative UI Stream Preview */}
+      {/* Live Live response Preview */}
       {hasStreamOutput && (
         <div className="mt-4 pt-4 border-t border-[#ECE9E0] bg-[#FAF8F3] -mx-6 -mb-6 p-6 rounded-b-2xl animate-in fade-in space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-[#282C25] text-white text-[10px] font-bold uppercase tracking-wider">
-                Adaptive Generative UI Stream
+                Live response
               </span>
               <span className="text-xs font-semibold text-[#1E201C]">
                 {currentMode.toUpperCase()} STREAM

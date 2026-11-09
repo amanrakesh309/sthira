@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -24,6 +24,8 @@ import {
   Sprout,
   HardDrive,
   ArrowUpRight,
+  Info,
+  X,
 } from 'lucide-react';
 import {
   getWorkspaceTree,
@@ -36,16 +38,21 @@ import {
   renameArtifact,
   getSidebarItems,
   togglePin,
+  getProviderCatalog,
 } from '../api/ipc';
 import { ProjectDeletionModal } from './ProjectDeletionModal';
 import { AddToProjectModal } from './AddToProjectModal';
 import { PageActionMenu } from './PageActionMenu';
 import { ThemeToggle } from './ThemeToggle';
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import { isWorkflowReady, openWorkflowSettings } from '../api/workflowSettings';
 import type {
   WorkspaceTree,
   ObjectType,
   SidebarItemsResponse,
   WorkspaceIndexTab,
+  ProviderEntry,
+  ExplorePlanTab,
 } from '../types/sthira';
 
 interface LeftSidebarProps {
@@ -67,9 +74,11 @@ interface LeftSidebarProps {
   onNavigateGraph: () => void;
   onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
   /** Opens the Explore & Plan tabbed workspace in the center workspace. */
-  onNavigateExplorePlan?: () => void;
+  onNavigateExplorePlan?: (tab?: ExplorePlanTab) => void;
   /** Backward-compatible alias for onNavigateExplorePlan. */
   onNavigateScheduledTopics?: () => void;
+  /** Optional catalog providers list (e.g. for testing or controlled injection). */
+  providers?: ProviderEntry[];
   onOpenProject: (projectId: string) => void;
   onOpenArtifact: (artifactId: string, projectId?: string | null) => void;
   onOpenCanvas: (canvasId?: string, projectId?: string) => void;
@@ -98,6 +107,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onNavigateWorkspaceIndex,
   onNavigateExplorePlan,
   onNavigateScheduledTopics,
+  providers: providersProp,
   onOpenProject,
   onOpenArtifact,
   onOpenCanvas,
@@ -113,6 +123,103 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   realtimeTitleUpdate,
   onArtifactRenamed,
 }) => {
+  const workflows = useWorkflowSettings();
+  const [catalog, setCatalog] = useState<ProviderEntry[]>(providersProp || []);
+  const [catalogLoaded, setCatalogLoaded] = useState(providersProp !== undefined);
+  const [catalogError, setCatalogError] = useState<unknown>(null);
+
+  useEffect(() => {
+    if (providersProp !== undefined) {
+      setCatalog(providersProp);
+      setCatalogLoaded(true);
+      return;
+    }
+    let active = true;
+    const fetchCatalog = () => {
+      getProviderCatalog()
+        .then((data) => {
+          if (active) {
+            setCatalog(data);
+            setCatalogLoaded(true);
+            setCatalogError(null);
+          }
+        })
+        .catch((err) => {
+          if (active) {
+            setCatalogError(err);
+            setCatalogLoaded(true);
+          }
+        });
+    };
+    fetchCatalog();
+    window.addEventListener('sthira:catalog-changed', fetchCatalog);
+    return () => {
+      active = false;
+      window.removeEventListener('sthira:catalog-changed', fetchCatalog);
+    };
+  }, [providersProp]);
+
+  const isConfigLoading = workflows.loading || !catalogLoaded;
+  const configError = workflows.error || catalogError;
+  const researchReady = isWorkflowReady(
+    workflows.settings.research,
+    catalog,
+    isConfigLoading,
+    configError
+  );
+  const planReady = isWorkflowReady(
+    workflows.settings.plan,
+    catalog,
+    isConfigLoading,
+    configError
+  );
+  const explorePlanAvailable = researchReady || planReady;
+
+  const handleExplorePlanClick = () => {
+    if (!explorePlanAvailable) return;
+    const targetTab: ExplorePlanTab = researchReady ? 'research' : 'plan';
+    if (onNavigateExplorePlan) {
+      onNavigateExplorePlan(targetTab);
+    } else {
+      onNavigateScheduledTopics?.();
+    }
+  };
+
+  const [isWorkflowInfoPinned, setIsWorkflowInfoPinned] = useState(false);
+  const [isWorkflowInfoHovered, setIsWorkflowInfoHovered] = useState(false);
+  const showWorkflowInfoPopover = isWorkflowInfoPinned || isWorkflowInfoHovered;
+  const workflowInfoRef = useRef<HTMLDivElement>(null);
+  const collapsedWorkflowInfoRef = useRef<HTMLDivElement>(null);
+
+  const closeWorkflowInfoPopover = () => {
+    setIsWorkflowInfoPinned(false);
+    setIsWorkflowInfoHovered(false);
+  };
+
+  useEffect(() => {
+    if (!showWorkflowInfoPopover) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        (workflowInfoRef.current && workflowInfoRef.current.contains(target)) ||
+        (collapsedWorkflowInfoRef.current && collapsedWorkflowInfoRef.current.contains(target))
+      ) {
+        return;
+      }
+      closeWorkflowInfoPopover();
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeWorkflowInfoPopover();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showWorkflowInfoPopover]);
   const [tree, setTree] = useState<WorkspaceTree>({
     projects: [],
     unassociated_pages: [],
@@ -435,25 +542,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <Search className="w-4 h-4" />
           </button>
 
-          {/* Graph Trigger */}
-          <button
-            type="button"
-            data-testid="nav-knowledge-graph-collapsed"
-            aria-current={currentView === 'graph' ? 'page' : undefined}
-            onClick={onNavigateGraph}
-            title="Knowledge Graph"
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
-              currentView === 'graph'
-                ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
-                : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
-            }`}
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
-
-          <button type="button" data-testid="nav-canvas-collapsed" aria-current={currentView === 'canvas' ? 'page' : undefined} onClick={() => onOpenCanvas()} title="Spatial canvas" className="sidebar-canvas-button w-8 h-8 rounded-lg flex items-center justify-center text-sthira-text-muted hover:bg-sthira-surface-muted"><LayoutGrid className="w-4 h-4" /></button>
-
-          {/* All Files Trigger */}
+          {/* 2. All Files Trigger */}
           <button
             type="button"
             data-testid="nav-workspace-index-collapsed"
@@ -469,20 +558,126 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <Folder className="w-4 h-4" />
           </button>
 
-          {/* Explore & Plan Trigger */}
+          {/* 3. Explore & Plan Trigger */}
+          {explorePlanAvailable ? (
+            <button
+              type="button"
+              data-testid="nav-explore-plan-collapsed"
+              aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
+              onClick={handleExplorePlanClick}
+              title="🧭 Explore & Plan"
+              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+                currentView === 'explore_plan' || currentView === 'scheduled_topics'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
+                  : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <Compass className="w-4 h-4" />
+            </button>
+          ) : (
+            <div
+              ref={collapsedWorkflowInfoRef}
+              className="relative flex items-center justify-center"
+              data-testid="sidebar-explore-plan-collapsed-disabled-container"
+              onMouseLeave={() => setIsWorkflowInfoHovered(false)}
+            >
+              <button
+                type="button"
+                data-testid="nav-explore-plan-collapsed"
+                disabled
+                aria-disabled="true"
+                tabIndex={-1}
+                title="Enable this workflow and select a model in Settings."
+                className="w-8 h-8 rounded-lg flex items-center justify-center opacity-50 cursor-not-allowed text-sthira-text-muted select-none"
+              >
+                <Compass className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                data-testid="sidebar-setup-ai-collapsed-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsWorkflowInfoPinned((v) => !v);
+                }}
+                onMouseEnter={() => setIsWorkflowInfoHovered(true)}
+                title="Workflow info: Click or hover to view details"
+                aria-label="Workflow info: Enable this workflow and select a model in Settings."
+                aria-expanded={showWorkflowInfoPopover}
+                className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sthira-surface border border-sthira-border flex items-center justify-center text-sthira-text-subtle hover:text-sthira-primary hover:border-sthira-primary transition-colors cursor-pointer shadow-xs"
+              >
+                <Info className="w-2.5 h-2.5" />
+              </button>
+
+              {/* Collapsed Information Popover */}
+              {showWorkflowInfoPopover && (
+                <div
+                  data-testid="sidebar-workflow-info-popover-collapsed"
+                  className="sthira-popover absolute left-full ml-3 top-0 z-50 w-64 p-3.5 bg-sthira-surface border border-sthira-border rounded-xl shadow-xl text-xs font-sans text-left animate-in fade-in zoom-in-95 duration-100"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <h4 className="font-semibold text-sthira-text flex items-center gap-1.5 text-xs">
+                      <Compass className="w-3.5 h-3.5 text-sthira-primary shrink-0" />
+                      <span>Explore &amp; Plan unavailable</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={closeWorkflowInfoPopover}
+                      aria-label="Close info"
+                      className="text-sthira-text-muted hover:text-sthira-text p-0.5 rounded cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-sthira-text-muted leading-relaxed mb-3">
+                    This workflow is currently disabled. To use Research and Plan, enable the workflow in Settings and connect an active AI model.
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="sidebar-open-settings-popover-collapsed-btn"
+                    onClick={() => {
+                      closeWorkflowInfoPopover();
+                      openWorkflowSettings();
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-sthira-primary text-sthira-on-primary font-semibold text-xs hover:opacity-90 transition-opacity cursor-pointer shadow-xs"
+                  >
+                    <span>Open Settings</span>
+                    <ArrowUpRight className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 4. Graph Trigger */}
           <button
             type="button"
-            data-testid="nav-explore-plan-collapsed"
-            aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
-            onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
-            title="🧭 Explore & Plan"
+            data-testid="nav-knowledge-graph-collapsed"
+            aria-current={currentView === 'graph' ? 'page' : undefined}
+            onClick={onNavigateGraph}
+            title="Knowledge Graph"
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
-              currentView === 'explore_plan' || currentView === 'scheduled_topics'
+              currentView === 'graph'
                 ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
                 : 'text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted'
             }`}
           >
-            <Compass className="w-4 h-4" />
+            <Share2 className="w-4 h-4" />
+          </button>
+
+          {/* 5. Canvas Trigger */}
+          <button
+            type="button"
+            data-testid="nav-canvas-collapsed"
+            aria-current={currentView === 'canvas' ? 'page' : undefined}
+            onClick={() => onOpenCanvas()}
+            title="Spatial canvas"
+            className={`sidebar-canvas-button w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+              currentView === 'canvas'
+                ? 'bg-sthira-primary text-sthira-on-primary font-semibold'
+                : 'text-sthira-text-muted hover:bg-sthira-surface-muted'
+            }`}
+          >
+            <LayoutGrid className="w-4 h-4" />
           </button>
           <span
             data-testid="nav-scheduled-feeds-collapsed"
@@ -566,6 +761,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </kbd>
         </button>
 
+        {/* 1. Home */}
         <button
           type="button"
           data-testid="nav-home"
@@ -581,23 +777,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <span>Home</span>
         </button>
 
-        <button
-          type="button"
-          data-testid="nav-knowledge-graph"
-          aria-current={currentView === 'graph' ? 'page' : undefined}
-          onClick={onNavigateGraph}
-          className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
-            currentView === 'graph'
-              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
-              : 'text-sthira-text hover:bg-sthira-surface-muted'
-          }`}
-        >
-          <Share2 className="w-4 h-4" />
-          <span>Knowledge Graph</span>
-        </button>
-
-        <button type="button" data-testid="nav-canvas" aria-current={currentView === 'canvas' ? 'page' : undefined} onClick={() => onOpenCanvas()} className="sidebar-nav-row sidebar-canvas-button w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sthira-text hover:bg-sthira-surface-muted"><LayoutGrid className="w-4 h-4" /><span>Spatial canvas</span></button>
-
+        {/* 2. All Files */}
         <button
           type="button"
           data-testid="nav-workspace-index"
@@ -614,20 +794,136 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <span>All Files</span>
         </button>
 
+        {/* 3. Explore & Plan */}
+        {explorePlanAvailable ? (
+          <button
+            type="button"
+            data-testid="nav-explore-plan"
+            aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
+            onClick={handleExplorePlanClick}
+            title="🧭 Explore & Plan — unified research, planning, trackers, and digests"
+            className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+              currentView === 'explore_plan' || currentView === 'scheduled_topics'
+                ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                : 'text-sthira-text hover:bg-sthira-surface-muted'
+            }`}
+          >
+            <Compass className="w-4 h-4" />
+            <span>Explore &amp; Plan</span>
+          </button>
+        ) : (
+          <div
+            ref={workflowInfoRef}
+            data-testid="sidebar-explore-plan-disabled-container"
+            className="relative w-full"
+            onMouseLeave={() => setIsWorkflowInfoHovered(false)}
+          >
+            <div
+              className="sidebar-nav-row w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-sthira-text-muted select-none group"
+            >
+              <button
+                type="button"
+                data-testid="nav-explore-plan"
+                disabled
+                aria-disabled="true"
+                tabIndex={-1}
+                aria-describedby="sidebar-explore-plan-disabled-hint"
+                title="Enable this workflow and select a model in Settings."
+                className="flex items-center gap-2.5 cursor-not-allowed text-sthira-text-muted opacity-50 select-none flex-1 text-left bg-transparent border-0 p-0"
+              >
+                <Compass className="w-4 h-4 shrink-0" />
+                <span>Explore &amp; Plan</span>
+              </button>
+              <span id="sidebar-explore-plan-disabled-hint" className="sr-only">
+                Enable this workflow and select a model in Settings.
+              </span>
+              <button
+                type="button"
+                data-testid="sidebar-setup-ai-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsWorkflowInfoPinned((v) => !v);
+                }}
+                onMouseEnter={() => setIsWorkflowInfoHovered(true)}
+                title="Workflow info: Click or hover to view details"
+                aria-label="Workflow info: Enable this workflow and select a model in Settings."
+                aria-expanded={showWorkflowInfoPopover}
+                className="p-1 -mr-1 rounded-md text-sthira-text-subtle hover:text-sthira-primary hover:bg-sthira-surface-muted transition-colors cursor-pointer shrink-0"
+              >
+                <Info className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Information Popover */}
+            {showWorkflowInfoPopover && (
+              <div
+                data-testid="sidebar-workflow-info-popover"
+                className="sthira-popover absolute left-2 right-2 top-full mt-1 z-50 p-3.5 bg-sthira-surface border border-sthira-border rounded-xl shadow-xl text-xs font-sans animate-in fade-in zoom-in-95 duration-100"
+              >
+                <div className="flex items-start justify-between gap-2 mb-1.5">
+                  <h4 className="font-semibold text-sthira-text flex items-center gap-1.5 text-xs">
+                    <Compass className="w-3.5 h-3.5 text-sthira-primary shrink-0" />
+                    <span>Explore &amp; Plan unavailable</span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={closeWorkflowInfoPopover}
+                    aria-label="Close info"
+                    className="text-sthira-text-muted hover:text-sthira-text p-0.5 rounded cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-sthira-text-muted leading-relaxed mb-3">
+                  This workflow is currently disabled. To use Research and Plan, enable the workflow in Settings and connect an active AI model.
+                </p>
+                <button
+                  type="button"
+                  data-testid="sidebar-open-settings-popover-btn"
+                  onClick={() => {
+                    closeWorkflowInfoPopover();
+                    openWorkflowSettings();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-sthira-primary text-sthira-on-primary font-semibold text-xs hover:opacity-90 transition-opacity cursor-pointer shadow-xs"
+                >
+                  <span>Open Settings</span>
+                  <ArrowUpRight className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 4. Knowledge Graph */}
         <button
           type="button"
-          data-testid="nav-explore-plan"
-          aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
-          onClick={() => (onNavigateExplorePlan ? onNavigateExplorePlan() : onNavigateScheduledTopics?.())}
-          title="🧭 Explore & Plan — unified research, planning, trackers, and digests"
+          data-testid="nav-knowledge-graph"
+          aria-current={currentView === 'graph' ? 'page' : undefined}
+          onClick={onNavigateGraph}
           className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
-            currentView === 'explore_plan' || currentView === 'scheduled_topics'
+            currentView === 'graph'
               ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
               : 'text-sthira-text hover:bg-sthira-surface-muted'
           }`}
         >
-          <Compass className="w-4 h-4" />
-          <span>Explore &amp; Plan</span>
+          <Share2 className="w-4 h-4" />
+          <span>Knowledge Graph</span>
+        </button>
+
+        {/* 5. Canvas */}
+        <button
+          type="button"
+          data-testid="nav-canvas"
+          aria-current={currentView === 'canvas' ? 'page' : undefined}
+          onClick={() => onOpenCanvas()}
+          className={`sidebar-nav-row sidebar-canvas-button w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+            currentView === 'canvas'
+              ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+              : 'text-sthira-text hover:bg-sthira-surface-muted'
+          }`}
+        >
+          <LayoutGrid className="w-4 h-4" />
+          <span>Spatial canvas</span>
         </button>
         {/* Backward-compatibility alias for tests referencing nav-scheduled-feeds */}
         <span
@@ -635,6 +931,33 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           className="hidden"
           onClick={() => (onNavigateScheduledTopics ? onNavigateScheduledTopics() : onNavigateExplorePlan?.())}
         />
+        {/* Granular workflow navigation aliases for testing and accessibility */}
+        <button
+          type="button"
+          data-testid="nav-research"
+          className="sr-only"
+          disabled={!researchReady}
+          aria-disabled={!researchReady ? 'true' : undefined}
+          title={!researchReady ? 'Enable this workflow and select a model in Settings.' : undefined}
+          onClick={() => {
+            if (researchReady) onNavigateExplorePlan ? onNavigateExplorePlan('research') : onNavigateScheduledTopics?.();
+          }}
+        >
+          Research
+        </button>
+        <button
+          type="button"
+          data-testid="nav-plan"
+          className="sr-only"
+          disabled={!planReady}
+          aria-disabled={!planReady ? 'true' : undefined}
+          title={!planReady ? 'Enable this workflow and select a model in Settings.' : undefined}
+          onClick={() => {
+            if (planReady) onNavigateExplorePlan ? onNavigateExplorePlan('plan') : onNavigateScheduledTopics?.();
+          }}
+        >
+          Plan
+        </button>
       </div>
 
       {/* Tree Navigation Scroll Container */}
@@ -995,11 +1318,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           )}
         </div>
 
-        {/* 2. NOTES & PAGES SECTION */}
+        {/* 2. PAGES SECTION */}
         <div>
           <div className="sidebar-group-heading">
             <span className="text-[11px] font-bold text-sthira-text-subtle uppercase tracking-wider">
-              Notes &amp; Pages
+              Pages
             </span>
             <div className="flex items-center gap-1.5">
               <button
@@ -1014,7 +1337,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 type="button"
                 data-testid="btn-new-loose-note"
                 onClick={handleCreateLooseNote}
-                title="New Note"
+                title="New Page"
                 className="p-0.5 rounded hover:bg-sthira-surface-muted text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -1024,7 +1347,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
           {((sidebarItems?.notes?.length ?? 0) === 0 && (tree?.unassociated_pages?.length ?? 0) === 0) ? (
             <div className="px-2 py-2 text-[11px] text-sthira-text-subtle italic">
-              No notes yet
+              No pages yet
             </div>
           ) : (
             <div className="space-y-0.5">

@@ -1,15 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import { openWorkflowSettings } from '../api/workflowSettings';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, RefreshCw, Globe, Loader2, Sparkles } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
-import { getProviderCatalog, refineArtifact } from '../api/ipc';
+import { getProviderCatalog, refineArtifact, cancelRequest } from '../api/ipc';
 import type { ProviderModelEntry, ProviderEntry } from '../types/sthira';
+
+export interface DocumentDraftSnapshot {
+  content: string;
+  title: string;
+}
 
 export interface RefineArtifactModalProps {
   isOpen: boolean;
   onClose: () => void;
   artifactId: string;
   artifactTitle: string;
-  onRefined: (newContent: string) => void;
+  baseContent?: string;
+  baseTitle?: string;
+  onRefined: (newContent: string, targetArtifactId?: string, baseSnapshot?: DocumentDraftSnapshot) => void;
   models?: ProviderModelEntry[];
 }
 
@@ -18,9 +27,37 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
   onClose,
   artifactId,
   artifactTitle,
+  baseContent,
+  baseTitle,
   onRefined,
   models: propModels,
 }) => {
+  const workflows = useWorkflowSettings();
+  const explicitModel = useRef(false);
+  const activeRequestIdRef = useRef<string | null>(null);
+  const cancelInFlightRef = useRef<string | null>(null);
+
+  const requestCancellation = async (reqId: string) => {
+    if (cancelInFlightRef.current === reqId) return;
+    cancelInFlightRef.current = reqId;
+    try {
+      const accepted = await cancelRequest(reqId);
+      if (accepted) {
+        if (activeRequestIdRef.current === reqId) {
+          activeRequestIdRef.current = null;
+        }
+      }
+    } catch {
+      if (activeRequestIdRef.current === reqId) {
+        activeRequestIdRef.current = null;
+      }
+    } finally {
+      if (cancelInFlightRef.current === reqId) {
+        cancelInFlightRef.current = null;
+      }
+    }
+  };
+  const draftEnabled = !workflows.loading && !workflows.error && workflows.settings.draft.enabled;
   const [critique, setCritique] = useState('');
   const [webSearch, setWebSearch] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
@@ -29,9 +66,23 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Invalidate and cancel any in-flight request when the active artifact changes or modal unmounts
+  useEffect(() => {
+    return () => {
+      const req = activeRequestIdRef.current;
+      if (req) {
+        activeRequestIdRef.current = null;
+        void cancelRequest(req);
+      }
+    };
+  }, [artifactId]);
+
   useEffect(() => {
     if (!isOpen) {
-      setCritique('');
+      const req = activeRequestIdRef.current;
+      if (req) {
+        void requestCancellation(req);
+      }
       setError(null);
       setIsLoading(false);
       return;
@@ -39,9 +90,9 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
 
     if (propModels && propModels.length > 0) {
       setAvailableModels(propModels);
-      const def = propModels.find((m) => m.is_default) || propModels[0];
+      const def = propModels.find((m) => m.is_default);
       if (def && !selectedModelId) {
-        setSelectedModelId(def.model_identifier || def.id);
+        setSelectedModelId(def.id);
       }
     } else {
       getProviderCatalog()
@@ -56,37 +107,67 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
             }
           }
           setAvailableModels(list);
-          const def = list.find((m) => m.is_default) || list[0];
+          const def = list.find((m) => m.is_default);
           if (def && !selectedModelId) {
-            setSelectedModelId(def.model_identifier || def.id);
+            setSelectedModelId(def.id);
           }
         })
         .catch(() => {});
     }
   }, [isOpen, propModels, selectedModelId]);
 
+  useEffect(() => {
+    if (!isOpen) { explicitModel.current = false; return; }
+    if (!explicitModel.current && !workflows.loading) setSelectedModelId(workflows.settings.draft.model_id || availableModels.find(model => model.is_default)?.id || null);
+  }, [isOpen, availableModels, workflows.settings.draft.model_id, workflows.loading]);
+
   if (!isOpen) return null;
+
+  const handleCancel = () => {
+    const reqToCancel = activeRequestIdRef.current;
+    if (reqToCancel) {
+      void requestCancellation(reqToCancel);
+    }
+    setIsLoading(false);
+    onClose();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!critique.trim() || isLoading) return;
+    if (!draftEnabled || !availableModels.some(model => model.id === selectedModelId) || !critique.trim() || isLoading) return;
 
+    const targetArtifactId = artifactId;
+    const baseSnapshot: DocumentDraftSnapshot = {
+      content: baseContent ?? '',
+      title: baseTitle ?? artifactTitle ?? '',
+    };
+    const requestId = crypto.randomUUID();
+    activeRequestIdRef.current = requestId;
     setIsLoading(true);
     setError(null);
 
     try {
       const refinedText = await refineArtifact(
-        artifactId,
+        targetArtifactId,
         critique.trim(),
         selectedModelId,
-        webSearch
+        webSearch,
+        requestId
       );
-      onRefined(refinedText);
+      if (activeRequestIdRef.current !== requestId || targetArtifactId !== artifactId) return;
+      activeRequestIdRef.current = null;
+      setIsLoading(false);
+      onRefined(refinedText, targetArtifactId, baseSnapshot);
+      setCritique('');
       onClose();
     } catch (err: any) {
+      if (activeRequestIdRef.current !== requestId) return;
       setError(typeof err === 'string' ? err : err?.message || 'Refinement failed.');
     } finally {
-      setIsLoading(false);
+      if (activeRequestIdRef.current === requestId) {
+        setIsLoading(false);
+        activeRequestIdRef.current = null;
+      }
     }
   };
 
@@ -124,7 +205,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
           <button
             type="button"
             data-testid="btn-close-refine-modal"
-            onClick={onClose}
+            onClick={handleCancel}
             className="p-1 rounded-md text-[#7D7A70] dark:text-[#9E9C93] hover:text-[#282C25] dark:hover:text-[#EDEAE2] hover:bg-[#E8E5DC] dark:hover:bg-[#2D3027] transition-colors"
           >
             <X className="w-4 h-4" />
@@ -133,6 +214,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-4">
+          {!draftEnabled && <p className="workflow-setup-notice">Enable Draft to refine this document. <button type="button" onClick={openWorkflowSettings}>Open Settings</button></p>}
           {error && (
             <div className="p-3 text-xs bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900 rounded-lg">
               {error}
@@ -168,7 +250,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
               <ModelSelector
                 selectedModel={selectedModel}
                 selectedModelId={selectedModelId}
-                onSelectModel={(m) => setSelectedModelId(m.model_identifier || m.id)}
+                onSelectModel={(m) => { explicitModel.current = true; setSelectedModelId(m.id); }}
                 models={availableModels}
                 catalog={catalog}
                 size="sm"
@@ -203,8 +285,8 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E8E5DC] dark:border-[#2D3027]">
             <button
               type="button"
-              onClick={onClose}
-              disabled={isLoading}
+              data-testid="btn-cancel-refine-modal"
+              onClick={handleCancel}
               className="px-3 py-1.5 text-xs font-medium rounded-lg text-[#6E6D66] dark:text-[#9E9C93] hover:text-[#282C25] dark:hover:text-[#EDEAE2] hover:bg-[#E8E5DC] dark:hover:bg-[#2D3027] transition-colors cursor-pointer"
             >
               Cancel
@@ -212,7 +294,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
             <button
               type="submit"
               data-testid="btn-run-refinement"
-              disabled={!critique.trim() || isLoading}
+              disabled={!draftEnabled || !availableModels.some(model => model.id === selectedModelId) || !critique.trim() || isLoading}
               className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg text-white shadow-xs transition-all cursor-pointer ${
                 !critique.trim() || isLoading
                   ? 'bg-emerald-600/50 cursor-not-allowed opacity-60'

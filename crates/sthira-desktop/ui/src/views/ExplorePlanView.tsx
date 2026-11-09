@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import {
+  openWorkflowSettings,
+  isWorkflowReady,
+  resolveWorkflowModel,
+  getEnabledModels,
+} from '../api/workflowSettings';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Search,
   ClipboardList,
@@ -41,6 +48,7 @@ import {
   type ScheduledTopicCadence,
   type ScheduledTopicType,
   type ProviderModelEntry,
+  type ProviderEntry,
   type WebSearchMode,
   type WorkspaceIndexItem,
   type SynthesisTemplateView,
@@ -54,12 +62,14 @@ export interface ExplorePlanViewProps {
     query: string,
     mode: WebSearchMode,
     projectId?: string | null,
-    templateId?: string | null
+    templateId?: string | null,
+    modelId?: string | null
   ) => Promise<any>;
   onStartPlan?: (
     goal: string,
     projectId?: string | null,
-    templateId?: string | null
+    templateId?: string | null,
+    modelId?: string | null
   ) => Promise<any>;
   onBack?: () => void;
   onWorkspaceMutated?: () => void;
@@ -162,6 +172,9 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   // Tab 1: Research state
   const [researchQuery, setResearchQuery] = useState('');
   const [webSearchMode, setWebSearchMode] = useState<WebSearchMode>('auto');
+  const workflows = useWorkflowSettings();
+  const researchModelChosen = useRef(false);
+  const planModelChosen = useRef(false);
   const [selectedResearchModel, setSelectedResearchModel] = useState<string>('');
   const [selectedResearchProject, setSelectedResearchProject] = useState<string | null>(null);
   const [selectedResearchTemplate, setSelectedResearchTemplate] = useState<string>('research-comparative-tech');
@@ -198,8 +211,60 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
 
   // Shared data
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [catalog, setCatalog] = useState<ProviderEntry[]>([]);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [catalogError, setCatalogError] = useState<unknown>(null);
   const [models, setModels] = useState<ProviderModelEntry[]>([]);
   const [notes, setNotes] = useState<WorkspaceIndexItem[]>([]);
+
+  const isConfigLoading = workflows.loading || !catalogLoaded;
+  const configError = workflows.error || catalogError;
+  const researchReady = isWorkflowReady(
+    workflows.settings.research,
+    catalog,
+    isConfigLoading,
+    configError
+  );
+  const planReady = isWorkflowReady(
+    workflows.settings.plan,
+    catalog,
+    isConfigLoading,
+    configError
+  );
+
+  useEffect(() => {
+    if (!catalog.length || workflows.loading) return;
+    const resolvedResearch = resolveWorkflowModel(workflows.settings.research, catalog);
+    const resolvedPlan = resolveWorkflowModel(workflows.settings.plan, catalog);
+    if (!researchModelChosen.current) {
+      setSelectedResearchModel(resolvedResearch ? resolvedResearch.id : '');
+    }
+    if (!planModelChosen.current) {
+      setSelectedPlanModel(resolvedPlan ? resolvedPlan.id : '');
+    }
+  }, [catalog, workflows.settings, workflows.loading]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void getProviderCatalog()
+        .then((cat) => {
+          if (!active) return;
+          setCatalog(cat);
+          setCatalogLoaded(true);
+          setCatalogError(null);
+          setModels(getEnabledModels(cat));
+        })
+        .catch((err) => {
+          if (active) setCatalogError(err);
+        });
+    };
+    window.addEventListener('sthira:catalog-changed', refresh);
+    return () => {
+      active = false;
+      window.removeEventListener('sthira:catalog-changed', refresh);
+    };
+  }, []);
 
   // Web search capability for selected research model
   const activeResearchModel = useMemo(() => {
@@ -220,12 +285,27 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
     }
   }, [isResearchUnsupported, webSearchMode]);
 
-  // Sync initial tab when changed from props
+  // Sync initial tab when changed from props or when readiness changes
   useEffect(() => {
     if (initialTab) {
-      setActiveTab(initialTab);
+      if (initialTab === 'research' && !researchReady && planReady) {
+        setActiveTab('plan');
+      } else if (initialTab === 'plan' && !planReady && researchReady) {
+        setActiveTab('research');
+      } else {
+        setActiveTab(initialTab);
+      }
     }
-  }, [initialTab]);
+  }, [initialTab, researchReady, planReady]);
+
+  // Auto-switch away from an unavailable workflow tab
+  useEffect(() => {
+    if (activeTab === 'research' && !researchReady && planReady) {
+      setActiveTab('plan');
+    } else if (activeTab === 'plan' && !planReady && researchReady) {
+      setActiveTab('research');
+    }
+  }, [activeTab, researchReady, planReady]);
 
   // Load workspace data, topics, and models
   const loadData = useCallback(async () => {
@@ -250,21 +330,19 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
         if (defPlan) setSelectedPlanTemplate(defPlan.id);
       }
 
-      const availableModels: ProviderModelEntry[] = [];
-      for (const provider of catalogRes) {
-        if (provider.is_enabled && provider.models) {
-          for (const m of provider.models) {
-            if (m.is_enabled) {
-              availableModels.push(m);
-            }
-          }
-        }
-      }
+      setCatalog(catalogRes);
+      setCatalogLoaded(true);
+      setCatalogError(null);
+      const availableModels = getEnabledModels(catalogRes);
       setModels(availableModels);
-      if (availableModels.length > 0) {
-        const def = availableModels.find((m) => m.is_default) || availableModels[0];
-        if (!selectedResearchModel) setSelectedResearchModel(def.model_identifier);
-        if (!selectedPlanModel) setSelectedPlanModel(def.model_identifier);
+
+      const resolvedResearch = resolveWorkflowModel(workflows.settings.research, catalogRes);
+      const resolvedPlan = resolveWorkflowModel(workflows.settings.plan, catalogRes);
+      if (!researchModelChosen.current) {
+        setSelectedResearchModel(resolvedResearch ? resolvedResearch.id : '');
+      }
+      if (!planModelChosen.current) {
+        setSelectedPlanModel(resolvedPlan ? resolvedPlan.id : '');
       }
 
       // Combine topics
@@ -275,7 +353,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
     } catch (err) {
       console.error('Failed to load explore & plan workspace data', err);
     }
-  }, [selectedResearchModel, selectedPlanModel]);
+  }, [workflows.settings]);
 
   useEffect(() => {
     loadData();
@@ -394,11 +472,11 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   // Submit Research
   const handleSubmitResearch = async () => {
     const q = researchQuery.trim();
-    if (!q || isSubmittingResearch) return;
+    if (!q || isSubmittingResearch || !researchReady || !models.some(model => model.id === selectedResearchModel)) return;
     setIsSubmittingResearch(true);
     try {
       if (onStartResearch) {
-        await onStartResearch(q, webSearchMode, selectedResearchProject, selectedResearchTemplate);
+        await onStartResearch(q, webSearchMode, selectedResearchProject, workflows.settings.research.templates_enabled ? selectedResearchTemplate : null, selectedResearchModel || undefined);
       } else {
         const artifactId = await createResearchPage(q, selectedResearchProject);
         onOpenArtifact?.(artifactId, selectedResearchProject);
@@ -413,11 +491,11 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   // Submit Plan
   const handleSubmitPlan = async () => {
     const g = planGoal.trim();
-    if (!g || isSubmittingPlan) return;
+    if (!g || isSubmittingPlan || !planReady || !models.some(model => model.id === selectedPlanModel)) return;
     setIsSubmittingPlan(true);
     try {
       if (onStartPlan) {
-        await onStartPlan(g, selectedPlanProject, selectedPlanTemplate);
+        await onStartPlan(g, selectedPlanProject, workflows.settings.plan.templates_enabled ? selectedPlanTemplate : null, selectedPlanModel || undefined);
       } else {
         const title = generateSmartGoalTitle(g);
         const draft = await createPage(selectedPlanProject, title);
@@ -502,8 +580,18 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   };
 
   const TABS = [
-    { id: 'research' as ExplorePlanTab, label: 'Research', icon: '🔍' },
-    { id: 'plan' as ExplorePlanTab, label: 'Plan', icon: '📋' },
+    {
+      id: 'research' as ExplorePlanTab,
+      label: 'Research',
+      icon: '🔍',
+      disabled: !researchReady,
+    },
+    {
+      id: 'plan' as ExplorePlanTab,
+      label: 'Plan',
+      icon: '📋',
+      disabled: !planReady,
+    },
     {
       id: 'trackers' as ExplorePlanTab,
       label: 'Trackers',
@@ -560,16 +648,24 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
           <div className="p-1 rounded-2xl bg-[var(--sthira-surface-muted)] border border-[var(--sthira-border)] inline-flex items-center gap-1">
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id;
+              const isDisabled = Boolean(tab.disabled);
               return (
                 <button
                   key={tab.id}
                   type="button"
                   data-testid={`tab-${tab.id}`}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-                    isActive
-                      ? 'bg-[var(--sthira-primary)] text-white shadow-2xs'
-                      : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)] hover:bg-white/60 dark:hover:bg-[#252820]'
+                  disabled={isDisabled}
+                  aria-disabled={isDisabled ? 'true' : undefined}
+                  title={isDisabled ? 'Enable this workflow and select a model in Settings.' : undefined}
+                  onClick={() => {
+                    if (!isDisabled) setActiveTab(tab.id);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                    isDisabled
+                      ? 'opacity-40 cursor-not-allowed text-[var(--sthira-text-muted)] select-none'
+                      : isActive
+                      ? 'bg-[var(--sthira-primary)] text-white shadow-2xs cursor-pointer'
+                      : 'text-[var(--sthira-text-muted)] hover:text-[var(--sthira-text)] hover:bg-white/60 dark:hover:bg-[#252820] cursor-pointer'
                   }`}
                 >
                   <span>
@@ -613,6 +709,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   data-testid="input-research-query"
                   rows={3}
                   value={researchQuery}
+                  disabled={!researchReady}
                   onChange={(e) => setResearchQuery(e.target.value)}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -620,8 +717,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       handleSubmitResearch();
                     }
                   }}
-                  placeholder="What would you like to research?"
-                  className="w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none"
+                  placeholder={researchReady ? "What would you like to research?" : "Enable Research and select a model in Settings."}
+                  className={`w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none ${!researchReady ? 'opacity-50 cursor-not-allowed' : ''}`}
                 />
               </div>
 
@@ -722,7 +819,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       dataTestId="select-research-model"
                       models={models}
                       selectedModelId={selectedResearchModel}
-                      onSelectModel={(m) => setSelectedResearchModel(m.model_identifier)}
+                      onSelectModel={(m) => { researchModelChosen.current = true; setSelectedResearchModel(m.id); }}
                     />
                   </div>
 
@@ -745,6 +842,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   <select
                     data-testid="select-synthesis-template"
                     value={selectedResearchTemplate}
+                    disabled={!researchReady || !workflows.settings.research.templates_enabled}
                     onChange={(e) => setSelectedResearchTemplate(e.target.value)}
                     className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                     title="Select synthesis markdown skeleton template"
@@ -763,7 +861,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                 <button
                   type="button"
                   data-testid="btn-start-research"
-                  disabled={!researchQuery.trim() || isSubmittingResearch}
+                  disabled={!researchReady || !models.some(model => model.id === selectedResearchModel) || !researchQuery.trim() || isSubmittingResearch}
                   onClick={handleSubmitResearch}
                   className="px-5 py-2 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
                 >
@@ -778,6 +876,24 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               </div>
             </div>
 
+            {!researchReady && (
+              <div
+                data-testid="research-unavailable-banner"
+                className="workflow-setup-notice p-4 rounded-xl border border-[var(--sthira-border)] bg-[var(--sthira-surface-muted)] flex items-center justify-between gap-4"
+              >
+                <p className="text-xs text-[var(--sthira-text-muted)]">
+                  Enable this workflow and select a model in Settings.
+                </p>
+                <button
+                  type="button"
+                  data-testid="btn-setup-research-ai"
+                  onClick={openWorkflowSettings}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sthira-primary/10 !text-sthira-primary hover:bg-sthira-primary hover:!text-sthira-on-primary transition-colors cursor-pointer whitespace-nowrap !no-underline !min-h-0"
+                >
+                  Check settings
+                </button>
+              </div>
+            )}
             {/* Recent Research Section */}
             <div data-testid="recent-research-section" className="space-y-4">
               <div className="flex items-center justify-between border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60 pb-2">
@@ -870,6 +986,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   data-testid="input-plan-goal"
                   rows={3}
                   value={planGoal}
+                  disabled={!planReady}
                   onChange={(e) => setPlanGoal(e.target.value)}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -877,8 +994,8 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       handleSubmitPlan();
                     }
                   }}
-                  placeholder="What project, feature, or milestone set are we planning?"
-                  className="w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none"
+                  placeholder={planReady ? "What project, feature, or milestone set are we planning?" : "Enable Plan and select a model in Settings."}
+                  className={`w-full bg-[var(--sthira-canvas)]/50 border border-[var(--sthira-border)] rounded-xl p-3.5 text-sm text-[var(--sthira-text)] placeholder:text-[var(--sthira-text-muted)] outline-none focus:border-[var(--sthira-primary)] transition-colors resize-none ${!planReady ? 'opacity-50 cursor-not-allowed' : ''}`}
                 />
               </div>
 
@@ -892,7 +1009,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                       dataTestId="select-plan-model"
                       models={models}
                       selectedModelId={selectedPlanModel}
-                      onSelectModel={(m) => setSelectedPlanModel(m.model_identifier)}
+                      onSelectModel={(m) => { planModelChosen.current = true; setSelectedPlanModel(m.id); }}
                     />
                   </div>
 
@@ -915,6 +1032,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   <select
                     data-testid="select-synthesis-template"
                     value={selectedPlanTemplate}
+                    disabled={!planReady || !workflows.settings.plan.templates_enabled}
                     onChange={(e) => setSelectedPlanTemplate(e.target.value)}
                     className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
                     title="Select synthesis markdown skeleton template"
@@ -933,7 +1051,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                 <button
                   type="button"
                   data-testid="btn-start-plan"
-                  disabled={!planGoal.trim() || isSubmittingPlan}
+                  disabled={!planReady || !models.some(model => model.id === selectedPlanModel) || !planGoal.trim() || isSubmittingPlan}
                   onClick={handleSubmitPlan}
                   className="px-5 py-2 bg-[var(--sthira-primary)] text-white hover:bg-[var(--sthira-primary-hover)] rounded-xl text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer flex items-center gap-2 shadow-2xs"
                 >
@@ -948,6 +1066,24 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               </div>
             </div>
 
+            {!planReady && (
+              <div
+                data-testid="plan-unavailable-banner"
+                className="workflow-setup-notice p-4 rounded-xl border border-[var(--sthira-border)] bg-[var(--sthira-surface-muted)] flex items-center justify-between gap-4"
+              >
+                <p className="text-xs text-[var(--sthira-text-muted)]">
+                  Enable this workflow and select a model in Settings.
+                </p>
+                <button
+                  type="button"
+                  data-testid="btn-setup-plan-ai"
+                  onClick={openWorkflowSettings}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sthira-primary/10 !text-sthira-primary hover:bg-sthira-primary hover:!text-sthira-on-primary transition-colors cursor-pointer whitespace-nowrap !no-underline !min-h-0"
+                >
+                  Check settings
+                </button>
+              </div>
+            )}
             {/* Recent Plans Section */}
             <div data-testid="recent-plans-section" className="space-y-4">
               <div className="flex items-center justify-between border-b border-[#E8E5DC]/60 dark:border-[#2C2E27]/60 pb-2">

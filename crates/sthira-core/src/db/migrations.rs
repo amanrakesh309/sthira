@@ -208,6 +208,71 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    if user_version < 13 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("document_conversations.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 13;")?;
+        tx.commit()?;
+    }
+    if user_version < 14 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("document_conversations_v14.sql"))?;
+        tx.execute_batch(include_str!("document_conversations.sql"))?;
+        tx.execute_batch("INSERT INTO document_conversations (artifact_id,mode,initial_prompt) SELECT artifact_id,mode,initial_prompt FROM document_conversations_v13;
+            INSERT INTO document_conversation_turns (id,artifact_id,user_text,reply,error,basis_content_md,proposed_content_md,proposal_state,change_set_id,created_at) SELECT id,artifact_id,user_text,reply,error,basis_content_md,proposed_content_md,proposal_state,change_set_id,created_at FROM document_conversation_turns_v13;
+            DROP TABLE document_conversation_turns_v13;
+            DROP TABLE document_conversations_v13;
+            CREATE INDEX IF NOT EXISTS idx_document_turns ON document_conversation_turns(artifact_id, created_at);
+            PRAGMA user_version = 14;")?;
+        tx.commit()?;
+    }
+    // Early v14 vaults shipped before conversation model metadata was added.
+    // Schema version alone is insufficient: inspect columns and preserve every row.
+    if user_version < 15 {
+        let tx = conn.transaction()?;
+        let columns = {
+            let mut statement = tx.prepare("PRAGMA table_info(document_conversations)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<Result<Vec<_>>>()?
+        };
+        if !columns.iter().any(|column| column == "model_id") {
+            tx.execute_batch("ALTER TABLE document_conversations ADD COLUMN model_id TEXT;")?;
+        }
+        if !columns.iter().any(|column| column == "model_name") {
+            tx.execute_batch("ALTER TABLE document_conversations ADD COLUMN model_name TEXT;")?;
+        }
+        tx.execute_batch("PRAGMA user_version = 15;")?;
+        tx.commit()?;
+    }
+    if user_version < 16 {
+        let tx = conn.transaction()?;
+        let columns = {
+            let mut statement = tx.prepare("PRAGMA table_info(document_conversation_turns)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<Result<Vec<_>>>()?
+        };
+        for column in ["model_id", "model_name", "provider_id", "provider_name"] {
+            if !columns.iter().any(|existing| existing == column) {
+                tx.execute_batch(&format!("ALTER TABLE document_conversation_turns ADD COLUMN {column} TEXT;"))?;
+            }
+        }
+        tx.execute_batch("PRAGMA user_version = 16;")?;
+        tx.commit()?;
+    }
+    if user_version < 17 {
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS workflow_settings (
+            workflow TEXT PRIMARY KEY CHECK(workflow IN ('research','plan','draft','chat','resume')),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            model_id TEXT,
+            templates_enabled INTEGER NOT NULL DEFAULT 0
+        ); PRAGMA user_version = 17;")?;
+    }
+    if user_version < 18 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("resume.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 18;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

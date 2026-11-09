@@ -61,47 +61,12 @@ describe('Phase 11: Adaptive Streaming & Generative UI Widget Tests', () => {
     });
   });
 
-  it('AdaptiveResponseRenderer toggles smoothly between Interactive Widgets and Plain Markdown', async () => {
-    const phases: PlanPhase[] = [
-      {
-        phase_number: 1,
-        title: 'Phase 1: Immutable Data Contracts',
-        milestones: ['Define SQLite schema', 'Add zero-unsolicited-write invariant'],
-        prerequisites: [],
-      },
-    ];
-
-    const rawText = 'Introductory plan commentary text.\n```widget:plan\n{...}\n```';
-
-    render(
-      <AdaptiveResponseRenderer
-        rawText={rawText}
-        phases={phases}
-        status="completed"
-        basisFingerprint="e1b2c3d4f5a6b7c8"
-        metrics={{ total_tokens: 42, duration_ms: 180, basis_fingerprint: 'e1b2c3d4f5a6b7c8' }}
-      />
-    );
-
-    // Initial view is Widgets
-    expect(screen.getByText(/Progressive Plan DAG/i)).toBeInTheDocument();
-    expect(screen.getByText('Phase 1: Immutable Data Contracts')).toBeInTheDocument();
-    expect(screen.getByText(/Verified Basis: e1b2c3d4/i)).toBeInTheDocument();
-
-    // Toggle to Plain Markdown mode
-    const markdownBtn = screen.getByTitle(/Render formatted plain markdown text/i);
-    fireEvent.click(markdownBtn);
-
-    // Assert Plain Markdown container is visible and DAG widget is unmounted
-    expect(screen.queryByText(/Progressive Plan DAG/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Introductory plan commentary text/i)).toBeInTheDocument();
-
-    // Toggle back to Widgets mode
-    const widgetsBtn = screen.getByTitle(/Render progressive interactive generative UI widgets/i);
-    fireEvent.click(widgetsBtn);
-
-    expect(screen.getByText(/Progressive Plan DAG/i)).toBeInTheDocument();
-    expect(screen.getByText('Phase 1: Immutable Data Contracts')).toBeInTheDocument();
+  it('renders ordinary Markdown and legacy payload text without widget mode or actions', () => {
+    render(<AdaptiveResponseRenderer rawText="Introductory plan commentary text." phases={[{phase_number:1,title:'Read the evidence',milestones:['Review the source'],prerequisites:[]}]} status="completed"/>);
+    expect(screen.getByText('Introductory plan commentary text.')).toBeInTheDocument();
+    expect(screen.getByRole('heading',{name:'Read the evidence'})).toBeInTheDocument();
+    expect(screen.queryByText(/Progressive Plan DAG/)).toBeNull();
+    expect(screen.queryByTitle(/interactive generative UI/i)).toBeNull();
   });
 
   it('renders streaming unverified badge while streaming and verified basis when complete', () => {
@@ -226,6 +191,7 @@ describe('Phase 11: Adaptive Streaming & Generative UI Widget Tests', () => {
       />
     );
 
-    expect(screen.getByText('Degraded to Markdown')).toBeInTheDocument();
+    expect(screen.getByText(/malformed json/)).toBeInTheDocument();
+    expect(screen.queryByText(/Interactive Widgets/)).toBeNull();
   });
 });

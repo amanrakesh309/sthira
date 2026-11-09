@@ -1,0 +1,29 @@
+.page-block { margin: 24px 0; padding: 24px; border: 1px solid var(--sthira-border-strong); border-radius: 12px; background: var(--sthira-surface); color: var(--sthira-text); font: 14px/1.6 var(--sthira-font-ui); min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.page-block .page-block-label { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--sthira-text-muted); font-size: 12px; font-weight: 600; }
+.page-block h3 { margin: 0 0 16px; font: 600 20px/1.4 var(--sthira-font-editorial); color: var(--sthira-text); }
+.page-block .page-block-context { margin: 12px 0 0; color: var(--sthira-text-muted); font-size: 12px; }
+.page-block .page-block-tasks { margin: 0; padding: 0; list-style: none; }
+.page-block .page-block-tasks li { margin: 0; padding: 0; }
+.page-block-tasks label { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; min-height: 44px; cursor: pointer; }
+.page-block-tasks input { margin: 5px 0 0; width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--sthira-primary); }
+.page-block-tasks input:checked + span { color: var(--sthira-text-muted); text-decoration: line-through; }
+.page-block-comparison { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.page-block-comparison > div { background: var(--sthira-surface-muted); border-radius: 8px; padding: 16px; }
+.page-block-comparison > div > span { font-size: 12px; font-weight: 600; color: var(--sthira-text-muted); }
+.page-block-evidence { margin-top: 8px; }
+.page-block a { color: var(--sthira-primary); text-decoration: underline; text-underline-offset: 3px; }
+.page-block .page-block-comparison p { margin: 8px 0 0; }
+.page-block .page-block-verdict { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--sthira-border); }
+.page-block-verdict strong { display: block; font-size: 12px; margin-bottom: 4px; }
+.page-block-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.page-block-options button { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--sthira-border-strong); border-radius: 8px; background: var(--sthira-surface); color: var(--sthira-text); font: inherit; text-align: left; cursor: pointer; }
+.page-block-options button[aria-pressed="true"] { background: var(--sthira-primary-tint); border-color: var(--sthira-primary); }
+.page-block-options small { font-size: 12px; color: var(--sthira-text-muted); }
+.page-block .page-block-clear { margin-top: 8px; padding: 8px 0; min-height: 40px; background: transparent; border: 0; color: var(--sthira-text-muted); font: inherit; text-decoration: underline; cursor: pointer; }
+.page-block :is(button,input):focus-visible { outline: 2px solid var(--sthira-focus); outline-offset: 3px; }
+.page-block-source { margin: -16px 0 24px; color: var(--sthira-text-muted); font: 12px/1.6 var(--sthira-font-ui); }
+.page-block-source summary { cursor: pointer; padding: 8px 0; }
+.page-block-source pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@container (max-width: 480px) { .page-block-comparison { grid-template-columns: 1fr; } }
+.document-embedded-block { container-type: inline-size; }
+@media (max-width: 700px) { .page-block { padding: 16px; } .page-block-comparison { grid-template-columns: 1fr; } }

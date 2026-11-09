@@ -144,11 +144,9 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
         Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
     );
 
-    // 1. Initial seeded Ollama provider should have exactly 1 default model and 0 duplicates
+    // 1. Fresh workspaces have no assumed provider or model.
     let catalog = handle_get_provider_catalog(&engine).expect("Failed to get provider catalog");
-    let ollama = catalog.iter().find(|p| p.id == "ollama").expect("Ollama provider missing");
-    assert_eq!(ollama.models.len(), 1, "Expected single seeded model");
-    assert_eq!(ollama.models[0].model_identifier, "llama3.2:latest");
+    assert!(catalog.is_empty(), "Fresh workspaces must wait for explicit AI setup");
 
     // 2. Add an OpenAI-compatible provider with models
     let custom_provider = ProviderEntry {

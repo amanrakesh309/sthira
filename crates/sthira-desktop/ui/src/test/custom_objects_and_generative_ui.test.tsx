@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
-describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
+describe('Custom objects and plain document responses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -173,7 +173,8 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
 
     const textarea = screen.getByTestId('document-editor') as HTMLElement;
 
-    // 2. Type '/' to trigger the slash command popover menu
+    // 2. Focus the editor before opening the slash menu, as a real typing journey does.
+    await user.click(textarea);
     setEditorMarkdown(textarea, '# Lab Notebook\n\n/');
     fireEvent.select(textarea);
 
@@ -252,7 +253,7 @@ describe('Custom Objects in Slash Menu & Guaranteed Generative UI', () => {
   // Assert <MilestonePlanDagWidget/> and <EvidenceComparisonMatrixWidget/>
   // visibly mount in the DOM across both explicit and auto-hydrated markdown.
   // -------------------------------------------------------------------------
-  it('Test 2: Plan and Research Generative UI widgets visibly mount in the DOM', async () => {
+  it('Plan and Research retain their headings, lists and tables without widget hydration', async () => {
     // A. Plan Mode with standard markdown (auto-hydrated into MilestonePlanDagWidget)
     const planMarkdown = `# Distributed System Implementation Plan
 
@@ -276,7 +277,7 @@ Which database engine should be used?
     const { unmount } = render(<AdaptiveResponseRenderer rawText={planMarkdown} />);
 
     // Assert MilestonePlanDagWidget mounted and visible
-    expect(screen.getByText(/Progressive Plan DAG/)).toBeInTheDocument();
+    expect(screen.queryByText(/Progressive Plan DAG/)).toBeNull();
     expect(screen.getByText(/Storage Layer Architecture/)).toBeInTheDocument();
     expect(screen.getByText(/Progressive Streaming Engine/)).toBeInTheDocument();
     expect(screen.getByText('Which database engine should be used?')).toBeInTheDocument();
@@ -301,7 +302,7 @@ Which database engine should be used?
 
     // Assert EvidenceComparisonMatrixWidget mounted and visible
     await waitFor(() => {
-      expect(screen.getByText(/Evidence Comparison Matrix/)).toBeInTheDocument();
+      expect(screen.queryByText(/Evidence Comparison Matrix/)).toBeNull();
       expect(screen.getByText('Local SQLite Engine')).toBeInTheDocument();
       expect(screen.getByText('Cloud REST Engine')).toBeInTheDocument();
       expect(screen.getByText('Immediate zero-jitter rendering')).toBeInTheDocument();
@@ -313,7 +314,7 @@ Which database engine should be used?
   // into PlanPhase DAG, Evidence Matrix, and Decision Selector, while
   // FormattedMarkdownView normalizes LaTeX math symbols and orphaned bullets.
   // -------------------------------------------------------------------------
-  it('Test 3: Real-world domain plan auto-hydrates into rich widgets and FormattedMarkdownView normalizes math & bullets', async () => {
+  it('Domain plans retain their prose; legacy formatted view still normalizes math and bullets', async () => {
     const rawWeightLossMarkdown = `As an expert systems architect, I will treat your weight loss goal as a **Biological Optimization Project**. To move from 81kg to a leaner state while maintaining muscle mass (via 80g of protein) on a vegetarian diet, we need a phased deployment plan.
 System Analysis (The Baseline)
 •
@@ -374,13 +375,13 @@ Final System Summary
     const decisions = extractMarkdownDecisions(rawWeightLossMarkdown);
     expect(decisions.length).toBeGreaterThanOrEqual(1);
 
-    // 2. Verify AdaptiveResponseRenderer renders all 3 widgets from the raw text
+    // The response stays ordinary text; no content is removed to hydrate cards.
     const { unmount } = render(<AdaptiveResponseRenderer rawText={rawWeightLossMarkdown} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Progressive Plan DAG/)).toBeInTheDocument();
-      expect(screen.getByText(/Evidence Comparison Matrix/)).toBeInTheDocument();
-      expect(screen.getByText(/Interactive Decisions/)).toBeInTheDocument();
+      expect(screen.queryByText(/Progressive Plan DAG/)).toBeNull();
+      expect(screen.queryByText(/Evidence Comparison Matrix/)).toBeNull();
+      expect(screen.queryByText(/Interactive Decisions/)).toBeNull();
     });
 
     unmount();

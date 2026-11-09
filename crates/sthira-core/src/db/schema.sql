@@ -452,4 +452,11 @@ CREATE TABLE IF NOT EXISTS synthesis_templates (
 
 CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);
 
+CREATE TABLE IF NOT EXISTS workflow_settings (
+    workflow TEXT PRIMARY KEY CHECK(workflow IN ('research','plan','draft','chat','resume')),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    model_id TEXT,
+    templates_enabled INTEGER NOT NULL DEFAULT 0
+);
+
 

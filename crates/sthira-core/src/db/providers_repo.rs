@@ -314,36 +314,3 @@ pub fn clean_duplicate_models(conn: &Connection) -> Result<usize, CoreError> {
     )?;
     Ok(deleted)
 }
-
-pub fn seed_default_providers_if_empty(conn: &Connection, now_ms: i64) -> Result<(), CoreError> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers;", [], |r| r.get(0))?;
-    if count > 0 {
-        return Ok(());
-    }
-
-    // 1. Ollama (Local) - Only local provider pre-seeded by default
-    let ollama_provider = ProviderEntry {
-        id: "ollama".to_string(),
-        display_name: "Ollama (Local)".to_string(),
-        provider_type: "ollama".to_string(),
-        base_url: std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string()),
-        has_api_key: false,
-        is_enabled: true,
-        models: vec![
-            ProviderModelEntry {
-                id: "ollama:llama3.2".to_string(),
-                provider_id: "ollama".to_string(),
-                model_identifier: "llama3.2:latest".to_string(),
-                display_name: "Llama 3.2 (3B)".to_string(),
-                context_window: 131072,
-                supports_structured_output: true,
-                is_enabled: true,
-                is_default: true,
-                web_search_capability: WebSearchCapability::EngineAugmentedOnly,
-            },
-        ],
-    };
-    upsert_provider(conn, &ollama_provider, None, now_ms)?;
-
-    Ok(())
-}

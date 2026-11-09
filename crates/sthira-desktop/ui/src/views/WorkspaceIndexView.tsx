@@ -12,6 +12,7 @@ import type { WorkspaceIndexData, WorkspaceIndexItem, WorkspaceIndexTab, NoteSco
 
 interface WorkspaceIndexViewProps {
   initialTab?: WorkspaceIndexTab;
+  initialNoteScope?: NoteScopeFilter;
   onOpenProject: (projectId: string) => void;
   onOpenArtifact: (artifactId: string, projectId?: string | null) => void;
   onOpenObjectCollection?: (typeId: string) => void;
@@ -22,7 +23,7 @@ interface WorkspaceIndexViewProps {
 
 const categories = [
   { id: 'all', label: 'All Items' }, { id: 'projects', label: 'Projects' },
-  { id: 'notes', label: 'Notes & Pages' }, { id: 'objects', label: 'Custom Objects' },
+  { id: 'notes', label: 'Pages' }, { id: 'objects', label: 'Custom Objects' },
 ] as const;
 
 function Pagination({ count, page, size, setPage, setSize }: {
@@ -48,7 +49,7 @@ function Pagination({ count, page, size, setPage, setSize }: {
   </footer>;
 }
 
-export function WorkspaceIndexView({ initialTab = 'all', onOpenProject, onOpenArtifact, onOpenObjectCollection,
+export function WorkspaceIndexView({ initialTab = 'all', initialNoteScope = 'all', onOpenProject, onOpenArtifact, onOpenObjectCollection,
   onOpenObjectTypeManager, onBack, onWorkspaceMutated }: WorkspaceIndexViewProps) {
   const [activeTab, setActiveTab] = useState<WorkspaceIndexTab>(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
@@ -59,7 +60,7 @@ export function WorkspaceIndexView({ initialTab = 'all', onOpenProject, onOpenAr
   const [notice, setNotice] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string | null>(null);
-  const [noteScope, setNoteScope] = useState<NoteScopeFilter>('all');
+  const [noteScope, setNoteScope] = useState<NoteScopeFilter>(initialNoteScope);
   const [noteSort, setNoteSort] = useState<NoteSortKey>('updated');
   const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
@@ -70,7 +71,7 @@ export function WorkspaceIndexView({ initialTab = 'all', onOpenProject, onOpenAr
   const request = useRef(0);
   const retryAction = useRef<(() => void) | null>(null);
 
-  useEffect(() => { setActiveTab(initialTab); setSelectedTypeFilter(null); setCurrentPage(1); }, [initialTab]);
+  useEffect(() => { setActiveTab(initialTab); setNoteScope(initialNoteScope); setSelectedTypeFilter(null); setCurrentPage(1); }, [initialTab, initialNoteScope]);
   useEffect(() => {
     const shortcut = (event: globalThis.KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -181,7 +182,7 @@ export function WorkspaceIndexView({ initialTab = 'all', onOpenProject, onOpenAr
       <header className="all-files-header">
         <div className="all-files-heading-copy"><div className="all-files-eyebrow">{onBack ? <button type="button" onClick={onBack}>Workspace</button> : <span>Workspace</span>}<span aria-hidden="true">/</span></div>
           <h1 id="directory-title"><Folder aria-hidden="true" />All Files</h1>
-          <p>Unified directory of every project, note, page, and structured object.</p>
+          <p>Browse your projects, pages, and structured objects.</p>
         </div>
         <div className="all-files-header-actions"><div className="directory-search">
           <Search size={17} aria-hidden="true" /><input ref={searchInput} type="search" aria-label="Filter workspace items" data-testid="search-input"

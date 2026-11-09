@@ -39,7 +39,7 @@ export function useAdaptiveStream(): UseAdaptiveStreamReturn {
   const [decisions, setDecisions] = useState<DecisionPoint[]>([]);
   const [comparisonRows, setComparisonRows] = useState<ComparisonRow[]>([]);
   const [status, setStatus] = useState<StreamStatus>('idle');
-  const [viewMode, setViewMode] = useState<'widgets' | 'markdown'>('widgets');
+  const [viewMode, setViewMode] = useState<'widgets' | 'markdown'>('markdown');
   const [metrics, setMetrics] = useState<StreamMetrics | null>(null);
   const [fallbackNotices, setFallbackNotices] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function useAdaptiveStream(): UseAdaptiveStreamReturn {
     setDecisions([]);
     setComparisonRows([]);
     setStatus('idle');
-    setViewMode('widgets');
+    setViewMode('markdown');
     setMetrics(null);
     setFallbackNotices([]);
     setError(null);
@@ -151,7 +151,7 @@ export function useAdaptiveStream(): UseAdaptiveStreamReturn {
         console.error('Adaptive stream execution error:', err);
         setError(String(err));
         setStatus('degraded_to_markdown');
-        return accumulated;
+        throw err;
       } finally {
         isStreamingRef.current = false;
       }

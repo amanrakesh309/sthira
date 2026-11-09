@@ -142,6 +142,13 @@ function installMocks() {
       case 'cmd_list_object_types':
       case 'cmd_get_object_type_counts':
         return [];
+      case 'cmd_get_workflow_settings':
+        return Object.fromEntries(
+          ['research', 'plan', 'draft', 'chat', 'resume'].map((id) => [
+            id,
+            { enabled: true, model_id: null, templates_enabled: true },
+          ])
+        );
       case 'cmd_get_provider_catalog':
         return [
           {
@@ -211,6 +218,9 @@ describe('🧭 Explore & Plan Hub', () => {
     render(<App />);
 
     // Sidebar entry: 🧭 Explore & Plan
+    await waitFor(() => {
+      expect(screen.getByTestId('nav-explore-plan')).toBeEnabled();
+    });
     const navBtn = screen.getByTestId('nav-explore-plan');
     expect(navBtn).toHaveTextContent(/Explore & Plan/i);
     await user.click(navBtn);
@@ -355,7 +365,7 @@ describe('🧭 Explore & Plan Hub', () => {
       'Speculative Decoding Algorithms',
       'always_search',
       null,
-      'research-comparative-tech'
+      'research-comparative-tech', 'm1'
     );
   });
 
@@ -397,7 +407,7 @@ describe('🧭 Explore & Plan Hub', () => {
       'CRDT vs OT Tradeoffs',
       'auto',
       null,
-      'research-deep-dive'
+      'research-deep-dive', 'm1'
     );
 
     // 2. Switch to Plan tab
@@ -423,7 +433,7 @@ describe('🧭 Explore & Plan Hub', () => {
     expect(onStartPlan).toHaveBeenCalledWith(
       'Ship SQLite v2 schema',
       null,
-      'plan-fast-sprint'
+      'plan-fast-sprint', 'm1'
     );
   });
 

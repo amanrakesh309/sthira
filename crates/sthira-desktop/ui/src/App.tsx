@@ -1,4 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { DocumentTabs } from './components/DocumentTabs';
+import { useDocumentTabs, openDocumentTab, closeDocumentTab, type DocumentTabsState, type DocumentTab } from './hooks/useDocumentTabs';
+import { useWorkflowSettings } from './hooks/useWorkflowSettings';
+import type { SettingsSection } from './components/ModelSettingsModal';
+import { getDocumentConversation } from './api/conversation';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { HomeView } from './components/HomeView';
 import { FocusView } from './components/FocusView';
 import { CanvasView } from './components/CanvasView';
@@ -23,12 +28,14 @@ import {
   createPage,
   runResearchIntoPage,
   saveArtifact,
+  saveGeneratedArtifact,
   streamAdaptiveRun,
 } from './api/ipc';
 import {
   type HomeStateView,
   type ObjectType,
   type WorkspaceIndexTab,
+  type NoteScopeFilter,
   type ExplorePlanTab,
   type DocumentRunState,
   type WebSearchMode,
@@ -36,6 +43,13 @@ import {
 } from './types/sthira';
 
 export const App: React.FC = () => {
+  const workflows = useWorkflowSettings();
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('models');
+  useEffect(() => {
+    const open = (event: Event) => { setSettingsSection((event as CustomEvent<SettingsSection>).detail || 'workflows'); setIsSettingsOpen(true); };
+    window.addEventListener('sthira:open-settings', open);
+    return () => window.removeEventListener('sthira:open-settings', open);
+  }, []);
   const [currentView, setCurrentView] = useState<
     | 'home'
     | 'focus'
@@ -67,12 +81,14 @@ export const App: React.FC = () => {
     }
     return 'all';
   });
+  const [workspaceNoteScope, setWorkspaceNoteScope] = useState<NoteScopeFilter>('all');
   const [explorePlanTab, setExplorePlanTab] = useState<ExplorePlanTab>('research');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('view') === 'project' ? new URLSearchParams(window.location.search).get('projectId') : null);
   const [overviewProjectId, setOverviewProjectId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('projectId'));
   const [projectReturnId, setProjectReturnId] = useState<string | null>(null);
   const [projectBrowse, setProjectBrowse] = useState(DEFAULT_PROJECT_BROWSE);
-  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
+  const projectBrowseById = useRef<Record<string, typeof DEFAULT_PROJECT_BROWSE>>({});
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('artifactId'));
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
   const [activeObjectTypeId, setActiveObjectTypeId] = useState<string | null>(null);
   /**
@@ -85,6 +101,50 @@ export const App: React.FC = () => {
   const [treeRefreshTrigger, setTreeRefreshTrigger] = useState(0);
   const [realtimeTitleUpdate, setRealtimeTitleUpdate] = useState<{ id: string; title: string } | null>(null);
 
+  const activeRouteRef = useRef({artifactId:activeArtifactId,view:currentView});
+  activeRouteRef.current={artifactId:activeArtifactId,view:currentView};
+  const beforeLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const navigating = useRef(false);
+  const newTabIntent = useRef(false);
+  const searchNewTab = useRef(false);
+  const registerBeforeLeave = useCallback((guard: (() => Promise<boolean>) | null) => { beforeLeaveRef.current = guard; }, []);
+  const applyTab = (tab: DocumentTab) => {
+    setActiveArtifactId(tab.id); setActiveProjectId(tab.projectId); setProjectReturnId(tab.returnProjectId); setCurrentView('focus');
+  };
+  const documentTabs = useDocumentTabs((saved: DocumentTabsState) => {
+    if (window.location.search) return;
+    const tab = saved.tabs.find(item => item.id === saved.activeId);
+    if (saved.resume && tab) applyTab(tab);
+  });
+  const navigate = async (action: () => void) => {
+    if (navigating.current) return false;
+    navigating.current = true;
+    try {
+      if (beforeLeaveRef.current && !(await beforeLeaveRef.current())) return false;
+      action(); return true;
+    } finally { navigating.current = false; }
+  };
+  const selectTab = (id: string) => {
+    const tab = documentTabs.stateRef.current.tabs.find(item => item.id === id);
+    if (!tab) return;
+    void navigate(() => { documentTabs.update(previous => ({...previous,activeId:id,resume:true})); applyTab(tab); });
+  };
+  const closeTab = (id: string) => {
+    const close = () => {
+      const previous = documentTabs.stateRef.current;
+      const next = closeDocumentTab(previous,id);
+      documentTabs.update(next);
+      if (currentView === 'focus' && previous.activeId === id) {
+        const tab = next.tabs.find(item => item.id === next.activeId);
+        if (tab) applyTab(tab); else {setCurrentView('home');setActiveArtifactId(null);setActiveProjectId(null);}
+      }
+    };
+    if (currentView === 'focus' && documentTabs.stateRef.current.activeId === id) void navigate(close); else close();
+  };
+  const openAnotherDocument = () => { searchNewTab.current = true; setIsSearchOpen(true); };
+  useEffect(() => {
+    if (currentView !== 'focus' && documentTabs.stateRef.current.resume) documentTabs.update(previous => ({...previous,resume:false}));
+  }, [currentView]);
   // Modals state
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(() => {
@@ -98,6 +158,23 @@ export const App: React.FC = () => {
   const [isObjectTypeBuilderOpen, setIsObjectTypeBuilderOpen] = useState(false);
   const [isObjectTypeManagerOpen, setIsObjectTypeManagerOpen] = useState(false);
   const [activeFlow, setActiveFlow] = useState<{ mode: FlowMode; initialPrompt?: string } | null>(null);
+
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      if (isSettingsOpen || isSearchOpen || isAccountOpen || activeFlow || isObjectTypeBuilderOpen || isObjectTypeManagerOpen || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Tab' && documentTabs.stateRef.current.tabs.length > 1) {
+        event.preventDefault();
+        const {tabs,activeId} = documentTabs.stateRef.current;
+        const index = tabs.findIndex(tab => tab.id === activeId);
+        selectTab(tabs[(index + (event.shiftKey ? -1 : 1) + tabs.length) % tabs.length].id);
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w' && currentView === 'focus' && documentTabs.stateRef.current.activeId) {
+        event.preventDefault(); closeTab(documentTabs.stateRef.current.activeId);
+      }
+    };
+    window.addEventListener('keydown', keyboard);
+    return () => window.removeEventListener('keydown',keyboard);
+  });
 
   const [objectTypes, setObjectTypes] = useState<ObjectType[]>([]);
   const [homeLoadStatus, setHomeLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -130,6 +207,7 @@ export const App: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
+        searchNewTab.current = false;
         setIsSearchOpen((prev) => !prev);
       }
     };
@@ -159,45 +237,44 @@ export const App: React.FC = () => {
   }, []);
 
   const handleOpenProject = (projectId: string) => {
-    if (overviewProjectId !== projectId) setProjectBrowse(DEFAULT_PROJECT_BROWSE);
+    void navigate(() => {
+    if (overviewProjectId !== projectId) setProjectBrowse(projectBrowseById.current[projectId] || DEFAULT_PROJECT_BROWSE);
     setOverviewProjectId(projectId);
     setProjectReturnId(null);
     setActiveProjectId(projectId);
     setActiveArtifactId(null);
     setActiveCanvasId(null);
     setCurrentView('project');
+    });
   };
 
-  const handleOpenArtifact = (artifactId: string, projectId?: string | null) => {
-    setProjectReturnId(null);
-    setActiveArtifactId(artifactId);
-    if (projectId) {
-      setActiveProjectId(projectId);
-    } else if (projectId === null) {
-      setActiveProjectId(null);
-    } else {
-      // Find project if attached in recent_items
-      const recent = homeState.recent_items.find((r) => r.artifact_id === artifactId);
-      if (recent && recent.project_id) {
-        setActiveProjectId(recent.project_id);
-      } else {
-        setActiveProjectId(null);
-      }
-    }
-    setCurrentView('focus');
+  const handleOpenArtifact = (artifactId: string, projectId?: string | null, inNewTab?: boolean, returnProjectId: string | null = null) => {
+    const newTab = inNewTab ?? (newTabIntent.current || searchNewTab.current);
+    searchNewTab.current = false;
+    const recent = homeState.recent_items.find(item => item.artifact_id === artifactId);
+    const project = projectId !== undefined ? projectId : recent?.project_id || null;
+    void navigate(() => {
+      const next = openDocumentTab(documentTabs.stateRef.current, {id:artifactId,title:recent?.title || 'Loading page…',projectId:project,returnProjectId,scrollTop:0},newTab);
+      documentTabs.update(next);
+      applyTab(next.tabs.find(tab => tab.id === artifactId)!);
+    });
   };
 
   const handleOpenCanvas = (canvasId?: string, projectId?: string) => {
+    void navigate(() => {
     setProjectReturnId(null);
     if (projectId) setActiveProjectId(projectId);
     setActiveCanvasId(canvasId || null);
     setCurrentView('canvas');
+    });
   };
 
   const handleOpenObjectCollection = (typeId: string) => {
+    void navigate(() => {
     setProjectReturnId(null);
     setActiveObjectTypeId(typeId);
     setCurrentView('objects');
+    });
   };
 
   const handleOpenCreateObjectType = () => {
@@ -214,13 +291,17 @@ export const App: React.FC = () => {
     setCurrentView('objects');
   };
 
-  const handleNavigateWorkspaceIndex = (tab?: WorkspaceIndexTab) => {
+  const handleNavigateWorkspaceIndex = (tab?: WorkspaceIndexTab, scope: NoteScopeFilter = 'all') => {
+    void navigate(() => {
+    setWorkspaceNoteScope(scope);
     setProjectReturnId(null);
     setWorkspaceIndexTab(tab || 'all');
     setCurrentView('workspace_index');
+    });
   };
 
   const handleNavigateExplorePlan = (tab?: ExplorePlanTab) => {
+    void navigate(() => {
     setProjectReturnId(null);
     setActiveProjectId(null);
     setActiveArtifactId(null);
@@ -232,6 +313,7 @@ export const App: React.FC = () => {
       setExplorePlanTab('research');
     }
     setCurrentView('explore_plan');
+    });
   };
 
   const handleNavigateScheduledTopics = () => {
@@ -249,21 +331,24 @@ export const App: React.FC = () => {
     query: string,
     mode: WebSearchMode = 'auto',
     projectId?: string | null,
-    templateId?: string | null
+    templateId?: string | null,
+    modelId?: string | null
   ): Promise<WebResearchResult | null> => {
     const q = query.trim();
     if (!q) return null;
+    if (workflows.loading || workflows.error || !workflows.settings.research.enabled) { setSettingsSection('workflows'); setIsSettingsOpen(true); return null; }
+    modelId ||= workflows.settings.research.model_id;
+    if (!workflows.settings.research.templates_enabled) templateId = null;
 
     const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
     let artifactId: string | null = null;
 
     try {
       artifactId = await createResearchPage(q, targetProject);
+      await getDocumentConversation(artifactId, 'research', q, modelId);
 
       // 1. Center-page navigation happens immediately, before any slow work.
-      setActiveArtifactId(artifactId);
-      if (targetProject) setActiveProjectId(targetProject);
-      setCurrentView('focus');
+      handleOpenArtifact(artifactId,targetProject,false);
 
       setDocumentRun({
         artifactId,
@@ -282,16 +367,10 @@ export const App: React.FC = () => {
           prev && prev.artifactId === artifactId ? { ...prev, message: stage.message } : prev
         );
       };
-      const result = templateId
-        ? await runResearchIntoPage(artifactId, q, mode, onStageCallback, templateId)
-        : await runResearchIntoPage(artifactId, q, mode, onStageCallback);
+      const result = await runResearchIntoPage(artifactId, q, mode, onStageCallback, templateId, modelId);
 
       // 3. Mark complete and ask the editor to reload the now-populated page.
-      const isFailedSearch =
-        mode !== 'local_vault_only' &&
-        (result.external_sources_count === 0 ||
-          result.search_status === 'web_search_failed' ||
-          result.mode_used === 'local_vault_only');
+      const isFailedSearch = result.search_status === 'web_search_failed' || result.search_status === 'unsupported_model';
 
       setDocumentRun((prev) =>
         prev && prev.artifactId === artifactId
@@ -317,7 +396,7 @@ export const App: React.FC = () => {
       const message = err?.toString?.() || 'Research failed';
       setDocumentRun((prev) =>
         prev && artifactId && prev.artifactId === artifactId
-          ? { ...prev, status: 'error', error: message, message }
+          ? { ...prev, status: 'error', error: message, message, streamedMarkdown: '' }
           : prev
       );
       return null;
@@ -331,10 +410,15 @@ export const App: React.FC = () => {
    */
   const handleStartPlan = async (
     goal: string,
-    projectId?: string | null
+    projectId?: string | null,
+    templateId?: string | null,
+    modelId?: string | null
   ): Promise<string | null> => {
     const g = goal.trim();
     if (!g) return null;
+    if (workflows.loading || workflows.error || !workflows.settings.plan.enabled) { setSettingsSection('workflows'); setIsSettingsOpen(true); return null; }
+    modelId ||= workflows.settings.plan.model_id;
+    if (!workflows.settings.plan.templates_enabled) templateId = null;
 
     const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
     const title = `Plan: ${g.length > 60 ? `${g.slice(0, 60)}...` : g}`;
@@ -343,11 +427,10 @@ export const App: React.FC = () => {
     try {
       const draft = await createPage(targetProject, title);
       artifactId = draft.id;
+      await getDocumentConversation(artifactId, 'plan', g, modelId);
 
       // 1. Navigate to the center workspace before streaming begins.
-      setActiveArtifactId(artifactId);
-      if (targetProject) setActiveProjectId(targetProject);
-      setCurrentView('focus');
+      handleOpenArtifact(artifactId,targetProject,false);
 
       const draftBody = `# ${title}\n\n> **Status:** drafting — planning…\n\n## Goal\n${g}\n`;
       await saveArtifact(artifactId, draftBody, title, targetProject);
@@ -364,7 +447,7 @@ export const App: React.FC = () => {
 
       // 2. Stream tokens into the page as they arrive.
       let accumulated = '';
-      await streamAdaptiveRun(g, 'plan', null, (chunk) => {
+      await streamAdaptiveRun(g, 'plan', modelId, (chunk) => {
         if (chunk.type !== 'text_token') return;
         accumulated += chunk.payload;
         const live = accumulated;
@@ -373,16 +456,13 @@ export const App: React.FC = () => {
             ? { ...prev, streamedMarkdown: live, message: 'Drafting plan…' }
             : prev
         );
-      });
+      }, templateId);
 
       // 3. Persist the finished plan and reload the page.
-      const body = accumulated.trim()
-        ? accumulated.trim().startsWith('#')
-          ? accumulated.trim()
-          : `# ${title}\n\n${accumulated.trim()}`
-        : `${draftBody}\n## Plan\n_No streamed content was returned._\n`;
+      if (!accumulated.trim()) throw new Error('The selected model returned no plan. Your goal remains saved as a draft.');
+      const body = accumulated.trim().startsWith('#') ? accumulated.trim() : `# ${title}\n\n${accumulated.trim()}`;
 
-      await saveArtifact(artifactId, body, title, targetProject);
+      await saveGeneratedArtifact(artifactId, body, title, targetProject);
 
       setDocumentRun((prev) =>
         prev && prev.artifactId === artifactId
@@ -404,7 +484,7 @@ export const App: React.FC = () => {
       const message = err?.toString?.() || 'Planning failed';
       setDocumentRun((prev) =>
         prev && artifactId && prev.artifactId === artifactId
-          ? { ...prev, status: 'error', error: message, message }
+          ? { ...prev, status: 'error', error: message, message, streamedMarkdown: '' }
           : prev
       );
       return null;
@@ -422,7 +502,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="sthira-shell flex h-screen w-screen overflow-hidden">
+    <div className="sthira-shell flex h-screen w-screen overflow-hidden" onClickCapture={event => { newTabIntent.current = event.ctrlKey || event.metaKey; }} onKeyDownCapture={event => { if(event.key === 'Enter') newTabIntent.current = event.ctrlKey || event.metaKey; }}>
       {/* Step 2: Left Hierarchy Sidebar */}
       <LeftSidebar
         activeProjectId={activeProjectId}
@@ -430,19 +510,21 @@ export const App: React.FC = () => {
         activeCanvasId={activeCanvasId}
         activeObjectTypeId={activeObjectTypeId}
         currentView={currentView}
-        onNavigateHome={() => {
+        onNavigateHome={() => { void navigate(() => {
           setProjectReturnId(null);
           setCurrentView('home');
           setActiveProjectId(null);
           setActiveArtifactId(null);
           setActiveObjectTypeId(null);
           loadState();
+          });
         }}
-        onNavigateGraph={() => {
+        onNavigateGraph={() => { void navigate(() => {
           setProjectReturnId(null);
           setCurrentView('graph');
           setActiveArtifactId(null);
           setActiveObjectTypeId(null);
+          });
         }}
         onNavigateWorkspaceIndex={handleNavigateWorkspaceIndex}
         onNavigateExplorePlan={handleNavigateExplorePlan}
@@ -461,6 +543,7 @@ export const App: React.FC = () => {
         refreshTrigger={treeRefreshTrigger}
         realtimeTitleUpdate={realtimeTitleUpdate}
         onArtifactRenamed={(id, newTitle) => {
+          documentTabs.update(previous => ({...previous,tabs:previous.tabs.map(tab => tab.id === id ? {...tab,title:newTitle} : tab)}));
           setRealtimeTitleUpdate({ id, title: newTitle });
           loadState();
         }}
@@ -473,6 +556,11 @@ export const App: React.FC = () => {
         data-testid="center-workspace"
         className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'project' || currentView === 'graph' || currentView === 'canvas' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
       >
+        <DocumentTabs tabs={documentTabs.state.tabs} activeId={currentView === 'focus' ? documentTabs.state.activeId : null} onSelect={selectTab} onClose={closeTab} onMove={(id,offset) => documentTabs.update(previous => {
+          const tabs=[...previous.tabs]; const index=tabs.findIndex(tab=>tab.id===id);const target=index+offset;
+          if(index<0||target<0||target>=tabs.length)return previous;
+          [tabs[index],tabs[target]]=[tabs[target],tabs[index]];return {...previous,tabs};
+        })}/>
         {currentView === 'home' && (
           <HomeView
             homeState={homeState}
@@ -495,6 +583,7 @@ export const App: React.FC = () => {
         {currentView === 'workspace_index' && (
           <WorkspaceIndexView
             initialTab={workspaceIndexTab}
+            initialNoteScope={workspaceNoteScope}
             onOpenProject={handleOpenProject}
             onOpenArtifact={handleOpenArtifact}
             onOpenObjectCollection={handleOpenObjectCollection}
@@ -510,17 +599,32 @@ export const App: React.FC = () => {
           key={overviewProjectId}
           projectId={overviewProjectId}
           initialBrowse={projectBrowse}
-          onBrowseChange={setProjectBrowse}
+          onBrowseChange={value => {setProjectBrowse(value);if(overviewProjectId)projectBrowseById.current[overviewProjectId]=value;}}
           refreshTrigger={treeRefreshTrigger}
           onBack={() => handleNavigateWorkspaceIndex('projects')}
           onOpenProject={handleOpenProject}
-          onOpenArtifact={(id, pid) => { handleOpenArtifact(id, pid); setProjectReturnId(overviewProjectId); }}
+          onOpenArtifact={(id, pid) => handleOpenArtifact(id, pid, undefined, overviewProjectId)}
           onOpenCanvas={(id, pid) => { handleOpenCanvas(id, pid); setProjectReturnId(overviewProjectId); }}
           onWorkspaceMutated={loadState}
         />}
 
         {currentView === 'focus' && (activeProjectId || activeArtifactId) && (
           <FocusView
+            key={`${activeArtifactId || 'draft'}:${activeProjectId || 'standalone'}`}
+            registerBeforeLeave={registerBeforeLeave}
+            sessionNamespace={documentTabs.namespace}
+            initialScrollTop={documentTabs.state.tabs.find(tab => tab.id === activeArtifactId)?.scrollTop || 0}
+            onScrollPosition={top => { if(activeArtifactId) documentTabs.update(previous => ({...previous,tabs:previous.tabs.map(tab => tab.id === activeArtifactId ? {...tab,scrollTop:top} : tab)})); }}
+            onOpenInNewTab={openAnotherDocument}
+            onDocumentLoaded={(artifact,resolvedProjectId) => {
+              if(!artifact.id)return;
+              const current=activeRouteRef.current.view==='focus'&&activeRouteRef.current.artifactId===artifact.id;
+              documentTabs.update(previous => {
+                if(!previous.tabs.some(tab=>tab.id===artifact.id))return current?openDocumentTab(previous,{id:artifact.id,title:artifact.title||'Untitled page',projectId:resolvedProjectId,returnProjectId:projectReturnId,scrollTop:0},true):previous;
+                return {...previous,tabs:previous.tabs.map(tab => tab.id === artifact.id ? {...tab,title:artifact.title || 'Untitled page',projectId:resolvedProjectId} : tab)};
+              });
+              if(current && resolvedProjectId !== activeProjectId)setActiveProjectId(resolvedProjectId);
+            }}
             projectId={activeProjectId || undefined}
             artifactId={activeArtifactId || undefined}
             backLabel={projectReturnId ? 'Project' : 'Home'}
@@ -536,9 +640,10 @@ export const App: React.FC = () => {
               await loadState();
               setTreeRefreshTrigger((prev) => prev + 1);
             }}
+            onOpenStandaloneNotes={() => handleNavigateWorkspaceIndex('notes', 'standalone')}
             onOpenCanvas={handleOpenCanvas}
             onOpenSearch={() => setIsSearchOpen(true)}
-            onOpenArtifact={(id: string, pid?: string | null) => { const origin = projectReturnId; handleOpenArtifact(id, pid); setProjectReturnId(origin); }}
+            onOpenArtifact={(id: string, pid?: string | null) => handleOpenArtifact(id, pid, undefined, projectReturnId)}
             onOpenProject={handleOpenProject}
             onContentUpdate={() => {}}
             documentRun={
@@ -550,11 +655,15 @@ export const App: React.FC = () => {
             }
             onDismissDocumentRun={() => setDocumentRun(null)}
             onSave={(art) => {
-              setActiveArtifactId(art.id);
+              if(!activeArtifactId) {
+                setActiveArtifactId(art.id);
+                documentTabs.update(previous => openDocumentTab(previous,{id:art.id,title:art.title || 'Untitled page',projectId:activeProjectId,returnProjectId:projectReturnId,scrollTop:0},false));
+              } else documentTabs.update(previous => ({...previous,tabs:previous.tabs.map(tab => tab.id === art.id ? {...tab,title:art.title || 'Untitled page'} : tab)}));
               loadState();
               setTreeRefreshTrigger((prev) => prev + 1);
             }}
             onTitleUpdate={(artId, newTitle) => {
+              documentTabs.update(previous => ({...previous,tabs:previous.tabs.map(tab => tab.id === artId ? {...tab,title:newTitle} : tab)}));
               setRealtimeTitleUpdate({ id: artId, title: newTitle });
               setHomeState((prev) => ({
                 ...prev,
@@ -632,12 +741,13 @@ export const App: React.FC = () => {
       {/* Global Interactive Modals */}
       <SearchModal
         isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
+        onClose={() => { searchNewTab.current=false; setIsSearchOpen(false); }}
         onOpenProject={handleOpenProject}
         onOpenArtifact={handleOpenArtifact}
       />
 
       <ModelSettingsModal
+        initialTab={settingsSection}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onVaultMutated={loadState}

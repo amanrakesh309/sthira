@@ -22,8 +22,8 @@ interface HomeViewProps {
   onOpenFlow: (mode: 'research' | 'plan' | 'capture', initialPrompt?: string) => void;
   onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
   loadStatus?: 'loading' | 'ready' | 'error';
-  onStartResearch?: (query: string, mode: WebSearchMode, projectId?: string | null) => Promise<WebResearchResult | null>;
-  onStartPlan?: (goal: string, projectId?: string | null) => Promise<string | null>;
+  onStartResearch?: (query: string, mode: WebSearchMode, projectId?: string | null, templateId?: string | null, modelId?: string | null) => Promise<WebResearchResult | null>;
+  onStartPlan?: (goal: string, projectId?: string | null, templateId?: string | null, modelId?: string | null) => Promise<string | null>;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({

@@ -1,14 +1,20 @@
+vi.mock('../api/conversation', () => ({ getDocumentConversation: vi.fn().mockResolvedValue({mode:'document', initial_prompt:'', turns:[]}), undoDocumentEdit: vi.fn() }));
 import { editorMarkdown, setEditorMarkdown } from './editor-helpers';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FocusView } from '../components/FocusView';
 import { ContextualResumePane } from '../components/ContextualResumePane';
 import { ProjectHistoryDrawer } from '../components/ProjectHistoryDrawer';
 import { RichDocumentRenderer } from '../components/RichDocumentRenderer';
 import * as ipc from '../api/ipc';
-import type { ArtifactContext, BriefClaim, ProjectHistory, ResumeBrief } from '../types/sthira';
+import { getWorkspaceEntity } from '../api/connections';
+import type { ArtifactContext, BriefClaim, ProjectHistory, ResumeBrief, WorkspaceEntityDetail } from '../types/sthira';
+
+vi.mock('../api/connections', async (original) => ({
+  ...await original<typeof import('../api/connections')>(), getWorkspaceEntity: vi.fn(),
+}));
 
 vi.mock('../api/ipc', async (original) => ({
   ...await original<typeof ipc>(), getArtifactContext: vi.fn(), getResumeBrief: vi.fn(),
@@ -46,14 +52,41 @@ beforeEach(() => {
   vi.mocked(ipc.listObjectTypes).mockResolvedValue([]);
   vi.mocked(ipc.getObjectInstance).mockResolvedValue(null);
   vi.mocked(ipc.saveArtifact).mockImplementation(save);
+  vi.mocked(getWorkspaceEntity).mockImplementation(async entity => ({
+    entity: { ...entity, title: entity.id === 'project-a' ? 'Knowledge > platform' : 'Other project', type_label: 'Project', project_id: null },
+    content_md: '', description: '', members: [],
+  }));
 });
 
 describe('Focus composition and document safety', () => {
+  it('labels a model-side research failure honestly and keeps its full message readable', async () => {
+    const message="Model error: Ollama's generation endpoint was not found. Check the server address and API format in Settings → AI & Models. Your inquiry is still saved.";
+    render(<FocusView {...props()} documentRun={{artifactId:'alpha',query:'How are model architectures chosen?',kind:'research',mode:'always_search',status:'error',message,error:message,streamedMarkdown:'',refreshToken:0}}/>);
+    await screen.findByRole('textbox',{name:'Document content'});
+    expect(screen.getByTestId('document-run-banner')).toHaveTextContent('Research failed');
+    expect(screen.getByTestId('document-run-message')).toHaveTextContent(message);
+    expect(screen.getByTestId('document-run-message')).not.toHaveClass('truncate');
+    expect(screen.getByRole('textbox',{name:'Document content'})).toHaveTextContent('Original draft.');
+  });
+
+  it('does not open Resume when the current draft cannot be saved', async () => {
+    vi.mocked(ipc.saveArtifact).mockRejectedValue(new Error('Disk unavailable'));
+    const user = userEvent.setup();
+    render(<FocusView {...props()} />);
+    const editor = await screen.findByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, 'Keep this unsaved draft.');
+    await user.click(screen.getByRole('button', { name: /^Resume$/ }));
+    expect(ipc.getResumeBrief).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('contextual-resume-pane')).not.toBeInTheDocument();
+    expect(editor).toHaveTextContent('Keep this unsaved draft.');
+  });
   it('bounds Level 1 copy and exposes all Level 2 findings, conflicts and source links', async () => {
     const user = userEvent.setup();
     render(<FocusView {...props()} />);
     await screen.findByRole('textbox', { name: 'Document content' });
-    const compact = screen.getByTestId('contextual-resume-pane');
+    expect(screen.queryByTestId('contextual-resume-pane')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Resume$/ }));
+    const compact = await screen.findByTestId('contextual-resume-pane');
     expect((compact.textContent || '').trim().split(/\s+/).length).toBeLessThanOrEqual(75);
     expect(within(compact).getByText('AI inference')).toBeInTheDocument();
     expect(within(compact).getByText('Conflicting decisions')).toBeInTheDocument();
@@ -72,15 +105,15 @@ describe('Focus composition and document safety', () => {
     expect(onSelectArtifact).toHaveBeenCalledWith('source-1-b');
   });
 
-  it('respects the collapse hint and keeps the margin closed by default', async () => {
+  it('keeps Resume and the margin closed until explicitly requested', async () => {
     vi.mocked(ipc.getResumeBrief).mockResolvedValue({ ...brief, pane_hint: { collapse: { reason: 'active_session' } } });
     const user = userEvent.setup();
     render(<FocusView {...props()} />);
     await screen.findByRole('textbox', { name: 'Document content' });
     expect(screen.queryByTestId('contextual-resume-pane')).not.toBeInTheDocument();
     expect(screen.queryByTestId('epistemic-margin-sidebar')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Resume Brief/ }));
-    expect(screen.getByTestId('contextual-resume-pane')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Resume$/ }));
+    expect(await screen.findByTestId('contextual-resume-pane')).toBeInTheDocument();
   });
 
   it('recovers from a load failure without exposing or saving a stale editor', async () => {
@@ -181,4 +214,67 @@ describe('Focus composition and document safety', () => {
     await user.tab({ shift: true });
     expect(screen.getByText('Evidence references (1)')).toHaveFocus();
   });
+});
+
+it('uses the Notes breadcrumb for standalone navigation and makes the current title focusable', async () => {
+  const user=userEvent.setup();const openNotes=vi.fn();
+  vi.mocked(ipc.getArtifactContext).mockResolvedValue({ ...context(), project_id: null });
+  render(<FocusView {...props()} projectId={undefined} onOpenStandaloneNotes={openNotes} />);
+  await screen.findByRole('textbox',{name:'Document content'});
+  await user.click(screen.getByRole('button',{name:'Edit document title: Alpha'}));
+  expect(screen.getByRole('textbox',{name:'Document title'})).toHaveFocus();
+  await user.click(screen.getByRole('button',{name:'Pages'}));
+  expect(openNotes).toHaveBeenCalledOnce();
+});
+it('retains a dirty standalone note when saving before breadcrumb navigation fails', async () => {
+  const user=userEvent.setup();const openNotes=vi.fn();
+  vi.mocked(ipc.getArtifactContext).mockResolvedValue({ ...context(), project_id: null });
+  render(<FocusView {...props()} projectId={undefined} onOpenStandaloneNotes={openNotes} />);
+  const editor=await screen.findByRole('textbox',{name:'Document content'});
+  setEditorMarkdown(editor,'# Alpha\n\nKeep this draft');
+  vi.mocked(ipc.saveArtifact).mockRejectedValue(new Error('Disk unavailable'));
+  await user.click(screen.getByRole('button',{name:'Pages'}));
+  expect(openNotes).not.toHaveBeenCalled();expect(editorMarkdown(editor)).toContain('Keep this draft');
+  vi.mocked(ipc.saveArtifact).mockImplementation(save);
+  await user.click(screen.getByRole('button',{name:'Pages'}));
+  await waitFor(()=>expect(openNotes).toHaveBeenCalledOnce());
+  expect(ipc.saveArtifact).toHaveBeenCalledWith('alpha',expect.stringContaining('Keep this draft'),'Alpha',null);
+});
+
+it('uses the actual project name for a note opened without project context', async () => {
+  const user = userEvent.setup();
+  const onOpenProject = vi.fn();
+  const onOpenStandaloneNotes = vi.fn();
+  render(<FocusView {...props()} projectId={undefined} onOpenProject={onOpenProject} onOpenStandaloneNotes={onOpenStandaloneNotes} />);
+  const breadcrumb = await screen.findByRole('button', { name: 'Knowledge > platform' });
+  expect(getWorkspaceEntity).toHaveBeenCalledWith({ kind: 'project', id: 'project-a' });
+  expect(ipc.getResumeBrief).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Pages' })).not.toBeInTheDocument();
+  await user.click(breadcrumb);
+  expect(onOpenProject).toHaveBeenCalledWith('project-a');
+  expect(onOpenStandaloneNotes).not.toHaveBeenCalled();
+});
+
+it('keeps the selected project for a shared note and does not depend on a resume brief', async () => {
+  const user = userEvent.setup();
+  const onOpenProject = vi.fn();
+  vi.mocked(ipc.getResumeBrief).mockRejectedValue(new Error('Brief unavailable'));
+  render(<FocusView {...props()} projectId="project-b" onOpenProject={onOpenProject} />);
+  const breadcrumb = await screen.findByRole('button', { name: 'Other project' });
+  await screen.findByRole('textbox', { name: 'Document content' });
+  await user.click(breadcrumb);
+  expect(onOpenProject).toHaveBeenCalledWith('project-b');
+});
+
+it('ignores a late project-name response after switching documents', async () => {
+  let finishLookup!: (detail: WorkspaceEntityDetail) => void;
+  vi.mocked(getWorkspaceEntity).mockImplementationOnce(() => new Promise(resolve => { finishLookup = resolve; }));
+  const handlers = { ...props(), onOpenProject: vi.fn() };
+  const { rerender } = render(<FocusView {...handlers} />);
+  await screen.findByRole('textbox', { name: 'Document content' });
+  rerender(<FocusView {...handlers} artifactId="beta" projectId="project-b" />);
+  await screen.findByRole('button', { name: 'Other project' });
+  await act(async () => finishLookup({ entity: { kind: 'project', id: 'project-a', title: 'Old project', type_label: 'Project', project_id: null }, content_md: '', description: '', members: [] }));
+  expect(screen.getByRole('button', { name: 'Other project' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Old project' })).not.toBeInTheDocument();
 });

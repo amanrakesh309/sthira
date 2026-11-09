@@ -41,7 +41,7 @@ describe('Workspace Organization Refactor', () => {
   // -------------------------------------------------------------------------
   // 1. Sidebar Structure, 7-Item Cap, and Pinning
   // -------------------------------------------------------------------------
-  it('LeftSidebar displays Projects, Notes & Pages, and Custom Objects with 7-item caps and pin indicators', async () => {
+  it('LeftSidebar displays Projects, Pages, and Custom Objects with 7-item caps and pin indicators', async () => {
     vi.mocked(ipc.getWorkspaceTree).mockResolvedValue({
       projects: [],
       unassociated_pages: [],
@@ -345,7 +345,7 @@ describe('Workspace Organization Refactor', () => {
     expect(screen.getByText('Unaffiliated Idea Note')).toBeInTheDocument();
     expect(screen.getByText('Thrust Vectoring Decision')).toBeInTheDocument();
 
-    // Notes & Pages now carries the scope toggle + sort mechanism instead of a separate tab
+    // Pages now carries the scope toggle + sort mechanism instead of a separate tab
     await user.click(screen.getByTestId('tab-notes'));
     expect(screen.getByTestId('note-scope-filter')).toBeInTheDocument();
     expect(screen.getByTestId('note-scope-all')).toBeInTheDocument();

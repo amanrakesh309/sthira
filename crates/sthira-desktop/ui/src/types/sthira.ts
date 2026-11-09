@@ -114,7 +114,7 @@ export type EpistemicOrigin = 'user_recorded' | 'source_backed' | 'ai_inferred';
 export interface BriefClaim {
   text: string;
   origin: EpistemicOrigin;
-  rendering: 'verbatim_quote' | 'deterministic_template' | 'llm_synthesis';
+  rendering: 'verbatim_quote' | 'deterministic_template' | 'llm_synthesis' | 'ai_prose';
   evidence_node_ids: string[];
   artifact_ids: string[];
 }
@@ -133,6 +133,7 @@ export interface ResumeBrief {
   conflicting_decisions: BriefClaim[];
   active_working_breadcrumb: string;
   pane_hint: ResumePaneHint;
+  generation?: { mode: 'factual' | 'generated' | 'cached'; model_id: string | null; model_name: string | null; provider_name?: string | null; generated_at: number | null; notice: string | null; factual_progress?: BriefClaim[] } | null;
 }
 
 export interface NarrativeSegment {
@@ -647,10 +648,10 @@ export interface WorkspaceIndexData {
  */
 export type WorkspaceIndexTab = 'all' | 'projects' | 'notes' | 'objects';
 
-/** Scope toggle applied inside the Notes & Pages tab. */
+/** Scope toggle applied inside the Pages tab. */
 export type NoteScopeFilter = 'all' | 'projects' | 'standalone';
 
-/** Sort order applied inside the Notes & Pages tab. Pinned notes always float first. */
+/** Sort order applied inside the Pages tab. Pinned notes always float first. */
 export type NoteSortKey = 'updated' | 'created' | 'title_asc' | 'title_desc';
 export type ExplorePlanTab = 'research' | 'plan' | 'trackers' | 'digests';
 

@@ -104,6 +104,8 @@ describe('Home navigation and input accessibility', () => {
     const user = userEvent.setup();
     const handlers = callbacks();
     render(<HomeView {...handlers} homeState={empty} />);
+    expect(screen.queryByTestId('home-model-selector')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('mode-btn-research'));
     await user.click(screen.getByRole('button', { name: 'Select a model' }));
     expect(screen.getByText('No models configured. Capture works without a model.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Connect Providers/ }));

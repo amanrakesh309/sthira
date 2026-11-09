@@ -1,27 +1,8 @@
 import React, { useState } from 'react';
-import {
-  Sliders,
-  FileText,
-  Activity,
-  ShieldCheck,
-  AlertTriangle,
-  RotateCcw,
-  Check,
-  Copy,
-  Sparkles,
-} from 'lucide-react';
-import { MilestonePlanDagWidget } from './widgets/MilestonePlanDagWidget';
-import { EvidenceComparisonMatrixWidget } from './widgets/EvidenceComparisonMatrixWidget';
-import { InteractiveDecisionSelectorWidget } from './widgets/InteractiveDecisionSelectorWidget';
-import { FormattedMarkdownView } from './FormattedMarkdownView';
-import { revertChangeSet } from '../api/ipc';
-import type {
-  ComparisonRow,
-  DecisionPoint,
-  PlanPhase,
-  StreamMetrics,
-  StreamStatus,
-} from '../types/sthira';
+import { Check, Copy, FileText } from 'lucide-react';
+import { RichDocumentRenderer } from './RichDocumentRenderer';
+import { plainPageMarkdown } from '../editor/plainPageMarkdown';
+import type { ComparisonRow, DecisionPoint, PlanPhase, StreamMetrics, StreamStatus } from '../types/sthira';
 
 interface AdaptiveResponseRendererProps {
   rawText: string;
@@ -38,6 +19,7 @@ interface AdaptiveResponseRendererProps {
   onOpenInEditor?: (text: string, title?: string) => void;
 }
 
+// Kept for compatibility with older clients; ordinary Markdown is never auto-hydrated.
 export function extractMarkdownPhases(text: string): PlanPhase[] {
   if (!text) return [];
   const lines = text.split('\n');
@@ -270,269 +252,30 @@ export function extractMarkdownDecisions(text: string): DecisionPoint[] {
 }
 
 export const AdaptiveResponseRenderer: React.FC<AdaptiveResponseRendererProps> = ({
-  rawText,
-  phases = [],
-  decisions = [],
-  comparisonRows = [],
-  status = 'completed',
-  metrics,
-  basisFingerprint,
-  fallbackNotices = [],
-  projectId,
-  onUndoRevert,
-  onProjectCreated,
-  onOpenInEditor,
+  rawText, phases = [], decisions = [], comparisonRows = [], status = 'completed', basisFingerprint, onOpenInEditor,
 }) => {
-  const [viewMode, setViewMode] = useState<'widgets' | 'markdown'>('widgets');
   const [copied, setCopied] = useState(false);
-  const [activeUndoToast, setActiveUndoToast] = useState<{
-    id: string;
-    message: string;
-  } | null>(null);
-
-  const isStreaming = status === 'streaming';
-
-  // Deterministic Markdown-to-Widget Auto-Hydration (fallback for small models or plain markdown)
-  const effectivePhases = phases.length > 0 ? phases : extractMarkdownPhases(rawText);
-  const effectiveComparisonRows = comparisonRows.length > 0 ? comparisonRows : extractMarkdownComparisonRows(rawText);
-  const effectiveDecisions = decisions.length > 0 ? decisions : extractMarkdownDecisions(rawText);
-
-  const hasStructuredWidgets =
-    effectivePhases.length > 0 || effectiveDecisions.length > 0 || effectiveComparisonRows.length > 0;
-
-  const handleCopyMarkdown = () => {
-    navigator.clipboard.writeText(rawText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleLocalProjectCreated = (projId: string, changeSetId: string) => {
-    setActiveUndoToast({
-      id: changeSetId,
-      message: `Project created from Phase DAG. 1-click rollback available.`,
-    });
-    onProjectCreated?.(projId, changeSetId);
-  };
-
-  const handleRevertUndo = async (csId: string) => {
-    try {
-      await revertChangeSet(csId);
-      setActiveUndoToast(null);
-      onUndoRevert?.(csId);
-    } catch (err) {
-      console.error('Failed to revert change set', err);
-    }
-  };
-
-  // Extract clean text outside structured tags for the widget view commentary
-  let cleanCommentaryText = rawText
-    .replace(/```widget:(plan|decision|comparison)[\s\S]*?```/g, '')
-    .replace(/<widget:(plan|decision|comparison)>[\s\S]*?<\/widget:\1>/g, '');
-
-  if (phases.length === 0 && effectivePhases.length > 0) {
-    // Strip phase markdown sections if they were auto-hydrated into widgets
-    cleanCommentaryText = cleanCommentaryText.replace(/#{1,4}\s*(Phase|Step|Milestone)[\s\S]*?(?=(#{1,4}\s|\n\n\n|$))/gi, '');
+  let markdown = plainPageMarkdown(rawText);
+  // Older streaming protocols may deliver content separately from their text tokens.
+  for (const [kind, data, label] of [
+    ...phases.map(data => ['plan', data, data.title] as const),
+    ...comparisonRows.map(data => ['comparison', data, data.criteria] as const),
+    ...decisions.map(data => ['decision', data, data.question] as const),
+  ]) {
+    if (!markdown.includes(label)) markdown += `\n\n${plainPageMarkdown(`\`\`\`widget:${kind}\n${JSON.stringify(data)}\n\`\`\``)}`;
   }
-  if (comparisonRows.length === 0 && effectiveComparisonRows.length > 0) {
-    // Strip markdown tables if they were auto-hydrated into matrix widgets
-    cleanCommentaryText = cleanCommentaryText.replace(/\|[^\n]+\|\n\|[-:| ]+\|\n(?:\|[^\n]+\|\n?)*/g, '');
-  }
-  if (decisions.length === 0 && effectiveDecisions.length > 0) {
-    // Strip decisions section if auto-hydrated
-    cleanCommentaryText = cleanCommentaryText.replace(/#{1,4}\s*(Decisions?|Trade-?offs?|Choices?)[\s\S]*?(?=(#{1,4}\s|\n\n\n|$))/gi, '');
-  }
-
-  cleanCommentaryText = cleanCommentaryText.trim();
-
-  return (
-    <div className="w-full rounded-2xl border border-[#E8E5DC] dark:border-[#2C2E27] bg-[#FAF9F6] dark:bg-[#181915] p-4.5 text-[#1E201C] dark:text-[#EDEAE2] font-sans shadow-xs space-y-4">
-      {/* Top Control Bar & Provenance Banner */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#E8E5DC] dark:border-[#2C2E27]">
-        {/* Left: Epistemic Provenance Badge */}
-        <div className="flex items-center gap-2">
-          {isStreaming ? (
-            <span
-              id="streaming-badge"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-[#FFF7E8] dark:bg-[#2A200B] text-[#8C5D00] dark:text-[#F3BA59] border border-[#F2E0BA] dark:border-[#4D3A1B] animate-pulse"
-            >
-              <Activity className="w-3.5 h-3.5 text-[#E58C00]" />
-              <span>[Streaming / Unverified]</span>
-            </span>
-          ) : (
-            <div className="flex items-center gap-2">
-              <span
-                id="verified-badge"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-[#EBF2EA] dark:bg-[#182618] text-[#2F5933] dark:text-[#88D080] border border-[#D1E2D0] dark:border-[#274026]"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-[#3E7444] dark:text-[#88D080]" />
-                <span>
-                  [Verified Basis
-                  {basisFingerprint ? `: ${basisFingerprint.slice(0, 8)}` : ''}]
-                </span>
-              </span>
-
-              {metrics && (
-                <span className="text-[11px] text-[#7A7870] dark:text-[#9E9C93] font-mono flex items-center gap-1.5">
-                  <span>{metrics.total_tokens} tokens</span>
-                  <span>•</span>
-                  <span>{metrics.duration_ms}ms</span>
-                </span>
-              )}
-            </div>
-          )}
-
-          {fallbackNotices.length > 0 && (
-            <span
-              id="fallback-notice-badge"
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#FFF1E8] dark:bg-[#2C1810] text-[#9E3E0E] dark:text-[#E88C64] border border-[#F5D4C2] dark:border-[#4D281B]"
-              title={fallbackNotices.join('\n')}
-            >
-              <AlertTriangle className="w-3 h-3" />
-              <span>Degraded to Markdown</span>
-            </span>
-          )}
-        </div>
-
-        {/* Right: Dual-Mode Switcher & Copy Action */}
-        <div className="flex items-center gap-2">
-          {hasStructuredWidgets && (
-            <div className="inline-flex p-0.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] border border-[#E0DCD3] dark:border-[#2C2E27]">
-              <button
-                type="button"
-                id="toggle-widgets-mode"
-                onClick={() => setViewMode('widgets')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                  viewMode === 'widgets'
-                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] shadow-2xs font-semibold'
-                    : 'text-[#66645D] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-                }`}
-                title="Render progressive interactive generative UI widgets"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>🎛️ Interactive Widgets</span>
-              </button>
-
-              <button
-                type="button"
-                id="toggle-markdown-mode"
-                onClick={() => setViewMode('markdown')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                  viewMode === 'markdown'
-                    ? 'bg-white dark:bg-[#1C1D19] text-[#1E201C] dark:text-[#EDEAE2] shadow-2xs font-semibold'
-                    : 'text-[#66645D] dark:text-[#9E9C93] hover:text-[#1E201C] dark:hover:text-[#EDEAE2]'
-                }`}
-                title="Render formatted plain markdown text"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>📄 Plain Markdown</span>
-              </button>
-            </div>
-          )}
-
-          {onOpenInEditor && (
-            <button
-              type="button"
-              onClick={() => onOpenInEditor(rawText)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#282C25] dark:bg-[#EDEAE2] text-white dark:text-[#121310] text-xs font-semibold hover:bg-[#3D4238] dark:hover:bg-[#D4D1C7] transition-colors shadow-2xs cursor-pointer"
-              title="Open synthesized report in document workspace"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              <span>Open in Editor</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={handleCopyMarkdown}
-            aria-label="Copy markdown"
-            className="p-1.5 rounded-lg bg-[#EFECE4] dark:bg-[#22241F] hover:bg-[#E5E1D6] dark:hover:bg-[#2C2E27] text-[#5C5B54] dark:text-[#9E9C93] transition-colors cursor-pointer"
-            title="Copy response markdown"
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-[#3E7444] dark:text-[#88D080]" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
-        </div>
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(markdown); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { setCopied(false); }
+  };
+  return <section className="adaptive-response space-y-3">
+    <div className="flex items-center justify-between gap-3 text-xs text-sthira-text-muted">
+      <span>{status === 'streaming' ? '[Streaming / Unverified]' : basisFingerprint ? `[Verified Basis: ${basisFingerprint.slice(0, 8)}]` : 'Response'}</span>
+      <div className="flex items-center gap-2">
+        {onOpenInEditor && <button type="button" onClick={() => onOpenInEditor(markdown)} className="sthira-button-secondary"><FileText size={14}/> Open in Editor</button>}
+        <button type="button" onClick={copy} aria-label="Copy markdown" title="Copy response markdown">{copied ? <Check size={16}/> : <Copy size={16}/>}</button>
       </div>
-
-      {/* Undo Toast Notification */}
-      {activeUndoToast && (
-        <div
-          id="undo-toast"
-          className="p-3 rounded-xl bg-[#282C25] dark:bg-[#161714] border border-transparent dark:border-[#2C2E27] text-white dark:text-[#EDEAE2] text-xs flex items-center justify-between shadow-lg animate-fadeIn"
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#C1DB99]" />
-            <span>{activeUndoToast.message}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleRevertUndo(activeUndoToast.id)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#3D4238] dark:bg-[#252820] hover:bg-[#52594C] text-[#E0E8D7] dark:text-[#EDEAE2] font-semibold text-xs transition-colors cursor-pointer"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>Undo</span>
-          </button>
-        </div>
-      )}
-
-      {/* Body Presentation: Widgets vs Plain Markdown */}
-      {viewMode === 'widgets' && hasStructuredWidgets ? (
-        <div id="widgets-container" className="space-y-4">
-          {/* Introductory commentary text */}
-          {cleanCommentaryText && (
-            <FormattedMarkdownView
-              content={cleanCommentaryText}
-              className="text-xs leading-relaxed text-[#363A31] dark:text-[#D4D1C7]"
-            />
-          )}
-
-          {/* Interactive DAG Widget */}
-          {effectivePhases.length > 0 && (
-            <MilestonePlanDagWidget
-              phases={effectivePhases}
-              isStreaming={isStreaming}
-              onProjectCreated={handleLocalProjectCreated}
-            />
-          )}
-
-          {/* Evidence Comparison Matrix */}
-          {effectiveComparisonRows.length > 0 && (
-            <EvidenceComparisonMatrixWidget
-              rows={effectiveComparisonRows}
-              isStreaming={isStreaming}
-            />
-          )}
-
-          {/* Interactive Decisions Selector */}
-          {effectiveDecisions.length > 0 && (
-            <InteractiveDecisionSelectorWidget
-              decisions={effectiveDecisions}
-              isStreaming={isStreaming}
-              projectId={projectId}
-            />
-          )}
-        </div>
-      ) : (
-        /* Rich Formatted Markdown View */
-        <div
-          id="markdown-container"
-          className="p-4 rounded-xl bg-white dark:bg-[#161714] border border-[#E8E5DC] dark:border-[#2C2E27] shadow-2xs"
-        >
-          {rawText ? (
-            <FormattedMarkdownView
-              content={rawText}
-              className="text-xs leading-relaxed"
-            />
-          ) : (
-            <span className="text-[#8C8A81] dark:text-[#6E6D66] italic text-xs">
-              {isStreaming ? 'Receiving token stream...' : 'No response text available.'}
-            </span>
-          )}
-        </div>
-      )}
     </div>
-  );
+    <RichDocumentRenderer content={markdown} />
+  </section>;
 };

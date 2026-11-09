@@ -1,3 +1,10 @@
+pub mod ai_setup;
+pub mod resume;
+pub mod naming;
+pub mod workspace_session;
+pub mod resume_pack;
+pub mod conversation;
+pub mod workflow_settings;
 pub mod commands;
 pub mod connections;
 pub mod projects;
@@ -16,6 +23,24 @@ pub use state::AppState;
 
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
+        ai_setup::cmd_open_ai_app_download,
+        resume::cmd_get_resume_settings,
+        resume::cmd_get_resume_model,
+        naming::cmd_suggest_document_titles,
+        naming::cmd_apply_document_title,
+        workspace_session::cmd_get_workspace_session_key,
+        resume::cmd_save_resume_settings,
+        resume::cmd_generate_resume_brief,
+        resume_pack::cmd_get_resume_pack_status,
+        resume_pack::cmd_install_resume_pack,
+        resume_pack::cmd_remove_resume_pack,
+        workflow_settings::cmd_get_workflow_settings,
+        workflow_settings::cmd_save_workflow_setting,
+        conversation::cmd_get_document_conversation,
+        conversation::cmd_select_document_conversation_model,
+        conversation::cmd_discuss_document,
+        conversation::cmd_decide_document_edit,
+        conversation::cmd_undo_document_edit,
         projects::cmd_get_project_overview,
         connections::cmd_get_workspace_entity,
         connections::cmd_search_connection_targets,
@@ -33,6 +58,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_get_project_history,
         commands::cmd_get_artifact_context,
         commands::cmd_save_artifact,
+        commands::cmd_save_generated_artifact,
         commands::cmd_decide_proposal,
         commands::cmd_revert_change_set,
         commands::cmd_promote_to_project,
@@ -102,6 +128,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_delete_scheduled_topic,
         commands::cmd_refine_artifact,
         commands::cmd_derive_artifact,
+        commands::cmd_cancel_request,
         commands::cmd_list_synthesis_templates,
     ])
 }

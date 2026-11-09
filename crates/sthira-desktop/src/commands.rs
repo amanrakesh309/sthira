@@ -555,10 +555,7 @@ pub async fn handle_get_resume_brief(
     project_id: String,
     level: u8,
 ) -> Result<ResumeBrief, String> {
-    engine
-        .get_resume_brief(&project_id, level as i64)
-        .await
-        .map_err(|e| e.to_string())
+    crate::resume::read_brief(engine, &project_id, level.into())
 }
 
 pub fn handle_get_resume_pane_hint(
@@ -1287,6 +1284,15 @@ pub struct SearchResultItem {
 }
 
 pub fn handle_search_all(engine: &Engine, query: String) -> Result<Vec<SearchResultItem>, String> {
+    if let Some(matches) = crate::connections::lookup_reference_query(engine, &query) {
+        return Ok(matches.into_iter().map(|entity| SearchResultItem {
+            id: entity.id,
+            title: entity.title,
+            kind: if entity.kind == crate::connections::EntityKind::Project { "project" } else { "document" }.into(),
+            excerpt: "Saved workspace reference".into(),
+            project_id: entity.project_id,
+        }).collect());
+    }
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query.trim());
     let mut results = Vec::new();
@@ -1372,6 +1378,7 @@ pub async fn handle_synthesize_and_create_research(
     prompt: String,
     model_id: Option<String>,
 ) -> Result<GuidedProjectResult, String> {
+    let model_id = crate::workflow_settings::workflow_model(engine, "research", model_id)?;
     let schema = schemars::schema_for!(ResearchSynthesisSchema);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
     let system_prompt = "You are an expert research scientist and systems architect. Synthesize a grounded, comprehensive research plan and technical document for the user's inquiry. Provide technical rigor, architectural trade-offs, and clear hypotheses.";
@@ -1599,10 +1606,12 @@ pub fn handle_save_provider(
     entry: ProviderEntry,
     api_key: Option<String>,
 ) -> Result<(), String> {
-    let writer = engine.db().writer();
+    let mut writer = engine.db().writer();
     let now_ms = engine.clock().now_ms();
-    providers_repo::upsert_provider(&writer, &entry, api_key.as_deref(), now_ms)
-        .map_err(|e| e.to_string())
+    let transaction = writer.transaction().map_err(|e| e.to_string())?;
+    providers_repo::upsert_provider(&transaction, &entry, api_key.as_deref(), now_ms)
+        .map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1692,13 +1701,24 @@ pub async fn cmd_fetch_provider_models(
 }
 
 pub async fn handle_discover_provider_models(
-    _engine: &Engine,
+    engine: &Engine,
     provider_id: String,
     provider_type: String,
     endpoint: String,
     api_key: Option<String>,
 ) -> Result<Vec<ProviderModelEntry>, String> {
-    discover_provider_models(&provider_id, &provider_type, &endpoint, api_key.as_deref())
+    // Checking a connection is read-only. Reuse its stored secret only for the
+    // exact saved endpoint and protocol, never for a different address being edited.
+    let stored_key = if api_key.is_none() {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        let catalog = providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
+        if catalog.iter().any(|provider| provider.id == provider_id
+            && provider.base_url == endpoint && provider.provider_type == provider_type) {
+            providers_repo::get_provider_api_key(&reader, &provider_id).map_err(|e| e.to_string())?
+        } else { None }
+    } else { None };
+    let key = api_key.or(stored_key);
+    discover_provider_models(&provider_id, &provider_type, &endpoint, key.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -1780,6 +1800,12 @@ pub async fn handle_route_input_steered(
     model_id: Option<String>,
     template_id: Option<String>,
 ) -> Result<RouteOutcome, String> {
+    let model_id = if let Some(mode) = mode {
+        match mode {
+            OperationalMode::Capture => model_id,
+            _ => crate::workflow_settings::workflow_model(engine, match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" }, model_id)?,
+        }
+    } else { model_id };
     engine
         .route_input_steered_with_template(&raw, mode, model_id.as_deref(), template_id.as_deref())
         .await
@@ -3264,8 +3290,14 @@ pub fn cmd_import_web_source_to_vault(
 pub async fn handle_execute_web_research(
     engine: &Engine,
     query: String,
-    _model_id: Option<String>,
+    model_id: Option<String>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
+    let model_id = crate::workflow_settings::workflow_model(engine, "research", model_id)?;
+    let resolved = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e|e.to_string())?
+    };
+    let run_engine = engine.with_model(resolved.provider);
     let active_provider = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
         sthira_core::db::search_repo::get_default_search_provider(&reader)
@@ -3285,7 +3317,7 @@ pub async fn handle_execute_web_research(
 
     let provider = sthira_core::search::build_search_provider(&entry);
     sthira_core::engines::research_engine::execute_multi_query_research(
-        engine,
+        &run_engine,
         &query,
         provider.as_ref(),
         3,
@@ -3328,11 +3360,7 @@ pub async fn handle_create_research_page(
         return Err("Research query cannot be empty".to_string());
     }
 
-    let title = sthira_core::engines::research_engine::generate_smart_title(
-        Some(engine.model().as_ref()),
-        q,
-    )
-    .await;
+    let title = sthira_core::engines::research_engine::fallback_title_from_query(q);
 
     let initial = format!(
         "# {title}\n\n> **Status:** draft — researching…\n\n## Research Inquiry\n{q}\n\n\
@@ -3361,6 +3389,7 @@ pub async fn handle_create_research_page(
         let _ = engine.attach_artifact(&pid, &art.id, "user_explicit", None);
     }
 
+    engine.document_conversation(&art.id, Some("research"), q)?;
     Ok(art.id)
 }
 
@@ -3380,16 +3409,53 @@ pub async fn cmd_create_research_page(
 /// No URL is ever required — the pipeline generates its own search queries, dispatches
 /// them to the configured `SearchProvider`, scrapes the top documents, grounds quotes
 /// with `VerifiedQuote::verify`, and synthesizes with an explicit temporal instruction.
+pub fn handle_save_generated_artifact(engine: &Engine, artifact_id: String, content_md: String, title: String, project_id: Option<String>) -> Result<Artifact,String> {
+    if content_md.trim().is_empty() { return Err("The model returned an empty document; the saved draft was kept.".into()); }
+    let prior = engine.get_artifact(&artifact_id).map_err(|e|e.to_string())?;
+    if prior.deleted_at.is_some() { return Err("This document was deleted.".into()); }
+    let content_md = if content_md.starts_with("# ") {
+        format!("# {}{}", title, content_md.find('\n').map(|at| &content_md[at..]).unwrap_or(""))
+    } else { content_md };
+    let updated = engine.update_artifact(&artifact_id,&content_md,Actor::Ai,project_id.as_deref()).map_err(|e|e.to_string())?;
+    {
+        let writer=engine.db().writer();
+        writer.execute("UPDATE artifacts SET title=?1,authorship='ai_generated',is_unfinished_draft=0 WHERE id=?2",params![title,artifact_id]).map_err(|e|e.to_string())?;
+    }
+    let updated=engine.get_artifact(&updated.id).map_err(|e|e.to_string())?;
+    if let Some(ref path)=updated.file_path { std::fs::write(engine.vault_dir().join(path),sthira_core::vault::render_file_with_frontmatter(&updated)).map_err(|e|e.to_string())?; }
+    engine.emit_event(sthira_core::CoreEvent::ArtifactChanged{id:artifact_id});
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn cmd_save_generated_artifact(state: State<'_, AppState>, artifact_id: String, content_md: String, title: String, project_id: Option<String>) -> Result<Artifact,String> {
+    handle_save_generated_artifact(&state.engine,artifact_id,content_md,title,project_id)
+}
+
 pub async fn handle_run_research_into_page(
     engine: &Engine,
     artifact_id: String,
     query: String,
     web_search_mode: Option<String>,
     template_id: Option<String>,
+    model_id: Option<String>,
     on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
+    let model_id = crate::workflow_settings::workflow_model(engine, "research", model_id)?;
     use sthira_core::engines::research_engine::{execute_research_with_template, WebSearchMode};
 
+    let template_id = crate::workflow_settings::workflow_template(engine, "research", template_id)?;
+    let resolved = {
+        let reader = engine.db().reader().map_err(|e|e.to_string())?;
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e|e.to_string())?
+    };
+    let run_engine = engine.with_model(resolved.provider);
+    let capability = {
+        let reader = engine.db().reader().map_err(|e|e.to_string())?;
+        sthira_core::db::providers_repo::get_model_entry(&reader, &resolved.model_id).map_err(|e|e.to_string())?
+            .map(|(model,_,_)| model.web_search_capability)
+            .unwrap_or(sthira_core::llm::WebSearchCapability::EngineAugmentedOnly)
+    };
     // Verify the target page exists before doing any expensive work.
     engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
 
@@ -3422,35 +3488,20 @@ pub async fn handle_run_research_into_page(
     };
 
     let result = execute_research_with_template(
-        engine,
+        &run_engine,
         query.trim(),
         mode,
         Some(provider.as_ref()),
         &provider_label,
         4,
-        None,
+        Some(capability),
         template_id.as_deref(),
         Some(&progress),
     )
     .await
     .map_err(|e| e.to_string())?;
 
-    // Fill the page in with the grounded document and clear the draft flag.
-    engine
-        .update_artifact(&artifact_id, &result.synthesized_markdown, Actor::User, None)
-        .map_err(|e| e.to_string())?;
-
-    {
-        let writer = engine.db().writer();
-        let _ = writer.execute(
-            "UPDATE artifacts SET title = ?1, is_unfinished_draft = 0 WHERE id = ?2;",
-            params![result.title, artifact_id],
-        );
-    }
-
-    engine.emit_event(sthira_core::CoreEvent::ArtifactChanged {
-        id: artifact_id,
-    });
+    handle_save_generated_artifact(engine, artifact_id, result.synthesized_markdown.clone(), result.title.clone(), None)?;
 
     Ok(result)
 }
@@ -3461,6 +3512,7 @@ pub async fn cmd_run_research_into_page(
     query: String,
     web_search_mode: Option<String>,
     template_id: Option<String>,
+    model_id: Option<String>,
     on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
     state: State<'_, AppState>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
@@ -3470,6 +3522,7 @@ pub async fn cmd_run_research_into_page(
         query,
         web_search_mode,
         template_id,
+        model_id,
         on_progress,
     )
     .await
@@ -3482,6 +3535,8 @@ pub async fn handle_stream_adaptive_run(
     model_id: Option<String>,
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
 ) -> Result<(), String> {
+    let workflow = match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" };
+    let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ProgressiveStreamChunk>(64);
     let engine_clone = engine.clone();
 
@@ -3499,7 +3554,8 @@ pub async fn handle_stream_adaptive_run(
     while let Some(chunk) = rx.recv().await {
         if let Err(e) = on_chunk.send(chunk) {
             eprintln!("Failed to send chunk over Tauri IPC channel: {e}");
-            break;
+            producer_task.abort();
+            return Err("Generation delivery was interrupted. No generated document was saved.".into());
         }
     }
 
@@ -3513,9 +3569,12 @@ pub async fn cmd_stream_adaptive_run(
     raw_input: String,
     mode: OperationalMode,
     model_id: Option<String>,
+    template_id: Option<String>,
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let workflow = match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" };
+    let raw_input = crate::workflow_settings::workflow_prompt(&state.engine, workflow, raw_input, template_id)?;
     handle_stream_adaptive_run(&state.engine, raw_input, mode, model_id, on_chunk).await
 }
 
@@ -3956,10 +4015,8 @@ pub fn handle_get_workspace_index(
             })
         })?;
 
-        for r in rows {
-            if let Ok(it) = r {
-                items.push(it);
-            }
+        for it in rows.flatten() {
+            items.push(it);
         }
         Ok(())
     };
@@ -4014,10 +4071,8 @@ pub fn handle_get_workspace_index(
             })
         })?;
 
-        for r in rows {
-            if let Ok(it) = r {
-                items.push(it);
-            }
+        for it in rows.flatten() {
+            items.push(it);
         }
         Ok(())
     };
@@ -4060,10 +4115,8 @@ pub fn handle_get_workspace_index(
             })
         })?;
 
-        for r in rows {
-            if let Ok(it) = r {
-                items.push(it);
-            }
+        for it in rows.flatten() {
+            items.push(it);
         }
         Ok(())
     };
@@ -4356,7 +4409,18 @@ pub async fn handle_trigger_scheduled_topic_run(
     engine: &Engine,
     topic_id: String,
 ) -> Result<String, String> {
-    sthira_core::engines::scheduled_runner::execute_topic_run(engine, &topic_id).await
+    let topic = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::db::scheduled_topics_repo::get_topic(&reader, &topic_id).map_err(|e| e.to_string())?.ok_or("Scheduled topic unavailable.")?
+    };
+    let workflow = if topic.topic_type.as_str() == "research" { "research" } else { "plan" };
+    let model_id = crate::workflow_settings::workflow_model(engine, workflow, topic.model_id)?;
+    let resolved = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e| e.to_string())?
+    };
+    let run_engine = engine.with_model(resolved.provider);
+    sthira_core::engines::scheduled_runner::execute_topic_run(&run_engine, &topic_id).await
 }
 
 #[tauri::command]
@@ -4400,6 +4464,27 @@ pub fn cmd_delete_scheduled_topic(
     handle_delete_scheduled_topic(&state.engine, topic_id)
 }
 
+pub async fn handle_refine_artifact_with_cancellation(
+    engine: &Engine,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+    cancel_token: Option<&sthira_core::llm::lifecycle::CancellationToken>,
+) -> Result<String, String> {
+    let model_id = crate::workflow_settings::workflow_model(engine, "draft", model_id)?;
+    engine
+        .refine_artifact_with_policy_and_cancellation(
+            &artifact_id,
+            &critique,
+            model_id.as_deref(),
+            web_search,
+            sthira_core::llm::lifecycle::RequestPolicy::standard(),
+            cancel_token,
+        )
+        .await
+}
+
 pub async fn handle_refine_artifact(
     engine: &Engine,
     artifact_id: String,
@@ -4407,9 +4492,39 @@ pub async fn handle_refine_artifact(
     model_id: Option<String>,
     web_search: bool,
 ) -> Result<String, String> {
-    engine
-        .refine_artifact(&artifact_id, &critique, model_id.as_deref(), web_search)
-        .await
+    handle_refine_artifact_with_cancellation(
+        engine,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_refine_artifact_with_request_id(
+    state: &AppState,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+    request_id: Option<String>,
+) -> Result<String, String> {
+    let cancel_token = request_id.as_ref().map(|id| state.requests.register(id));
+    let res = handle_refine_artifact_with_cancellation(
+        &state.engine,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        cancel_token.as_ref(),
+    )
+    .await;
+    if let Some(ref id) = request_id {
+        state.requests.unregister(id);
+    }
+    res
 }
 
 #[tauri::command]
@@ -4418,9 +4533,43 @@ pub async fn cmd_refine_artifact(
     critique: String,
     model_id: Option<String>,
     web_search: bool,
+    request_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    handle_refine_artifact(&state.engine, artifact_id, critique, model_id, web_search).await
+    handle_refine_artifact_with_request_id(
+        &state,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        request_id,
+    )
+    .await
+}
+
+pub async fn handle_derive_artifact_with_cancellation(
+    engine: &Engine,
+    source_artifact_id: String,
+    derivation_type: String,
+    template_id: Option<String>,
+    model_id: Option<String>,
+    project_id: Option<String>,
+    cancel_token: Option<&sthira_core::llm::lifecycle::CancellationToken>,
+) -> Result<String, String> {
+    let workflow = if derivation_type == "plan_from_research" { "plan" } else { "draft" };
+    let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
+    let template_id = crate::workflow_settings::workflow_template(engine, workflow, template_id)?;
+    engine
+        .derive_artifact_with_policy_and_cancellation(
+            &source_artifact_id,
+            &derivation_type,
+            template_id.as_deref(),
+            model_id.as_deref(),
+            project_id.as_deref(),
+            sthira_core::llm::lifecycle::RequestPolicy::standard(),
+            cancel_token,
+        )
+        .await
 }
 
 pub async fn handle_derive_artifact(
@@ -4429,17 +4578,52 @@ pub async fn handle_derive_artifact(
     derivation_type: String,
     template_id: Option<String>,
     model_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<String, String> {
-    engine
-        .derive_artifact(
-            &source_artifact_id,
-            &derivation_type,
-            template_id.as_deref(),
-            model_id.as_deref(),
-        )
-        .await
+    handle_derive_artifact_with_cancellation(
+        engine,
+        source_artifact_id,
+        derivation_type,
+        template_id,
+        model_id,
+        project_id,
+        None,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_derive_artifact_with_request_id(
+    state: &AppState,
+    source_artifact_id: Option<String>,
+    source_id: Option<String>,
+    derivation_type: String,
+    template_id: Option<String>,
+    model_id: Option<String>,
+    project_id: Option<String>,
+    request_id: Option<String>,
+) -> Result<String, String> {
+    let resolved_source = source_id
+        .or(source_artifact_id)
+        .ok_or_else(|| "Missing source artifact identity for derivation".to_string())?;
+    let cancel_token = request_id.as_ref().map(|id| state.requests.register(id));
+    let res = handle_derive_artifact_with_cancellation(
+        &state.engine,
+        resolved_source,
+        derivation_type,
+        template_id,
+        model_id,
+        project_id,
+        cancel_token.as_ref(),
+    )
+    .await;
+    if let Some(ref id) = request_id {
+        state.requests.unregister(id);
+    }
+    res
+}
+
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_derive_artifact(
     source_artifact_id: Option<String>,
@@ -4447,19 +4631,33 @@ pub async fn cmd_derive_artifact(
     derivation_type: String,
     template_id: Option<String>,
     model_id: Option<String>,
+    project_id: Option<String>,
+    request_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let resolved_source = source_id
-        .or(source_artifact_id)
-        .ok_or_else(|| "Missing source_id or source_artifact_id".to_string())?;
-    handle_derive_artifact(
-        &state.engine,
-        resolved_source,
+    handle_derive_artifact_with_request_id(
+        &state,
+        source_artifact_id,
+        source_id,
         derivation_type,
         template_id,
         model_id,
+        project_id,
+        request_id,
     )
     .await
+}
+
+pub fn handle_cancel_request(state: &AppState, request_id: &str) -> bool {
+    state.requests.cancel(request_id)
+}
+
+#[tauri::command]
+pub fn cmd_cancel_request(
+    request_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    Ok(handle_cancel_request(&state, &request_id))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

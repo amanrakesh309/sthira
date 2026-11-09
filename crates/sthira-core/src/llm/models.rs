@@ -1,18 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchCapability {
-    Native,               // Provider has built-in web grounding (e.g., Perplexity)
-    AgenticToolCall,      // Supports function calling for SearXNG / Brave
-    EngineAugmentedOnly,  // Scraped text injected into context by Sthira backend
-    Unsupported,          // Search not allowed / supported
-}
-
-impl Default for WebSearchCapability {
-    fn default() -> Self {
-        WebSearchCapability::EngineAugmentedOnly
-    }
+    Native,              // Provider has built-in web grounding (e.g., Perplexity)
+    AgenticToolCall,     // Supports function calling for SearXNG / Brave
+    #[default]
+    EngineAugmentedOnly, // Scraped text injected into context by Sthira backend
+    Unsupported,         // Search not allowed / supported
 }
 
 impl WebSearchCapability {
@@ -28,8 +23,12 @@ impl WebSearchCapability {
     pub fn from_str_lossy(s: &str) -> Self {
         match s.trim().to_lowercase().replace(['-', ' '], "_").as_str() {
             "native" => WebSearchCapability::Native,
-            "agentic_tool_call" | "agentic" | "tool_call" | "tools" => WebSearchCapability::AgenticToolCall,
-            "unsupported" | "offline" | "offline_only" | "disabled" => WebSearchCapability::Unsupported,
+            "agentic_tool_call" | "agentic" | "tool_call" | "tools" => {
+                WebSearchCapability::AgenticToolCall
+            }
+            "unsupported" | "offline" | "offline_only" | "disabled" => {
+                WebSearchCapability::Unsupported
+            }
             _ => WebSearchCapability::EngineAugmentedOnly,
         }
     }
@@ -40,7 +39,10 @@ impl WebSearchCapability {
 /// - Native search models (perplexity*, sonar*): Native
 /// - Small local Ollama models (llama3.2, phi3, etc.): EngineAugmentedOnly
 /// - Offline / embedding / unsupported: Unsupported
-pub fn default_web_search_capability(provider_type: &str, model_identifier: &str) -> WebSearchCapability {
+pub fn default_web_search_capability(
+    provider_type: &str,
+    model_identifier: &str,
+) -> WebSearchCapability {
     let lower_ident = model_identifier.to_lowercase();
     let lower_prov = provider_type.to_lowercase();
 

@@ -105,7 +105,7 @@ fn migration_from_v11_is_additive_and_idempotent() {
     drop(engine);
     let engine = open(&tmp);
     assert_eq!(engine.get_artifact(&a).unwrap().title.as_deref(), Some("Keep me"));
-    assert_eq!(engine.db().reader().unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+    assert_eq!(engine.db().reader().unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 18);
     drop(engine); let engine = open(&tmp);
     assert!(handle_get_workspace_connections(&engine, artifact(&a)).unwrap().is_empty());
 }
@@ -116,7 +116,7 @@ fn derived_items_automatically_expose_source_and_backlinks_without_manual_rows()
     let source = page(&engine, "Research");
     let child = engine.create_derived_artifact(
         ArtifactType::Note, Authorship::AiGenerated, Some("Execution plan"), "# Plan", None,
-        Some(&source), Some("plan_from_research"),
+        Some(&source), Some("plan_from_research"), None,
     ).unwrap();
     let outgoing = handle_get_workspace_connections(&engine, artifact(&child.id)).unwrap();
     assert_eq!(outgoing.len(), 1);

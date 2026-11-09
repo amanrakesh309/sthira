@@ -1,14 +1,10 @@
-use crate::{
-    db::providers_repo,
-    models::router::ProviderModelEntry,
-    CoreError,
-};
+use crate::{db::providers_repo, models::router::ProviderModelEntry, CoreError};
 use rusqlite::Connection;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct OllamaTagsResponse {
-    models: Option<Vec<OllamaTagItem>>,
+    models: Vec<OllamaTagItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,7 +20,6 @@ struct OllamaTagDetails {
     parameter_size: Option<String>,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct OpenAIModelItem {
     id: String,
@@ -35,7 +30,7 @@ struct OpenAIModelItem {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicModelsResponse {
-    data: Option<Vec<AnthropicModelItem>>,
+    data: Vec<AnthropicModelItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,16 +42,25 @@ struct AnthropicModelItem {
 pub async fn discover_local_ollama_models(
     endpoint: &str,
 ) -> Result<Vec<ProviderModelEntry>, CoreError> {
-    let base = endpoint.trim_end_matches('/');
-    let url = format!("{}/api/tags", base);
+    discover_ollama_models(endpoint, None).await
+}
+
+async fn discover_ollama_models(
+    endpoint: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ProviderModelEntry>, CoreError> {
+    let url = crate::llm::endpoints::ollama_api_url(endpoint, "tags");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(4))
         .build()
         .map_err(|e| CoreError::Model(format!("Failed to build HTTP client: {e}")))?;
 
-    let resp = client
-        .get(&url)
+    let mut request = client.get(&url);
+    if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let resp = request
         .send()
         .await
         .map_err(|e| CoreError::Model(format!("Ollama connection failed at {url}: {e}")))?;
@@ -74,42 +78,40 @@ pub async fn discover_local_ollama_models(
         .map_err(|e| CoreError::Model(format!("Invalid /api/tags JSON: {e}")))?;
 
     let mut result = Vec::new();
-    if let Some(items) = parsed.models {
-        for item in items {
-            let raw_tag = item.name.or(item.model).unwrap_or_default();
-            if raw_tag.is_empty() {
-                continue;
-            }
-
-            let ctx = item
-                .details
-                .as_ref()
-                .and_then(|d| d.context_length)
-                .unwrap_or(8192);
-
-            let param_suffix = item
-                .details
-                .as_ref()
-                .and_then(|d| d.parameter_size.as_ref())
-                .map(|p| format!(" ({})", p))
-                .unwrap_or_default();
-
-            let clean_name = raw_tag.replace(":latest", "");
-            let display_name = format!("{}{}", clean_name, param_suffix);
-
-            let cap = crate::llm::models::default_web_search_capability("ollama", &raw_tag);
-            result.push(ProviderModelEntry {
-                id: format!("ollama:{}", raw_tag),
-                provider_id: "ollama".to_string(),
-                model_identifier: raw_tag,
-                display_name,
-                context_window: ctx,
-                supports_structured_output: true,
-                is_enabled: true,
-                is_default: false,
-                web_search_capability: cap,
-            });
+    for item in parsed.models {
+        let raw_tag = item.name.or(item.model).unwrap_or_default();
+        if raw_tag.is_empty() {
+            continue;
         }
+
+        let ctx = item
+            .details
+            .as_ref()
+            .and_then(|d| d.context_length)
+            .unwrap_or(0);
+
+        let param_suffix = item
+            .details
+            .as_ref()
+            .and_then(|d| d.parameter_size.as_ref())
+            .map(|p| format!(" ({})", p))
+            .unwrap_or_default();
+
+        let clean_name = raw_tag.replace(":latest", "");
+        let display_name = format!("{}{}", clean_name, param_suffix);
+
+        let cap = crate::llm::models::default_web_search_capability("ollama", &raw_tag);
+        result.push(ProviderModelEntry {
+            id: format!("ollama:{}", raw_tag),
+            provider_id: "ollama".to_string(),
+            model_identifier: raw_tag,
+            display_name,
+            context_window: ctx,
+            supports_structured_output: true,
+            is_enabled: true,
+            is_default: false,
+            web_search_capability: cap,
+        });
     }
 
     Ok(result)
@@ -127,7 +129,14 @@ pub async fn discover_provider_models(
         .map_err(|e| CoreError::Model(format!("Failed to build HTTP client: {e}")))?;
 
     match provider_type {
-        "ollama" => discover_local_ollama_models(endpoint).await,
+        "ollama" => {
+            let mut models = discover_ollama_models(endpoint, api_key).await?;
+            for model in &mut models {
+                model.id = format!("{provider_id}:{}", model.model_identifier);
+                model.provider_id = provider_id.to_string();
+            }
+            Ok(models)
+        }
         "anthropic" => {
             let base = endpoint.trim_end_matches('/');
             let url = if base.ends_with("/v1") {
@@ -145,10 +154,9 @@ pub async fn discover_provider_models(
                 }
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| CoreError::Model(format!("Anthropic connection failed at {url}: {e}")))?;
+            let resp = req.send().await.map_err(|e| {
+                CoreError::Model(format!("Anthropic connection failed at {url}: {e}"))
+            })?;
 
             if !resp.status().is_success() {
                 return Err(CoreError::Model(format!(
@@ -163,22 +171,20 @@ pub async fn discover_provider_models(
                 .map_err(|e| CoreError::Model(format!("Invalid Anthropic models JSON: {e}")))?;
 
             let mut result = Vec::new();
-            if let Some(items) = parsed.data {
-                for item in items {
-                    let disp = item.display_name.unwrap_or_else(|| item.id.clone());
-                    let cap = crate::llm::models::default_web_search_capability("anthropic", &item.id);
-                    result.push(ProviderModelEntry {
-                        id: format!("{provider_id}:{}", item.id),
-                        provider_id: provider_id.to_string(),
-                        model_identifier: item.id,
-                        display_name: disp,
-                        context_window: 200000,
-                        supports_structured_output: true,
-                        is_enabled: true,
-                        is_default: false,
-                        web_search_capability: cap,
-                    });
-                }
+            for item in parsed.data {
+                let disp = item.display_name.unwrap_or_else(|| item.id.clone());
+                let cap = crate::llm::models::default_web_search_capability("anthropic", &item.id);
+                result.push(ProviderModelEntry {
+                    id: format!("{provider_id}:{}", item.id),
+                    provider_id: provider_id.to_string(),
+                    model_identifier: item.id,
+                    display_name: disp,
+                    context_window: 0,
+                    supports_structured_output: true,
+                    is_enabled: true,
+                    is_default: false,
+                    web_search_capability: cap,
+                });
             }
             Ok(result)
         }
@@ -212,10 +218,9 @@ pub async fn discover_provider_models(
                     .header("X-Title", "Sthira");
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| CoreError::Model(format!("Provider connection failed at {url}: {e}")))?;
+            let resp = req.send().await.map_err(|e| {
+                CoreError::Model(format!("Provider connection failed at {url}: {e}"))
+            })?;
 
             if !resp.status().is_success() {
                 return Err(CoreError::Model(format!(
@@ -224,24 +229,27 @@ pub async fn discover_provider_models(
                 )));
             }
 
-            let parsed_val: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| CoreError::Model(format!("Invalid OpenAI-compatible models JSON: {e}")))?;
+            let parsed_val: serde_json::Value = resp.json().await.map_err(|e| {
+                CoreError::Model(format!("Invalid OpenAI-compatible models JSON: {e}"))
+            })?;
 
             let items: Vec<OpenAIModelItem> = if let Some(data) = parsed_val.get("data") {
-                serde_json::from_value(data.clone()).unwrap_or_default()
+                serde_json::from_value(data.clone())
             } else if parsed_val.is_array() {
-                serde_json::from_value(parsed_val).unwrap_or_default()
+                serde_json::from_value(parsed_val)
             } else {
-                Vec::new()
-            };
+                return Err(CoreError::Model(
+                    "The server did not return a compatible model list".into(),
+                ));
+            }
+            .map_err(|_| CoreError::Model("The server returned an invalid model list".into()))?;
 
             let mut result = Vec::new();
             for item in items {
-                let ctx = item.context_length.or(item.context_window).unwrap_or(128000);
+                let ctx = item.context_length.or(item.context_window).unwrap_or(0);
                 let disp = item.name.unwrap_or_else(|| item.id.clone());
-                let cap = crate::llm::models::default_web_search_capability(provider_type, &item.id);
+                let cap =
+                    crate::llm::models::default_web_search_capability(provider_type, &item.id);
                 result.push(ProviderModelEntry {
                     id: format!("{provider_id}:{}", item.id),
                     provider_id: provider_id.to_string(),
@@ -269,4 +277,3 @@ pub fn sync_discovered_models(
     }
     Ok(())
 }
-

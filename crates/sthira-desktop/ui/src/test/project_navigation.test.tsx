@@ -53,7 +53,7 @@ describe('Project overview routing', () => {
     await user.click(screen.getByRole('button', { name: 'Open Remote source' }));
     expect(await screen.findByRole('textbox', { name: 'Document content' })).toBeInTheDocument();
     expect(ipc.getArtifactContext).toHaveBeenCalledWith('remote');
-    expect(ipc.getResumeBrief).toHaveBeenCalledWith('q', 1);
+    expect(ipc.getResumeBrief).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Project' }));
     expect(await screen.findByRole('heading', { name: 'Knowledge platform' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search project contents' })).toHaveValue('Remote');

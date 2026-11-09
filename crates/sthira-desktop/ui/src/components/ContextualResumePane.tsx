@@ -11,6 +11,7 @@ interface ContextualResumePaneProps {
   onSelectArtifact?: (artifactId: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  wordBudget?: number;
 }
 
 const words = (text: string) => text.trim().split(/\s+/).filter(Boolean);
@@ -24,7 +25,7 @@ const originLabel = (claim: BriefClaim) => ({
 
 export const ContextualResumePane: React.FC<ContextualResumePaneProps> = ({
   brief, onExpandReview, isExpandedReview = false, isReviewLoading = false,
-  reviewError, onSelectArtifact, isOpen, onToggleOpen,
+  reviewError, onSelectArtifact, isOpen, onToggleOpen, wordBudget = 75,
 }) => {
   const breadcrumb = shorten(brief.active_working_breadcrumb || 'Active thread', 8);
   if (!isOpen) {
@@ -41,7 +42,7 @@ export const ContextualResumePane: React.FC<ContextualResumePaneProps> = ({
   const visibleConflicts = isExpandedReview ? conflicts : conflicts.slice(0, 1);
   const allClaims = [...claims, ...visibleConflicts];
   const fixedCopy = `Contextual Resume Brief ${breadcrumb} ${onExpandReview ? 'Expand Review' : ''} Purpose Recent grounded findings ${visibleConflicts.length ? 'Conflicting decisions' : ''} ${brief.continuation_point ? `Continuation ${brief.primary_continuation_artifact_id && onSelectArtifact ? 'Resume' : ''}` : ''} ${claims.length === 0 ? 'No progress recorded yet.' : ''} ${allClaims.map((claim) => `${originLabel(claim)} ${(claim.artifact_ids?.length && onSelectArtifact) ? 'Source' : ''}`).join(' ')}`;
-  const contentBudget = Math.max(12, 75 - words(fixedCopy).length);
+  const contentBudget = Math.max(12, wordBudget - words(fixedCopy).length);
   const purpose = isExpandedReview ? (brief.purpose || 'No purpose recorded.') : shorten(brief.purpose || 'No purpose recorded.', Math.min(14, Math.floor(contentBudget / 3)));
   const continuation = brief.continuation_point
     ? isExpandedReview ? brief.continuation_point : shorten(brief.continuation_point, Math.min(16, Math.floor(contentBudget / 3)))

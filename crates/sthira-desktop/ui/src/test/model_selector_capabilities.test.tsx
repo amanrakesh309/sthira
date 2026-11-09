@@ -240,6 +240,7 @@ describe('Explicit Web Search Capability Detection & Badging', () => {
       />
     );
 
+    await user.click(screen.getByTestId('mode-btn-research'));
     // Wait for catalog to load default model (Claude 3.7 Sonnet - AgenticToolCall)
     await waitFor(() => {
       expect(screen.getByTestId('toggle-web-search')).toBeInTheDocument();
@@ -273,12 +274,9 @@ describe('Explicit Web Search Capability Detection & Badging', () => {
       />
     );
 
-    // Wait for models to load
-    await waitFor(() => {
-      expect(screen.getByTestId('select-capability-m-augmented')).toBeInTheDocument();
-    });
-
+    await user.click(await screen.findByRole('button', { name: 'Information about Ollama Llama 3.2' }));
     const selectEl = screen.getByTestId('select-capability-m-augmented') as HTMLSelectElement;
+    await user.click(selectEl.closest('details')!.querySelector('summary')!);
     expect(selectEl.value).toBe('engine_augmented_only');
 
     // Change Ollama Llama 3.2 capability to agentic_tool_call
@@ -290,4 +288,20 @@ describe('Explicit Web Search Capability Detection & Badging', () => {
       capability: 'agentic_tool_call',
     });
   });
+});
+
+it('passes the selected Home model through to Research and Plan', async () => {
+  mockInvoke.mockImplementation(async (cmd: string) => cmd === 'cmd_get_provider_catalog' ? MOCK_PROVIDERS : {});
+  const user=userEvent.setup();
+  const research=vi.fn().mockResolvedValue({}); const plan=vi.fn().mockResolvedValue('plan-page');
+  render(<UniversalInputBar onStartResearch={research} onStartPlan={plan} />);
+  await user.click(screen.getByTestId('mode-btn-research'));
+  const selector=screen.getByTestId('home-model-selector');
+  await waitFor(()=>expect(selector).toHaveTextContent('Claude'));
+  await user.click(screen.getByTestId('mode-btn-research'));
+  await user.type(screen.getByRole('textbox'),'Investigate soil quality'); await user.keyboard('{Enter}');
+  expect(research).toHaveBeenCalledWith('Investigate soil quality','always_search',null,null,'m-agentic');
+  await user.click(screen.getByTestId('mode-btn-plan'));
+  await user.type(screen.getByRole('textbox'),'Plan a garden'); await user.keyboard('{Enter}');
+  expect(plan).toHaveBeenCalledWith('Plan a garden',null,null,'m-agentic');
 });

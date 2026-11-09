@@ -1,3 +1,9 @@
+import { applyDocumentTitle } from '../api/naming';
+import { TitleSuggestionsPanel, type TitleBasis } from './TitleSuggestionsPanel';
+import { DocumentChatPanel } from './DocumentChatPanel';
+import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
+import { openWorkflowSettings } from '../api/workflowSettings';
+import { undoDocumentEdit, getDocumentConversation, type Conversation } from '../api/conversation';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ArrowLeft,
@@ -24,12 +30,13 @@ import {
   BookOpen,
   Lightbulb,
   Link2,
+  MessageSquare,
 } from 'lucide-react';
 import { ConnectionsPanel } from './ConnectionsPanel';
-import { entityHref } from '../api/connections';
+import { entityHref, getWorkspaceEntity } from '../api/connections';
 import type { EntityRef, WorkspaceEntity } from '../types/sthira';
 import { RefineArtifactModal } from './RefineArtifactModal';
-import { ContextualResumePane } from './ContextualResumePane';
+import { ProjectResume } from './ProjectResume';
 import { ProjectHistoryDrawer } from './ProjectHistoryDrawer';
 import { AmbientProposalPill } from './AmbientProposalPill';
 import { UndoToast } from './UndoToast';
@@ -43,7 +50,6 @@ import { PageActionMenu } from './PageActionMenu';
 import { DocumentEditor, type DocumentEditorHandle, type DocumentFormat } from './DocumentEditor';
 import {
   getArtifactContext,
-  getResumeBrief,
   getProjectHistory,
   saveArtifact,
   decideProposal,
@@ -60,7 +66,6 @@ import {
 import type {
   Artifact,
   ArtifactContext,
-  ResumeBrief,
   ProjectHistory as IProjectHistory,
   ObjectType,
   ObjectInstance,
@@ -68,10 +73,17 @@ import type {
 } from '../types/sthira';
 
 interface FocusViewProps {
+  registerBeforeLeave?: (guard: (() => Promise<boolean>) | null) => void;
+  onDocumentLoaded?: (artifact: Artifact, resolvedProjectId: string | null) => void;
+  initialScrollTop?: number;
+  onScrollPosition?: (top: number) => void;
+  onOpenInNewTab?: () => void;
+  sessionNamespace?: string;
   projectId?: string | null;
   artifactId?: string;
   onBack: () => void;
   backLabel?: string;
+  onOpenStandaloneNotes?: () => void;
   onOpenCanvas: (canvasId?: string) => void;
   onOpenSearch?: () => void;
   onContentUpdate?: (content: string) => void;
@@ -90,10 +102,12 @@ interface FocusViewProps {
 }
 
 export const FocusView: React.FC<FocusViewProps> = ({
+  registerBeforeLeave, onDocumentLoaded, initialScrollTop = 0, onScrollPosition, onOpenInNewTab, sessionNamespace,
   projectId,
   artifactId,
   onBack,
   backLabel = 'Home',
+  onOpenStandaloneNotes,
   onOpenSearch,
   onContentUpdate,
   onSave,
@@ -105,27 +119,52 @@ export const FocusView: React.FC<FocusViewProps> = ({
   onDismissDocumentRun,
 }) => {
   const [context, setContext] = useState<ArtifactContext | null>(null);
-  const [brief, setBrief] = useState<ResumeBrief | null>(null);
+  const workflows = useWorkflowSettings();
+  const [breadcrumbProject, setBreadcrumbProject] = useState<{ id: string; name: string } | null>(null);
+  // Prefer the selected project for shared notes; identity-only entry points can
+  // resolve their location from the document's saved membership instead.
+  const contextProjectId = !artifactId || context?.artifact.id === artifactId ? context?.project_id : null;
+  const breadcrumbProjectId = projectId && projectId !== 'default_project' ? projectId
+    : contextProjectId && contextProjectId !== 'default_project' ? contextProjectId : null;
+  useEffect(() => {
+    let active = true;
+    setBreadcrumbProject(null);
+    if (breadcrumbProjectId) {
+      getWorkspaceEntity({ kind: 'project', id: breadcrumbProjectId }).then(({ entity }) => {
+        if (active && entity.kind === 'project' && entity.id === breadcrumbProjectId) {
+          setBreadcrumbProject({ id: entity.id, name: entity.title });
+        }
+      }).catch(() => { /* Project metadata must not block the document editor. */ });
+    }
+    return () => { active = false; };
+  }, [breadcrumbProjectId]);
+  const [showTitleSuggestions, setShowTitleSuggestions] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [showResume, setShowResume] = useState(false);
   const [history, setHistory] = useState<IProjectHistory | null>(null);
 
   const [editorContent, setEditorContent] = useState('');
   const [title, setTitle] = useState('');
-  const [isBriefOpen, setIsBriefOpen] = useState(true);
-  const [isExpandedReview, setIsExpandedReview] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoadingDocument, setIsLoadingDocument] = useState(true);
-  const [isReviewLoading, setIsReviewLoading] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const loadRequestRef = useRef(0);
   const saveRequestRef = useRef(0);
-  const briefProjectRef = useRef<string | null>(null);
   const [hoveredQuote, setHoveredQuote] = useState<string | null>(null);
-  const [undoToast, setUndoToast] = useState<{ message: string; changeSetId: string } | null>(null);
+  const [undoToast, setUndoToast] = useState<{ message: string; changeSetId: string; artifactId?: string } | null>(null);
+  const [pendingRefinement, setPendingRefinement] = useState<{
+    targetArtifactId: string;
+    refinedContent: string;
+    refinedTitle: string;
+  } | null>(null);
+  const [isSavingConflict, setIsSavingConflict] = useState(false);
+  const isSavingConflictRef = useRef(false);
+  const conflictOpRef = useRef(0);
+  const [conflictError, setConflictError] = useState<string | null>(null);
 
   // Auxiliary document context stays separate from the editable page.
   const [showMargin, setShowMargin] = useState(false);
@@ -134,9 +173,33 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const [connectionPreview, setConnectionPreview] = useState(false);
   const [requestedPreview, setRequestedPreview] = useState<{ entity: EntityRef; sequence: number } | null>(null);
   const connectionsButtonRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { setConnectionScope('page'); setRequestedPreview(null); setConnectionPreview(false); }, [artifactId, projectId]);
+  useEffect(() => { setConnectionScope('page'); setRequestedPreview(null); setConnectionPreview(false); setIsRefineModalOpen(false); }, [artifactId, projectId]);
+  const [chatApplying, setChatApplying] = useState(false);
+  const [chatLoadError, setChatLoadError] = useState<string | null>(null);
+  const [chatReload, setChatReload] = useState(0);
+  const [chatArtifactId, setChatArtifactId] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [showChat, setShowChat] = useState(() => { try { return localStorage.getItem('sthira-document-chat-open') === 'true'; } catch { return false; } });
+  const chatButtonRef = useRef<HTMLButtonElement>(null);
+  const setChatOpen = (open: boolean) => {
+    setShowChat(open);
+    try { localStorage.setItem('sthira-document-chat-open', String(open)); } catch { /* Preference is optional. */ }
+    if (open) { setShowConnections(false); setShowMargin(false); }
+    else chatButtonRef.current?.focus();
+  };
+  useEffect(() => {
+    let active = true;
+    setChatLoadError(null);
+    if (chatArtifactId !== artifactId) { setConversation(null); setChatArtifactId(null); setChatApplying(false); }
+    if (!artifactId) return;
+    const mode = documentRun?.artifactId === artifactId ? documentRun.kind : 'document';
+    getDocumentConversation(artifactId, mode, mode ? documentRun?.query : undefined).then(value => {
+      if (active) { setConversation(value); setChatArtifactId(artifactId); if (value && showChat) { setShowConnections(false); setShowMargin(false); } }
+    }).catch(() => { if (active) setChatLoadError('Couldn’t load this conversation. Try again.'); });
+    return () => { active = false; };
+  }, [artifactId, documentRun?.kind, documentRun?.artifactId, chatReload]);
   const openReference = (entity: EntityRef) => {
-    setShowConnections(true); setShowMargin(false);
+    setShowConnections(true); setShowMargin(false); setShowChat(false);
     setRequestedPreview({ entity, sequence: Date.now() });
   };
   const closeConnections = () => {
@@ -178,19 +241,32 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const handleDerive = async (derivationType: DerivationType) => {
     const currentArtId = context?.artifact?.id || artifactId;
     if (!currentArtId || isDeriving) return;
+    const workflow = derivationType === 'plan_from_research' ? 'plan' : 'draft';
+    if (workflows.loading || workflows.error || !workflows.settings[workflow].enabled) { openWorkflowSettings(); return; }
     setIsDeriveMenuOpen(false);
     setIsDeriving(true);
     setActionError(null);
     const sourceRequest = loadRequestRef.current;
     try {
       if (!(await handleSave())) return;
-      const newArtId = await deriveArtifact(currentArtId, derivationType, null, activeModelId);
+      const targetProjectId = (currentProjectIdRef.current && currentProjectIdRef.current !== 'default_project' ? currentProjectIdRef.current : (projectId && projectId !== 'default_project' ? projectId : null));
+      const requestId = crypto.randomUUID();
+      const newArtId = await deriveArtifact(
+        currentArtId,
+        derivationType,
+        null,
+        workflows.settings[workflow].model_id || activeModelId,
+        targetProjectId,
+        requestId
+      );
       if (newArtId && onOpenArtifact && sourceRequest === loadRequestRef.current) {
-        onOpenArtifact(newArtId, projectId || null);
+        onOpenArtifact(newArtId, targetProjectId);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Derivation failed:', err);
-      if (sourceRequest === loadRequestRef.current) setActionError('Couldn’t derive a new artifact. Check the selected provider and try again.');
+      if (sourceRequest === loadRequestRef.current) {
+        setActionError('Couldn’t derive a new artifact. Check the selected provider and try again.');
+      }
     } finally {
       if (sourceRequest === loadRequestRef.current) setIsDeriving(false);
     }
@@ -234,8 +310,15 @@ export const FocusView: React.FC<FocusViewProps> = ({
   useEffect(() => {
     setIsDeriving(false); setIsDeriveMenuOpen(false); setIsAiStreaming(false); setAiStreamingMessage(null);
     setInlineObjectCreator(null); setTemplateSelector(null); setSlashMenu((prev) => ({ ...prev, isOpen: false }));
+    setPendingRefinement(null);
+    setConflictError(null);
+    setIsSavingConflict(false);
+    isSavingConflictRef.current = false;
+    ++conflictOpRef.current;
   }, [artifactId, projectId]);
 
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const editorBodyRef = useRef<HTMLDivElement>(null);
   const documentEditorRef = useRef<DocumentEditorHandle>(null);
   const isInitialLoadedRef = useRef(false);
   const lastSavedContentRef = useRef('');
@@ -264,8 +347,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
     loadObjectTypes();
 
     const handleRefresh = () => loadObjectTypes();
+    const refreshModel = () => { void loadActiveModel(); };
+    window.addEventListener('sthira:catalog-changed', refreshModel);
     window.addEventListener('sthira:refresh_objects', handleRefresh);
-    return () => window.removeEventListener('sthira:refresh_objects', handleRefresh);
+    return () => { window.removeEventListener('sthira:refresh_objects', handleRefresh); window.removeEventListener('sthira:catalog-changed', refreshModel); };
   }, [projectId, artifactId]);
 
   const loadObjectTypes = async () => {
@@ -316,15 +401,8 @@ export const FocusView: React.FC<FocusViewProps> = ({
           return;
         }
       }
-      for (const prov of catalog) {
-        if (!prov.is_enabled) continue;
-        const first = prov.models.find((m) => m.is_enabled);
-        if (first) {
-          setActiveModelName(first.display_name || first.model_identifier);
-          setActiveModelId(first.id);
-          return;
-        }
-      }
+      setActiveModelName('Choose a model');
+      setActiveModelId(undefined);
     } catch {
       // Keep default
     }
@@ -364,12 +442,13 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const installDocument = (ctx: ArtifactContext) => {
     const nextTitle = ctx.artifact.title || '';
     setContext(ctx);
+    onDocumentLoaded?.(ctx.artifact, projectId || ctx.project_id || null);
     setEditorContent(ctx.artifact.content_md);
     setTitle(nextTitle);
     currentContentRef.current = ctx.artifact.content_md;
     currentTitleRef.current = nextTitle;
     currentArtIdRef.current = ctx.artifact.id;
-    currentProjectIdRef.current = projectId || null;
+    currentProjectIdRef.current = projectId || ctx.project_id || null;
     lastSavedContentRef.current = ctx.artifact.content_md;
     lastSavedTitleRef.current = nextTitle;
     isInitialLoadedRef.current = true;
@@ -402,7 +481,6 @@ export const FocusView: React.FC<FocusViewProps> = ({
     }
     isInitialLoadedRef.current = false;
     let loadedArtId = artifactId;
-    let projectBrief: ResumeBrief | null = null;
     const hasProject = projectId && projectId !== 'default_project';
     // History is auxiliary: an unavailable timeline must not block editing.
     setHistory(null);
@@ -410,21 +488,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
       getProjectHistory(projectId).then((value) => {
         if (request === loadRequestRef.current) setHistory(value);
       }).catch((error) => console.warn('Project history unavailable', error));
-      try {
-        projectBrief = await getResumeBrief(projectId, 1);
-        loadedArtId ||= projectBrief?.primary_continuation_artifact_id || undefined;
-      } catch (error) {
-        console.warn('Brief not available for project', projectId, error);
-      }
+
     }
     if (request !== loadRequestRef.current) return;
-    setBrief(projectBrief);
-    setIsExpandedReview(false);
-    setReviewError(null);
-    if (briefProjectRef.current !== (projectId || null)) {
-      briefProjectRef.current = projectId || null;
-      setIsBriefOpen(!projectBrief?.pane_hint || 'show' in projectBrief.pane_hint);
-    }
+    setShowResume(false);
     try {
       if (loadedArtId) {
         const ctx = await getArtifactContext(loadedArtId);
@@ -450,7 +517,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
   };
 
   const handleSave = useCallback(async () => {
-    if (!isInitialLoadedRef.current) return false;
+    if (!isInitialLoadedRef.current || isSavingConflictRef.current) return false;
     const artId = context?.artifact?.id || artifactId || '';
     if (artId && currentArtIdRef.current && currentArtIdRef.current !== artId) return false;
     const currentT = currentTitleRef.current.trim() || context?.artifact?.title || null;
@@ -501,6 +568,37 @@ export const FocusView: React.FC<FocusViewProps> = ({
       if (isCurrentSave()) setIsSaving(false);
     }
   }, [context, artifactId, projectId, onSave]);
+
+  useEffect(() => {
+    registerBeforeLeave?.(async () => {
+      if (chatApplying || isAiStreaming || isDeriving || isSavingConflict) { setActionError('Wait for the current page change to finish before switching.'); return false; }
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      if (!isInitialLoadedRef.current) return true;
+      if (currentContentRef.current === lastSavedContentRef.current && currentTitleRef.current === lastSavedTitleRef.current) return true;
+      return handleSave();
+    });
+    return () => registerBeforeLeave?.(null);
+  }, [registerBeforeLeave, handleSave, chatApplying, isAiStreaming, isDeriving, isSavingConflict]);
+  useEffect(() => {
+    if (isLoadingDocument) return;
+    const frame = requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop; });
+    return () => cancelAnimationFrame(frame);
+  }, [isLoadingDocument, artifactId]);
+  const applySuggestedTitle = async (suggested: string, basis: TitleBasis) => {
+    if (basis.title !== currentTitleRef.current || basis.content !== currentContentRef.current) { setActionError('The page changed. Request new title suggestions.'); return false; }
+    if (!basis.contentHash) { setActionError('Request new title suggestions before applying.'); return false; }
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    const id = currentArtIdRef.current;
+    setChatApplying(true);
+    try {
+      const updated = await applyDocumentTitle(id,suggested,basis.contentHash,basis.title || null);
+      if (currentArtIdRef.current !== id) return false;
+      installDocument({...context!,artifact:updated});
+      onTitleUpdate?.(id,updated.title || suggested); onSave?.(updated);
+      return true;
+    } catch (error) { setActionError(`Could not apply the title. ${String(error)}`); return false; }
+    finally { setChatApplying(false); }
+  };
 
   // Debounced Auto-Save
   useEffect(() => {
@@ -663,6 +761,8 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
   // Inline AI Generator
   const handleRunInlineAi = async (mode: 'plan' | 'research' | 'expand') => {
+    const workflow = mode === 'expand' ? 'draft' : mode;
+    if (workflows.loading || workflows.error || !workflows.settings[workflow].enabled) { openWorkflowSettings(); return; }
     const insertion = documentEditorRef.current?.startInsertion();
     const sourceId = currentArtIdRef.current;
     const sourceRequest = loadRequestRef.current;
@@ -675,7 +775,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
     let accumulatedTokens = '';
 
     try {
-      await streamAdaptiveRun(topic, mode === 'expand' ? 'act' : mode, activeModelId, (chunk) => {
+      await streamAdaptiveRun(topic, mode === 'expand' ? 'act' : mode, workflows.settings[workflow].model_id || activeModelId, (chunk) => {
         if (chunk.type === 'text_token') {
           accumulatedTokens += chunk.payload;
           if (currentArtIdRef.current === sourceId && sourceRequest === loadRequestRef.current) insertion?.replace(accumulatedTokens);
@@ -754,23 +854,6 @@ export const FocusView: React.FC<FocusViewProps> = ({
     setIsHistoryOpen(false);
   };
 
-  const handleExpandReview = async () => {
-    if (!brief || !projectId || projectId === 'default_project' || isReviewLoading) return;
-    setIsReviewLoading(true);
-    setReviewError(null);
-    try {
-      const nextLevel = isExpandedReview ? 1 : 2;
-      const b = await getResumeBrief(projectId, nextLevel);
-      setBrief(b);
-      setIsExpandedReview(!isExpandedReview);
-    } catch (err) {
-      console.error('Failed to toggle expanded review', err);
-      setReviewError('Couldn’t load the review. Try again when the vault is available.');
-    } finally {
-      setIsReviewLoading(false);
-    }
-  };
-
   const handleAcceptProposal = async (propId: string) => {
     try {
       const csId = await decideProposal(propId, 'accept');
@@ -805,20 +888,38 @@ export const FocusView: React.FC<FocusViewProps> = ({
 
   const handleUndo = async () => {
     if (!undoToast) return;
+    const request = loadRequestRef.current;
+    if (undoToast.artifactId && currentArtIdRef.current !== undoToast.artifactId) {
+      setActionError('Open the original document to undo this edit.'); return;
+    }
     try {
-      await revertChangeSet(undoToast.changeSetId);
+      if (undoToast.artifactId) {
+        if (isDirty) { setActionError('Save or resolve your newer changes before undoing this edit.'); return; }
+        setChatApplying(true);
+        const restored = await undoDocumentEdit(undoToast.artifactId, undoToast.changeSetId);
+        if (request !== loadRequestRef.current) return;
+        currentContentRef.current = restored.content_md;
+        lastSavedContentRef.current = restored.content_md;
+        setEditorContent(restored.content_md);
+        setContext(previous => previous ? { ...previous, artifact: restored } : previous);
+        onSave?.(restored);
+        const restoredConversation = await getDocumentConversation(undoToast.artifactId);
+        if (request !== loadRequestRef.current) return;
+        setConversation(restoredConversation);
+      } else await revertChangeSet(undoToast.changeSetId);
       setUndoToast(null);
       loadProjectData();
     } catch (err) {
       console.error('Failed to undo change set', err);
-    }
+      if (request === loadRequestRef.current) setActionError(String(err));
+    } finally { if (request === loadRequestRef.current) setChatApplying(false); }
   };
 
   const sourceLinks = Array.from(editorContent.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g));
   const sourceCount = new Set([context?.artifact?.source_url, ...sourceLinks.map((match) => match[2])].filter(Boolean)).size;
-  const projectLabel = projectId
-    ? brief?.active_working_breadcrumb?.replace(/^Project:\s*/i, '').split(/\s*[>›]\s*/)[0] || 'Project workspace'
-    : 'Notes';
+  const projectLabel = breadcrumbProjectId
+    ? (breadcrumbProject?.id === breadcrumbProjectId && breadcrumbProject.name) || 'Project workspace'
+    : 'Pages';
   const isDirty = editorContent !== lastSavedContentRef.current || title !== lastSavedTitleRef.current;
   const connectionArtifactId = artifactId || context?.artifact?.id;
   const connectionProjectId = projectId && projectId !== 'default_project' ? projectId : null;
@@ -831,19 +932,126 @@ export const FocusView: React.FC<FocusViewProps> = ({
     documentEditorRef.current?.insertLink(target.title, entityHref(target));
   };
 
+  const resolveConflictChoice = async (action: 'keep' | 'apply') => {
+    if (!pendingRefinement || isSavingConflictRef.current) return;
+    const targetArtId = pendingRefinement.targetArtifactId;
+    const currentLoadReq = loadRequestRef.current;
+    const opId = ++conflictOpRef.current;
+
+    let bodyToSave = '';
+    let titleToSave: string | null = null;
+
+    if (action === 'keep') {
+      bodyToSave = currentContentRef.current;
+      titleToSave = currentTitleRef.current.trim() || title?.trim() || null;
+    } else {
+      bodyToSave = pendingRefinement.refinedContent;
+      titleToSave = pendingRefinement.refinedTitle || currentTitleRef.current.trim() || title?.trim() || null;
+      const lines = bodyToSave.split('\n');
+      if (lines.length > 0 && lines[0].startsWith('# ')) {
+        const extracted = lines[0].replace(/^#+\s*/, '').trim();
+        if (extracted) {
+          titleToSave = extracted;
+        }
+      }
+    }
+
+    const targetProjectId =
+      currentProjectIdRef.current && currentProjectIdRef.current !== 'default_project'
+        ? currentProjectIdRef.current
+        : (projectId && projectId !== 'default_project' ? projectId : null);
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    isSavingConflictRef.current = true;
+    setIsSavingConflict(true);
+    setConflictError(null);
+
+    const isCurrent = () =>
+      currentArtIdRef.current === targetArtId &&
+      loadRequestRef.current === currentLoadReq &&
+      conflictOpRef.current === opId;
+
+    try {
+      const updated = await saveArtifact(targetArtId, bodyToSave, titleToSave, targetProjectId);
+      if (!isCurrent()) return;
+
+      if (action === 'apply') {
+        if (titleToSave) {
+          setTitle(titleToSave);
+          currentTitleRef.current = titleToSave;
+        }
+        handleEditorChange(bodyToSave);
+        onContentUpdate?.(bodyToSave);
+      }
+
+      lastSavedContentRef.current = bodyToSave;
+      lastSavedTitleRef.current = updated.title || titleToSave || '';
+
+      try {
+        const ctx = await getArtifactContext(updated.id);
+        if (isCurrent()) {
+          setContext(ctx);
+        }
+      } catch {
+        if (isCurrent()) {
+          setContext((prev) => (prev ? { ...prev, artifact: updated } : prev));
+        }
+      }
+
+      if (!isCurrent()) return;
+
+      setPendingRefinement(null);
+      setConflictError(null);
+      setSaveSuccess(true);
+      if (onSave) onSave(updated);
+      setTimeout(() => {
+        if (isCurrent()) setSaveSuccess(false);
+      }, 2500);
+    } catch (err: any) {
+      if (!isCurrent()) return;
+      console.error(`Failed to ${action} conflict choice:`, err);
+      setConflictError(
+        action === 'keep'
+          ? 'Couldn’t save your draft. Try keeping again.'
+          : 'Couldn’t apply refinement. Try applying again.'
+      );
+    } finally {
+      if (isCurrent()) {
+        isSavingConflictRef.current = false;
+        setIsSavingConflict(false);
+      }
+    }
+  };
+
+  const handleApplyRefinement = () => resolveConflictChoice('apply');
+  const handleKeepDraft = () => resolveConflictChoice('keep');
+
   return (
-    <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-margin-open={showMargin} data-connections-open={showConnections && !!connectionEntity} data-connection-preview={connectionPreview}>
+    <div className="focus-workspace flex-1 h-full overflow-hidden flex flex-col" data-chat-open={showChat && !!conversation && chatArtifactId === artifactId} data-margin-open={showMargin} data-connections-open={showConnections && !!connectionEntity} data-connection-preview={connectionPreview}>
       <header className="focus-header">
         <nav className="focus-breadcrumbs" aria-label="Document location">
           <button type="button" onClick={handleBack} className="focus-home-button" title={`Return to ${backLabel}`} aria-label={backLabel}><ArrowLeft size={16} /><span>{backLabel}</span></button>
-          <span aria-hidden="true">/</span><span className="focus-project-breadcrumb" title={projectLabel}>{projectLabel}</span>
-          <span aria-hidden="true">/</span><span className="focus-current-breadcrumb" title={title}>{title || 'Untitled Note'}</span>
+          <span aria-hidden="true">/</span>
+          <button type="button" className="focus-project-breadcrumb focus-breadcrumb-link" title={breadcrumbProjectId ? `Open project: ${projectLabel}` : 'Browse standalone pages'}
+            disabled={isLoadingDocument || !!loadError || (breadcrumbProjectId ? !onOpenProject : !onOpenStandaloneNotes)}
+            onClick={async () => {
+              if (isDirty && !(await handleSave())) return;
+              if (breadcrumbProjectId) onOpenProject?.(breadcrumbProjectId); else onOpenStandaloneNotes?.();
+            }}>{projectLabel}</button>
+          <span aria-hidden="true">/</span>
+          <button type="button" className="focus-current-breadcrumb focus-breadcrumb-link" title="Edit document title" aria-label={`Edit document title: ${title || 'Untitled Note'}`}
+            disabled={isLoadingDocument || !!loadError} onClick={() => { titleInputRef.current?.focus(); titleInputRef.current?.select(); }}>{title || 'Untitled Note'}</button>
         </nav>
         <div className="focus-header-actions">
           {onOpenSearch && <button type="button" onClick={onOpenSearch} className="focus-search-action focus-icon-button" aria-label="Search workspace" title="Search workspace"><Search size={16} /></button>}
+          {projectId && projectId !== 'default_project' && <button type="button" className="focus-header-action" aria-label="Resume" aria-expanded={showResume} disabled={isLoadingDocument||!!loadError} onClick={async()=>{const target=projectId;if(isDirty&&!(await handleSave()))return;if(target===currentProjectIdRef.current)setShowResume(value=>!value);}}><Sparkles size={16}/><span>Resume</span></button>}
           <button type="button" className="focus-header-action" onClick={() => setIsHistoryOpen(true)} disabled={!history} aria-label="History" title={history ? 'Project history' : 'History is available for project documents'}><History size={16} /><span>History</span></button>
-          <button type="button" ref={connectionsButtonRef} className="focus-header-action" onClick={() => { if (showConnections) closeConnections(); else { setShowConnections(true); setShowMargin(false); } }} disabled={!connectionEntity} aria-label="Connections" aria-expanded={showConnections && !!connectionEntity} aria-controls="workspace-connections" title={connectionEntity ? 'Show connected pages, projects and objects' : 'Save this page to connect it'}><Link2 size={16} /><span>Connections</span></button>
-          <button type="button" data-testid="btn-save-artifact" className={`focus-save-status ${saveError ? 'focus-save-error' : ''}`} onClick={handleSave} disabled={isLoadingDocument || !!loadError || isSaving} title={saveError ? 'Retry saving your changes' : 'Changes save automatically. Click to save now.'}>
+          {artifactId && <button type="button" disabled={!conversation && !chatLoadError} ref={chatButtonRef} className="focus-header-action" aria-label="Conversation" aria-expanded={showChat} aria-controls="document-chat" onClick={() => { if (chatLoadError) setChatReload(value => value + 1); else setChatOpen(!showChat); }}><MessageSquare size={16} /><span>Chat</span></button>}
+          <button type="button" ref={connectionsButtonRef} className="focus-header-action" onClick={() => { if (showConnections) closeConnections(); else { setShowConnections(true); setShowMargin(false); setShowChat(false); } }} disabled={!connectionEntity} aria-label="Connections" aria-expanded={showConnections && !!connectionEntity} aria-controls="workspace-connections" title={connectionEntity ? 'Show connected pages, projects and objects' : 'Save this page to connect it'}><Link2 size={16} /><span>Connections</span></button>
+          <button type="button" data-testid="btn-save-artifact" className={`focus-save-status ${saveError ? 'focus-save-error' : ''}`} onClick={handleSave} disabled={isLoadingDocument || !!loadError || isSaving || chatApplying} title={saveError ? 'Retry saving your changes' : 'Changes save automatically. Click to save now.'}>
             {isSaving ? <Loader2 size={15} className="animate-spin" /> : saveError ? <AlertTriangle size={15} /> : <Check size={15} />}
             <span aria-live="polite">{saveError ? 'Save failed' : isSaving ? 'Saving...' : saveSuccess ? 'Saved' : isDirty ? 'Unsaved changes' : 'Auto-saved'}</span>
           </button>
@@ -853,13 +1061,59 @@ export const FocusView: React.FC<FocusViewProps> = ({
       {/* Main Full-Height Workspace Body */}
       <div className="focus-workspace-body">
         {/* Generous Full-Height Document Canvas */}
-        <div className="focus-document-scroll" data-testid="document-scroll-region">
+        <div className="focus-document-scroll" data-testid="document-scroll-region" ref={scrollRef} onScroll={event => onScrollPosition?.(event.currentTarget.scrollTop)}>
           <div
             data-testid="editor-canvas"
-            className="focus-document-sheet flex-1 min-h-full relative"
+            className="focus-document-sheet flex-1 min-h-full relative" inert={chatApplying}
           >
+            {chatLoadError && <div className="focus-error focus-save-notice" role="alert"><span>{chatLoadError}</span><button type="button" onClick={() => setChatReload(value => value + 1)}>Retry conversation</button></div>}
             {actionError && <div className="focus-error focus-save-notice" role="alert"><span>{actionError}</span><button type="button" onClick={() => setActionError(null)}>Dismiss</button></div>}
             {saveError && <div className="focus-error focus-save-notice" role="alert"><span>{saveError}</span><button type="button" onClick={handleSave}>Retry save</button></div>}
+            {pendingRefinement && (
+              <div
+                data-testid="banner-refinement-conflict"
+                className="focus-save-notice p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg text-xs text-amber-800 dark:text-amber-200 mb-3"
+                role="status"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>
+                      A background refinement completed with committed changes, but your newer edits were preserved.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="btn-apply-pending-refinement"
+                      disabled={isSavingConflict}
+                      onClick={handleApplyRefinement}
+                      className="px-2.5 py-1 text-xs font-semibold rounded bg-amber-600 hover:bg-amber-700 text-white transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      Apply Refinement
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-dismiss-pending-refinement"
+                      disabled={isSavingConflict}
+                      onClick={handleKeepDraft}
+                      className="px-2.5 py-1 text-xs font-medium rounded hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      Keep My Draft
+                    </button>
+                  </div>
+                </div>
+                {conflictError && (
+                  <div
+                    data-testid="refinement-conflict-error"
+                    className="text-red-700 dark:text-red-400 font-medium pl-6 pt-1"
+                    role="alert"
+                  >
+                    {conflictError}
+                  </div>
+                )}
+              </div>
+            )}
             {isLoadingDocument ? <div className="focus-document-state" role="status"><Loader2 size={20} className="animate-spin" /> Opening document…</div> : loadError ? <div className="focus-document-state" role="alert"><AlertTriangle size={20} /><p>{loadError}</p><button type="button" className="sthira-button-secondary" onClick={loadProjectData}>Try again</button></div> : <>
             {/* Phase 19/20: Live Run Banner — the pipeline's real stages (research) or
                 the LLM token stream (plan) render here, inside the full-width center
@@ -893,6 +1147,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       )}
                       {documentRun.kind === 'plan'
                         ? 'Planning'
+                        : documentRun.status === 'error' ? 'Research failed'
                         : documentRun.mode === 'local_vault_only' ||
                           documentRun.message.includes('Web search returned no results') ||
                           documentRun.message.includes('local context')
@@ -903,7 +1158,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                       <span className="text-[10px] opacity-70 animate-pulse">live</span>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate" data-testid="document-run-message">
+                  <p className={`mt-0.5 ${documentRun.status === 'error' ? 'whitespace-normal break-words' : 'truncate'}`} title={documentRun.message} data-testid="document-run-message">
                     {documentRun.message}
                   </p>
                   <p className="mt-0.5 text-[10px] opacity-70 truncate">
@@ -941,21 +1196,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
             )}
 
-            {/* Contextual Resume Brief */}
-            {brief && (
-              <div className="focus-resume-region">
-                <ContextualResumePane
-                  brief={brief}
-                  isOpen={isBriefOpen}
-                  onToggleOpen={() => setIsBriefOpen(!isBriefOpen)}
-                  onExpandReview={handleExpandReview}
-                  isExpandedReview={isExpandedReview}
-                  isReviewLoading={isReviewLoading}
-                  reviewError={reviewError}
-                  onSelectArtifact={navigateToArtifact}
-                />
-              </div>
-            )}
+            {showResume && projectId && projectId !== 'default_project' && <ProjectResume key={`${projectId}:${artifactId}`} projectId={projectId} onSelectArtifact={navigateToArtifact} />}
 
             {/* Lineage Header Chip */}
             {context?.artifact?.derived_from_artifact_id && (
@@ -989,8 +1230,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
             <div className="focus-title-header">
               <input
                 type="text"
+                ref={titleInputRef}
                 data-testid="input-artifact-title"
                 value={title}
+                disabled={chatApplying || isLoadingDocument}
                 onChange={(e) => handleTitleChange(e.target.value)}
                 onBlur={handleSave}
                 placeholder="Document title..."
@@ -999,6 +1242,14 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 className="text-3xl sm:text-4xl font-editorial font-bold tracking-tight text-sthira-text bg-transparent border-none outline-none w-full placeholder-sthira-text-subtle"
               />
             </div>
+
+            <div className="focus-title-tools"><button type="button" className="focus-brief-source" disabled={!context?.artifact.id || isLoadingDocument || chatApplying || !!documentRun && documentRun.status === 'running'} aria-expanded={showTitleSuggestions} onClick={() => setShowTitleSuggestions(value => !value)}><Sparkles size={14}/> Suggest a title</button>
+              {onOpenInNewTab && <button type="button" className="focus-brief-source" onClick={onOpenInNewTab}>Open another document</button>}
+            </div>
+            {showTitleSuggestions && context?.artifact.id && <TitleSuggestionsPanel key={context.artifact.id} artifactId={context.artifact.id} current={{content:editorContent,title}} snapshot={() => ({content:currentContentRef.current,title:currentTitleRef.current})} beforeRequest={async () => {
+              if (currentContentRef.current !== lastSavedContentRef.current || currentTitleRef.current !== lastSavedTitleRef.current) return handleSave();
+              return true;
+            }} onApply={applySuggestedTitle} onClose={() => setShowTitleSuggestions(false)}/>}
 
             {/* Phase 16: Notion-style interactive property tray for typed objects */}
             {objectInstance && objectTypeForInstance && (
@@ -1189,7 +1440,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 {(context?.artifact?.id || artifactId) && (
                   <PageActionMenu
                     variant="toolbar"
-                    onOpenEvidence={() => { setShowMargin(true); closeConnections(); }}
+                    onOpenEvidence={() => { setShowMargin(true); setShowChat(false); closeConnections(); }}
                     artifactId={context?.artifact?.id || artifactId || ''}
                     artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
                     contentMd={editorContent}
@@ -1233,14 +1484,14 @@ export const FocusView: React.FC<FocusViewProps> = ({
               </div>
             )}
 
-            <div className="focus-editor-body">
+            <div className="focus-editor-body" ref={editorBodyRef}>
               <DocumentEditor
                 key={context?.artifact?.id || artifactId || 'draft'}
                 ref={documentEditorRef}
                 content={editorContent}
                 title={title}
                 objectTypes={objectTypes}
-                disabled={isAiStreaming}
+                disabled={isAiStreaming || chatApplying}
                 onChange={handleEditorChange}
                 onBlur={() => { if (isDirty && !isLoadingDocument) void handleSave(); }}
                 onOpenEntity={openReference}
@@ -1252,7 +1503,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                   } catch { setActionError('Couldn’t record this decision. Your page is still saved.'); }
                 }}
               />
-              {slashMenu.isOpen && <SlashCommandMenu filterQuery={slashMenu.filterQuery} customObjectTypes={objectTypes} onSelect={handleSelectSlashCommand} onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))} position={slashMenu.position} activeModelName={activeModelName} />}
+              {slashMenu.isOpen && <SlashCommandMenu anchorElement={editorBodyRef.current} filterQuery={slashMenu.filterQuery} customObjectTypes={objectTypes} onSelect={handleSelectSlashCommand} onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))} position={slashMenu.position} activeModelName={activeModelName} />}
               {templateSelector?.isOpen && <TemplateSelectorPopover objectType={templateSelector.objectType} position={templateSelector.position} onSelect={(templateId) => {
                 setPendingTemplateId(templateId);
                 setInlineObjectCreator({ isOpen: true, objectType: templateSelector.objectType, position: templateSelector.position, caretIndex: 0 });
@@ -1264,6 +1515,24 @@ export const FocusView: React.FC<FocusViewProps> = ({
           </div>
         </div>
 
+        {conversation && artifactId && chatArtifactId === artifactId && <DocumentChatPanel sessionNamespace={sessionNamespace} key={artifactId} artifactId={artifactId} initialConversation={conversation}
+          open={showChat} busy={isLoadingDocument || isAiStreaming || (documentRun?.artifactId === artifactId && documentRun?.status === 'running')} modelId={conversation.model_id || activeModelId} modelName={conversation.model_name || activeModelName}
+          currentContent={editorContent} onApplyingChange={setChatApplying} onClose={() => setChatOpen(false)} beforeRequest={async () => {
+            if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+            const id = artifactId;
+            const request = loadRequestRef.current;
+            const saved = await handleSave();
+            return saved && request === loadRequestRef.current && currentArtIdRef.current === id;
+          }}
+          onApplied={(artifact, changeSetId) => {
+            if (currentArtIdRef.current !== artifact.id) return;
+            currentContentRef.current = artifact.content_md;
+            lastSavedContentRef.current = artifact.content_md;
+            setEditorContent(artifact.content_md);
+            setContext(previous => previous ? { ...previous, artifact } : previous);
+            onSave?.(artifact);
+            if (changeSetId) setUndoToast({ message: 'Conversation edit applied', changeSetId, artifactId: artifact.id });
+          }} />}
         {showConnections && connectionEntity && <ConnectionsPanel
           key={`${connectionEntity.kind}-${connectionEntity.id}`}
           entity={connectionEntity}
@@ -1499,7 +1768,32 @@ export const FocusView: React.FC<FocusViewProps> = ({
         onClose={() => setIsRefineModalOpen(false)}
         artifactId={context?.artifact?.id || artifactId || ''}
         artifactTitle={title || context?.artifact?.title || 'Untitled Note'}
-        onRefined={(newContent) => {
+        baseContent={currentContentRef.current}
+        baseTitle={currentTitleRef.current || title || context?.artifact?.title || ''}
+        onRefined={(newContent, targetArtifactId, baseSnapshot) => {
+          const currentId = context?.artifact?.id || artifactId;
+          if (targetArtifactId && currentId && targetArtifactId !== currentId) {
+            return;
+          }
+
+          // If the user made newer edits to the body or title after refinement began,
+          // preserve the newer local draft. Do not silently overwrite or feed into autosave.
+          if (baseSnapshot) {
+            const normalize = (s: string) => s.replace(/\r\n/g, '\n').trim();
+            const isDraftModified =
+              normalize(currentContentRef.current) !== normalize(baseSnapshot.content) ||
+              currentTitleRef.current.trim() !== baseSnapshot.title.trim();
+
+            if (isDraftModified) {
+              setPendingRefinement({
+                targetArtifactId: targetArtifactId || currentId || '',
+                refinedContent: newContent,
+                refinedTitle: title || context?.artifact?.title || 'Untitled Note',
+              });
+              return;
+            }
+          }
+
           handleEditorChange(newContent);
           onContentUpdate?.(newContent);
           loadProjectData();

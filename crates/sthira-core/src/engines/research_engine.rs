@@ -2,7 +2,7 @@ use crate::{
     epistemic::VerifiedQuote,
     llm::models::WebSearchCapability,
     search::{scraper, ScrapedWebDocument, SearchProvider, SearchResultItem},
-    vault, Actor, ArtifactType, Authorship, CoreError, CoreEvent, Engine, ModelProvider,
+    vault, ArtifactType, Authorship, CoreError, CoreEvent, Engine, ModelProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -115,6 +115,12 @@ struct GroundedExtractionOutput {
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
 struct ResearchSynthesisOutput {
     pub synthesis: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::llm::page_blocks::deserialize_page_blocks"
+    )]
+    #[schemars(skip)]
+    pub page_blocks: Vec<serde_json::Value>,
     /// Where retrieved context contradicts older conventions or prior versions.
     pub contradictions_and_evolution: Vec<String>,
     pub open_questions: Vec<String>,
@@ -163,13 +169,12 @@ pub fn clean_smart_title(raw: &str) -> String {
 
 pub fn fallback_title_from_query(query: &str) -> String {
     const STOP_WORDS: &[&str] = &[
-        "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to", "for", "with",
-        "about", "against", "between", "into", "through", "during", "before", "after",
-        "above", "below", "from", "up", "down", "out", "off", "over", "under", "find",
-        "me", "ways", "i", "can", "how", "what", "why", "who", "where", "when", "is",
-        "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
-        "did", "will", "would", "shall", "should", "may", "might", "must", "could",
-        "please", "help", "need", "want", "tell", "show"
+        "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to", "for", "with", "about",
+        "against", "between", "into", "through", "during", "before", "after", "above", "below",
+        "from", "up", "down", "out", "off", "over", "under", "find", "me", "ways", "i", "can",
+        "how", "what", "why", "who", "where", "when", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will", "would", "shall", "should",
+        "may", "might", "must", "could", "please", "help", "need", "want", "tell", "show",
     ];
 
     let words: Vec<&str> = query
@@ -209,10 +214,7 @@ pub fn fallback_title_from_query(query: &str) -> String {
         .join(" ")
 }
 
-pub async fn generate_smart_title(
-    model: Option<&dyn ModelProvider>,
-    query: &str,
-) -> String {
+pub async fn generate_smart_title(model: Option<&dyn ModelProvider>, query: &str) -> String {
     let q = query.trim();
     if q.is_empty() {
         return "Untitled Investigation".to_string();
@@ -233,10 +235,13 @@ pub async fn generate_smart_title(
         );
 
         if let Ok(Ok(raw_json)) = timeout_fut.await {
-            let extracted = if let Ok(parsed) = serde_json::from_str::<SmartTitleOutput>(&raw_json) {
+            let extracted = if let Ok(parsed) = serde_json::from_str::<SmartTitleOutput>(&raw_json)
+            {
                 Some(parsed.title)
             } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw_json) {
-                v.get("title").and_then(|t| t.as_str()).map(|s| s.to_string())
+                v.get("title")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
             } else {
                 Some(raw_json)
             };
@@ -271,10 +276,7 @@ pub fn domain_favicon_url(domain: &str) -> String {
     format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain)
 }
 
-pub async fn generate_search_queries(
-    engine: &Engine,
-    inquiry: &str,
-) -> Vec<String> {
+pub async fn generate_search_queries(engine: &Engine, inquiry: &str) -> Vec<String> {
     let schema = schemars::schema_for!(KeywordExtractionOutput);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
     let system_prompt = "You are a research query planner. Generate 2 to 3 distinct, high-precision search engine queries to investigate the given user inquiry. Output strictly JSON.";
@@ -356,7 +358,6 @@ pub async fn execute_multi_query_research_with_template(
 ) -> Result<WebResearchResult, CoreError> {
     let now_ms = engine.clock().now_ms();
 
-
     // Ordered progress log, mirrored to `on_stage` at the true moment each step runs so
     // the UI can render a genuine live banner rather than a post-hoc summary.
     let mut stages: Vec<ResearchStage> = Vec::new();
@@ -427,7 +428,10 @@ pub async fn execute_multi_query_research_with_template(
                         published_date: None,
                     });
                 } else {
-                    eprintln!("[execute_multi_query_research] Scrape warning for {}: {}", item.url, err);
+                    eprintln!(
+                        "[execute_multi_query_research] Scrape warning for {}: {}",
+                        item.url, err
+                    );
                 }
             }
         }
@@ -445,13 +449,22 @@ pub async fn execute_multi_query_research_with_template(
         let schema = schemars::schema_for!(GroundedExtractionOutput);
         let schema_val = serde_json::to_value(&schema).unwrap_or_default();
         let sys_prompt = "You are a factual evidence extractor. Extract 1 to 2 key facts from the document text. The `exact_quote` MUST be an exact character-for-character verbatim snippet from the document.";
-        let usr_prompt = format!("Document Content:\n{}\nExtract findings with exact quotes:", doc.content_md);
+        let usr_prompt = format!(
+            "Document Content:\n{}\nExtract findings with exact quotes:",
+            doc.content_md
+        );
 
         let mut extracted_for_doc = false;
-        if let Ok(json_str) = engine.model().generate_json(&schema_val, sys_prompt, &usr_prompt).await {
+        if let Ok(json_str) = engine
+            .model()
+            .generate_json(&schema_val, sys_prompt, &usr_prompt)
+            .await
+        {
             if let Ok(grounded) = serde_json::from_str::<GroundedExtractionOutput>(&json_str) {
                 for item in grounded.findings {
-                    if let Ok(vq) = VerifiedQuote::verify(&doc.content_md, &content_hash, &item.exact_quote) {
+                    if let Ok(vq) =
+                        VerifiedQuote::verify(&doc.content_md, &content_hash, &item.exact_quote)
+                    {
                         findings.push(WebResearchFinding {
                             statement: item.statement,
                             quote: vq.text,
@@ -472,7 +485,8 @@ pub async fn execute_multi_query_research_with_template(
         if !extracted_for_doc {
             for line in doc.content_md.lines() {
                 let trimmed = line.trim().trim_start_matches('#').trim();
-                if trimmed.len() >= 15 && !trimmed.starts_with("http") && !trimmed.starts_with('[') {
+                if trimmed.len() >= 15 && !trimmed.starts_with("http") && !trimmed.starts_with('[')
+                {
                     if let Ok(vq) = VerifiedQuote::verify(&doc.content_md, &content_hash, trimmed) {
                         findings.push(WebResearchFinding {
                             statement: trimmed.to_string(),
@@ -507,9 +521,8 @@ pub async fn execute_multi_query_research_with_template(
         })
         .collect();
 
-    let index_for = |url: &str| -> Option<usize> {
-        sources.iter().find(|s| s.url == url).map(|s| s.index)
-    };
+    let index_for =
+        |url: &str| -> Option<usize> { sources.iter().find(|s| s.url == url).map(|s| s.index) };
 
     // 6. Temporal-context grounding: tell the model what "today" is and force it to
     //    flag where retrieved material contradicts older conventions.
@@ -531,9 +544,8 @@ pub async fn execute_multi_query_research_with_template(
     );
 
     let template_skeleton = if let Some(tid) = template_id {
-        engine.get_synthesis_template(tid).ok().flatten().map(|t| t.template_skeleton_md)
-    } else if let Ok(reader) = engine.db().reader() {
-        crate::db::templates_repo::get_default_synthesis_template(&reader, "research")
+        engine
+            .get_synthesis_template(tid)
             .ok()
             .flatten()
             .map(|t| t.template_skeleton_md)
@@ -541,9 +553,21 @@ pub async fn execute_multi_query_research_with_template(
         None
     };
 
-    let synthesis =
-        synthesize_with_temporal_grounding(engine, inquiry, &today, &documents, &findings, capability, template_skeleton.as_deref()).await;
-
+    if documents.is_empty() {
+        return Err(CoreError::NotFound(
+            "Web search returned no usable sources.".into(),
+        ));
+    }
+    let synthesis = synthesize_with_temporal_grounding(
+        engine,
+        inquiry,
+        &today,
+        &documents,
+        &findings,
+        capability,
+        template_skeleton.as_deref(),
+    )
+    .await?;
 
     // 7. Assemble the grounded research document.
     let title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
@@ -602,19 +626,14 @@ pub async fn execute_multi_query_research_with_template(
         md.push('\n');
     }
 
-    md.push_str("## Epistemic Hypotheses\n");
-    md.push_str(&format!(
-        "- [ ] Verified web evidence supports core requirements for \"{}\".\n",
-        inquiry
-    ));
-    md.push_str(&format!(
-        "- [ ] The retrieved context (as of {today}) supersedes any pre-existing assumption recorded in this vault.\n\n"
-    ));
-
     md.push_str("## Open Questions & Next Steps\n");
     if synthesis.open_questions.is_empty() {
-        md.push_str("- What specific edge constraints or failure modes require empirical validation?\n");
-        md.push_str("- Should these external web sources be imported as durable vault source artifacts?\n");
+        md.push_str(
+            "- What specific edge constraints or failure modes require empirical validation?\n",
+        );
+        md.push_str(
+            "- Should these external web sources be imported as durable vault source artifacts?\n",
+        );
     } else {
         for q in &synthesis.open_questions {
             md.push_str(&format!("- {q}\n"));
@@ -661,7 +680,7 @@ async fn synthesize_with_temporal_grounding(
     findings: &[WebResearchFinding],
     capability: WebSearchCapability,
     template_skeleton: Option<&str>,
-) -> ResearchSynthesisOutput {
+) -> Result<ResearchSynthesisOutput, CoreError> {
     let mut context = String::new();
     for (i, doc) in documents.iter().enumerate() {
         let domain = extract_domain_from_url(&doc.url);
@@ -683,14 +702,10 @@ async fn synthesize_with_temporal_grounding(
         .map(|f| format!("- {}\n", f.statement))
         .collect();
 
-    let tool_prompt_prefix = match capability {
-        WebSearchCapability::AgenticToolCall => {
-            "Active Search Tool Definition: `web_search(query: string)` is available as a functional search tool. "
-        }
-        WebSearchCapability::Native => {
-            "Native web search grounding is enabled directly on this provider. "
-        }
-        WebSearchCapability::EngineAugmentedOnly | WebSearchCapability::Unsupported => "",
+    let tool_prompt_prefix = if documents.is_empty() {
+        "No web or local evidence was retrieved. Give useful guidance from model knowledge, explicitly distinguish assumptions and unverified claims, and do not invent citations or claim to have searched. "
+    } else {
+        "The application supplied the evidence below. You have no live tools in this call. Distinguish saved vault evidence from web evidence. "
     };
 
     let template_instruction = match template_skeleton {
@@ -705,12 +720,20 @@ async fn synthesize_with_temporal_grounding(
         "Today is {today}. {tool_prompt_prefix}Use the retrieved web context for current specifications, versions, and \
          benchmarks. If the retrieved context contradicts older conventions, explicitly flag the \
          difference in `contradictions_and_evolution`. Ground every claim in the retrieved context \
-         and cite sources as [Source N]. Output strictly JSON.{template_instruction}"
+         when evidence is supplied and cite sources as [Source N]. With no retrieved evidence, answer the inquiry from general knowledge, clearly label assumptions and unverified claims, and do not invent citations. Output strictly JSON.{template_instruction}"
+    );
+    let system_prompt = format!(
+        "{system_prompt}\n{}",
+        crate::llm::page_blocks::PAGE_BLOCK_INSTRUCTIONS
     );
 
     let context_header = match capability {
-        WebSearchCapability::EngineAugmentedOnly => "Injected Web Scraped Context (Engine Augmented):",
-        WebSearchCapability::AgenticToolCall => "Tool-Retrieved Web Evidence (Agentic Function Call):",
+        WebSearchCapability::EngineAugmentedOnly => {
+            "Injected Web Scraped Context (Engine Augmented):"
+        }
+        WebSearchCapability::AgenticToolCall => {
+            "Tool-Retrieved Web Evidence (Agentic Function Call):"
+        }
         WebSearchCapability::Native => "Native Search Grounded Context:",
         WebSearchCapability::Unsupported => "Retrieved Context:",
     };
@@ -723,9 +746,10 @@ async fn synthesize_with_temporal_grounding(
 
     let schema = schemars::schema_for!(ResearchSynthesisOutput);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
+    let policy = crate::llm::lifecycle::RequestPolicy::standard();
 
     match tokio::time::timeout(
-        std::time::Duration::from_secs(90),
+        policy.workflow_deadline,
         engine
             .model()
             .generate_json(&schema_val, &system_prompt, &user_prompt),
@@ -733,56 +757,18 @@ async fn synthesize_with_temporal_grounding(
     .await
     {
         Ok(Ok(json)) => {
-            if let Ok(parsed) = serde_json::from_str::<ResearchSynthesisOutput>(&json) {
+            if let Ok(mut parsed) = serde_json::from_str::<ResearchSynthesisOutput>(&json) {
                 if !parsed.synthesis.trim().is_empty() {
-                    return parsed;
+                    parsed.synthesis = crate::llm::page_blocks::append_page_blocks(parsed.synthesis, std::mem::take(&mut parsed.page_blocks));
+                    return Ok(parsed);
                 }
             }
         }
-        Ok(Err(e)) => eprintln!("[research_engine] synthesis fallback: {e}"),
-        Err(_) => eprintln!("[research_engine] synthesis timed out after 90s"),
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err(CoreError::Model(format!("The selected model timed out during synthesis after {} seconds. Retrieved evidence was not replaced with template text.", policy.workflow_deadline.as_secs()))),
     }
-
-    // Deterministic fallback: state the retrieved facts without inventing analysis.
-    let mut synthesis = String::new();
-    if let Some(skeleton) = template_skeleton {
-        let mut filled = skeleton.replace("{Title}", inquiry.trim());
-        if !findings.is_empty() {
-            let mut points = String::from("\n\n### Grounded Findings\n");
-            for f in findings {
-                points.push_str(&format!("- {}\n", f.statement));
-            }
-            filled.push_str(&points);
-        }
-        synthesis = filled;
-    } else if findings.is_empty() {
-        synthesis.push_str(
-            "Model synthesis unavailable and no verified quotes could be grounded in the retrieved context.\n",
-        );
-    } else {
-        synthesis.push_str(&format!(
-            "Model synthesis unavailable. {} verified quote{} grounded against the retrieved context (as of {today}):\n\n",
-            findings.len(),
-            if findings.len() == 1 { "" } else { "s" }
-        ));
-        for f in findings {
-            synthesis.push_str(&format!("- {}\n", f.statement));
-        }
-    }
-
-
-    ResearchSynthesisOutput {
-        synthesis,
-        contradictions_and_evolution: Vec::new(),
-        open_questions: vec![
-            "What specific edge constraints or failure modes require empirical validation?"
-                .to_string(),
-            "Should these external web sources be imported as durable vault source artifacts?"
-                .to_string(),
-        ],
-    }
+    Err(CoreError::Model("The selected model returned empty or invalid research synthesis. No generated report was saved.".into()))
 }
-
 
 // ---------------------------------------------------------------------------
 // Local vault evidence path + mode-aware dispatcher
@@ -793,11 +779,11 @@ async fn synthesize_with_temporal_grounding(
 pub fn inquiry_keywords(inquiry: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
         "find", "ways", "through", "what", "when", "where", "which", "with", "from", "into",
-        "about", "more", "most", "some", "such", "than", "that", "them", "then", "there",
-        "these", "they", "this", "those", "have", "been", "were", "will", "would", "could",
-        "should", "your", "mine", "ours", "make", "also", "just", "like", "need", "want",
-        "tell", "know", "show", "help", "please", "using", "used", "does", "done", "doing",
-        "each", "many", "much", "very", "every", "over", "under", "both", "only", "other"
+        "about", "more", "most", "some", "such", "than", "that", "them", "then", "there", "these",
+        "they", "this", "those", "have", "been", "were", "will", "would", "could", "should",
+        "your", "mine", "ours", "make", "also", "just", "like", "need", "want", "tell", "know",
+        "show", "help", "please", "using", "used", "does", "done", "doing", "each", "many", "much",
+        "very", "every", "over", "under", "both", "only", "other",
     ];
 
     let mut out: Vec<String> = Vec::new();
@@ -918,16 +904,17 @@ pub fn search_local_vault(
         }
     }
 
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
     Ok(scored.into_iter().take(limit).map(|(_, v)| v).collect())
 }
 
 /// Answers an inquiry strictly from artifacts already in the vault — no network access.
-fn execute_local_vault_research(
+async fn execute_local_vault_research(
     engine: &Engine,
     inquiry: &str,
     limit_docs: usize,
     stages: &mut Vec<ResearchStage>,
+    on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
     let hits = search_local_vault(engine, inquiry, limit_docs)?;
     let matching_vault_artifacts: Vec<String> = hits.iter().map(|(id, _, _)| id.clone()).collect();
@@ -995,46 +982,82 @@ fn execute_local_vault_research(
         today
     ));
 
+    let stage = ResearchStage {
+        stage: "synthesizing".into(),
+        message: "Generating a synthesis with the selected model from available context…".into(),
+    };
+    if let Some(callback) = on_stage {
+        callback(stage.clone());
+    }
+    stages.push(stage);
+    let synthesis = synthesize_with_temporal_grounding(
+        engine,
+        inquiry,
+        &today,
+        &documents,
+        &findings,
+        WebSearchCapability::Unsupported,
+        None,
+    )
+    .await?;
+    md.push_str("## Synthesis\n");
+    md.push_str(&synthesis.synthesis);
+    md.push_str("\n\n");
     md.push_str("## Local Vault Evidence\n");
     if findings.is_empty() {
         md.push_str(
-            "_No matching evidence found in the local vault. Switch the Web Search pill to \
-             `Auto` or `Always Search Web` to look beyond the vault._\n\n",
+            "_No saved evidence matched this inquiry. The synthesis uses model knowledge and has not been externally verified._\n\n",
         );
     } else {
         for f in &findings {
             let cite = sources
                 .iter()
                 .find(|s| s.url == f.source_url)
-                .map(|s| format!(" [Source {}]", s.index))
+                .map(|s| {
+                    format!(
+                        " {}",
+                        crate::references::markdown_reference(
+                            &format!("Source {}", s.index),
+                            &s.url
+                        )
+                    )
+                })
                 .unwrap_or_default();
             md.push_str(&format!("- **{}**{}\n", f.statement, cite));
             md.push_str(&format!("  > \"{}\"\n", f.quote));
-            md.push_str(&format!("  — *Source:* {} (`{}`)\n\n", f.title, f.domain));
+            md.push_str(&format!(
+                "  — *Source:* {} (`{}`)\n\n",
+                crate::references::markdown_reference(&f.title, &f.source_url),
+                f.domain
+            ));
         }
     }
 
     if !sources.is_empty() {
         md.push_str("## Sources\n");
         for s in &sources {
-            md.push_str(&format!("{}. {} · `{}`\n", s.index, s.title, s.url));
+            md.push_str(&format!(
+                "{}. {}\n",
+                s.index,
+                crate::references::markdown_reference(&s.title, &s.url)
+            ));
         }
         md.push('\n');
     }
 
-    md.push_str("## Contradictions & Evolution\n");
-    md.push_str(&format!(
-        "_Vault-only mode cannot detect evolution against external sources. Re-run with web \
-         search enabled to compare current specifications against this vault's assumptions (as of {today})._\n\n"
-    ));
+    if !synthesis.contradictions_and_evolution.is_empty() {
+        md.push_str("## Contradictions & Uncertainty\n");
+        for point in &synthesis.contradictions_and_evolution {
+            md.push_str(&format!("- {point}\n"));
+        }
+    }
+    if !synthesis.open_questions.is_empty() {
+        md.push_str("\n## Open Questions & Next Steps\n");
+        for question in &synthesis.open_questions {
+            md.push_str(&format!("- {question}\n"));
+        }
+    }
 
-    md.push_str("## Open Questions & Next Steps\n");
-    md.push_str("- Does external, current documentation agree with the vault's recorded assumptions?\n");
-
-    stages.push(ResearchStage {
-        stage: "synthesizing".to_string(),
-        message: "Synthesizing research from vault evidence...".to_string(),
-    });
     stages.push(ResearchStage {
         stage: "done".to_string(),
         message: "Research complete.".to_string(),
@@ -1089,6 +1112,7 @@ pub async fn execute_research(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_research_with_capability(
     engine: &Engine,
     inquiry: &str,
@@ -1113,6 +1137,7 @@ pub async fn execute_research_with_capability(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_research_with_template(
     engine: &Engine,
     inquiry: &str,
@@ -1130,9 +1155,15 @@ pub async fn execute_research_with_template(
         let reader_res = engine.db().reader().ok();
         reader_res
             .as_ref()
-            .and_then(|r| crate::db::providers_repo::get_default_model(r).ok().flatten())
+            .and_then(|r| {
+                crate::db::providers_repo::get_default_model(r)
+                    .ok()
+                    .flatten()
+            })
             .map(|(m, _, _)| m.web_search_capability)
-            .unwrap_or_else(|| crate::llm::models::default_web_search_capability("ollama", engine.model().id()))
+            .unwrap_or_else(|| {
+                crate::llm::models::default_web_search_capability("ollama", engine.model().id())
+            })
     });
 
     // If model is unsupported/offline, web search cannot run.
@@ -1146,7 +1177,9 @@ pub async fn execute_research_with_template(
             cb(notice.clone());
         }
         stages.push(notice);
-        let mut res = execute_local_vault_research(engine, inquiry, limit_docs, &mut stages)?;
+        let mut res =
+            execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
+                .await?;
         res.search_status = "unsupported_model".to_string();
         return Ok(res);
     }
@@ -1175,7 +1208,9 @@ pub async fn execute_research_with_template(
             }
             stages.push(notice);
         }
-        let mut res = execute_local_vault_research(engine, inquiry, limit_docs, &mut stages)?;
+        let mut res =
+            execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
+                .await?;
         if mode != WebSearchMode::LocalVaultOnly {
             res.search_status = "web_search_failed".to_string();
         }
@@ -1183,7 +1218,8 @@ pub async fn execute_research_with_template(
     };
 
     if !should_search_web {
-        return execute_local_vault_research(engine, inquiry, limit_docs, &mut stages);
+        return execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
+            .await;
     }
 
     // Wrap the caller's callback so the live "searching" banner names the concrete
@@ -1191,12 +1227,7 @@ pub async fn execute_research_with_template(
     let labelled = |stage: ResearchStage| {
         let mut s = stage;
         if s.stage == "searching" && !s.message.contains(" via ") {
-            let action = match resolved_cap {
-                WebSearchCapability::AgenticToolCall => "Executing agentic search tool via",
-                WebSearchCapability::EngineAugmentedOnly => "Querying and injecting scraped web context via",
-                WebSearchCapability::Native => "Engaging native web search grounding via",
-                WebSearchCapability::Unsupported => "Searching web via",
-            };
+            let action = "Searching web via";
             s.message = format!(
                 "{} {} for \"{}\"...",
                 action,
@@ -1238,51 +1269,38 @@ pub async fn execute_research_with_template(
             }
             Ok(result)
         }
+        Err(CoreError::Model(error)) => Err(CoreError::Model(error)),
+        Err(CoreError::Json(error)) => Err(CoreError::Json(error)),
         _ => {
             // Web search provider failed, returned 0 results, or was unreachable.
             let warn_stage = ResearchStage {
                 stage: "searching".to_string(),
-                message: "⚠️ Web search returned no results; synthesized using local context.".to_string(),
+                message: "⚠️ Web search returned no results; synthesized using local context."
+                    .to_string(),
             };
             if let Some(cb) = on_stage {
                 cb(warn_stage.clone());
             }
             stages.push(warn_stage);
 
-            let mut vault_res = execute_local_vault_research(engine, inquiry, limit_docs, &mut stages)?;
+            let mut vault_res =
+                execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
+                    .await?;
             vault_res.search_status = "web_search_failed".to_string();
             vault_res.external_sources_count = 0;
             vault_res.mode_used = WebSearchMode::LocalVaultOnly;
 
-            let today = crate::format_date_utc(engine.clock().now_ms());
             let smart_title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
             vault_res.title = smart_title.clone();
 
-            let mut md = format!("# {}\n\n", smart_title);
-            md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
-            md.push_str(&format!(
-                "> **Evidence basis:** ⚠️ Web search returned no results; synthesized using local context ({} matching vault artifact{}) · as of {}\n\n",
-                vault_res.matching_vault_artifacts.len(),
-                if vault_res.matching_vault_artifacts.len() == 1 { "" } else { "s" },
-                today
-            ));
-            md.push_str("## Local Vault Evidence\n");
-            if vault_res.findings.is_empty() {
-                md.push_str("_No matching evidence found in the local vault for this inquiry._\n\n");
-            } else {
-                for f in &vault_res.findings {
-                    md.push_str(&format!(
-                        "- **{}**\n  > \"{}\"\n  — *Source:* {} (`{}`)\n\n",
-                        f.statement, f.quote, f.title, f.domain
-                    ));
-                }
-            }
-            md.push_str("## Open Questions & Next Steps\n- What specific sources or APIs should be queried to obtain external documentation?\n");
-            vault_res.synthesized_markdown = md;
+            vault_res.synthesized_markdown = vault_res.synthesized_markdown.replacen(
+                "> **Evidence basis:** local vault only", "> **Evidence basis:** ⚠️ Web search returned no results; synthesized using local context", 1);
 
             if let Some(last) = vault_res.stages.last_mut() {
                 if last.stage == "done" {
-                    last.message = "⚠️ Web search returned no results; synthesized using local context.".to_string();
+                    last.message =
+                        "⚠️ Web search returned no results; synthesized using local context."
+                            .to_string();
                 }
             }
 
@@ -1294,10 +1312,22 @@ pub async fn execute_research_with_template(
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RefinementOutput {
     pub refined_content_md: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::llm::page_blocks::deserialize_page_blocks"
+    )]
+    #[schemars(skip)]
+    pub page_blocks: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DerivationOutput {
+    #[serde(
+        default,
+        deserialize_with = "crate::llm::page_blocks::deserialize_page_blocks"
+    )]
+    #[schemars(skip)]
+    pub page_blocks: Vec<serde_json::Value>,
     pub title: String,
     pub content_md: String,
 }
@@ -1310,7 +1340,54 @@ impl Engine {
         model_override: Option<&str>,
         enable_web_search: bool,
     ) -> Result<String, String> {
-        refine_artifact(self, artifact_id, critique_prompt, model_override, enable_web_search).await
+        self.refine_artifact_with_policy(
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            crate::llm::lifecycle::RequestPolicy::standard(),
+        )
+        .await
+    }
+
+    pub async fn refine_artifact_with_policy(
+        &self,
+        artifact_id: &str,
+        critique_prompt: &str,
+        model_override: Option<&str>,
+        enable_web_search: bool,
+        policy: crate::llm::lifecycle::RequestPolicy,
+    ) -> Result<String, String> {
+        self.refine_artifact_with_policy_and_cancellation(
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            policy,
+            None,
+        )
+        .await
+    }
+
+    pub async fn refine_artifact_with_policy_and_cancellation(
+        &self,
+        artifact_id: &str,
+        critique_prompt: &str,
+        model_override: Option<&str>,
+        enable_web_search: bool,
+        policy: crate::llm::lifecycle::RequestPolicy,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+    ) -> Result<String, String> {
+        refine_artifact_full(
+            self,
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            policy,
+            cancel_token,
+        )
+        .await
     }
 
     pub async fn derive_artifact(
@@ -1319,8 +1396,62 @@ impl Engine {
         target_derivation_type: &str,
         target_template_id: Option<&str>,
         model_override: Option<&str>,
+        target_project_id: Option<&str>,
     ) -> Result<String, String> {
-        derive_artifact(self, source_artifact_id, target_derivation_type, target_template_id, model_override).await
+        self.derive_artifact_with_policy(
+            source_artifact_id,
+            target_derivation_type,
+            target_template_id,
+            model_override,
+            target_project_id,
+            crate::llm::lifecycle::RequestPolicy::standard(),
+        )
+        .await
+    }
+
+    pub async fn derive_artifact_with_policy(
+        &self,
+        source_artifact_id: &str,
+        target_derivation_type: &str,
+        target_template_id: Option<&str>,
+        model_override: Option<&str>,
+        target_project_id: Option<&str>,
+        policy: crate::llm::lifecycle::RequestPolicy,
+    ) -> Result<String, String> {
+        self.derive_artifact_with_policy_and_cancellation(
+            source_artifact_id,
+            target_derivation_type,
+            target_template_id,
+            model_override,
+            target_project_id,
+            policy,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn derive_artifact_with_policy_and_cancellation(
+        &self,
+        source_artifact_id: &str,
+        target_derivation_type: &str,
+        target_template_id: Option<&str>,
+        model_override: Option<&str>,
+        target_project_id: Option<&str>,
+        policy: crate::llm::lifecycle::RequestPolicy,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+    ) -> Result<String, String> {
+        derive_artifact_full(
+            self,
+            source_artifact_id,
+            target_derivation_type,
+            target_template_id,
+            model_override,
+            target_project_id,
+            policy,
+            cancel_token,
+        )
+        .await
     }
 }
 
@@ -1331,7 +1462,30 @@ pub async fn refine_artifact(
     model_override: Option<&str>,
     enable_web_search: bool,
 ) -> Result<String, String> {
-    let art = engine.get_artifact(artifact_id).map_err(|e| e.to_string())?;
+    refine_artifact_full(
+        engine,
+        artifact_id,
+        critique_prompt,
+        model_override,
+        enable_web_search,
+        crate::llm::lifecycle::RequestPolicy::standard(),
+        None,
+    )
+    .await
+}
+
+pub async fn refine_artifact_full(
+    engine: &Engine,
+    artifact_id: &str,
+    critique_prompt: &str,
+    model_override: Option<&str>,
+    enable_web_search: bool,
+    policy: crate::llm::lifecycle::RequestPolicy,
+    cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+) -> Result<String, String> {
+    let art = engine
+        .get_artifact(artifact_id)
+        .map_err(|e| e.to_string())?;
     let existing_content_md = art.content_md.clone();
 
     let mut additional_evidence = String::new();
@@ -1346,7 +1500,10 @@ pub async fn refine_artifact(
                             for (idx, item) in results.iter().enumerate() {
                                 additional_evidence.push_str(&format!(
                                     "[Source {}] {} ({}): {}\n",
-                                    idx + 1, item.title, item.url, item.snippet
+                                    idx + 1,
+                                    item.title,
+                                    item.url,
+                                    item.snippet
                                 ));
                             }
                             additional_evidence.push_str("</ADDITIONAL_WEB_EVIDENCE>\n");
@@ -1365,7 +1522,8 @@ pub async fn refine_artifact(
     );
 
     let resolved_model = {
-        let is_test_model = engine.model().id().starts_with("test") || engine.model().id().starts_with("mock");
+        let is_test_model =
+            engine.model().id().starts_with("test") || engine.model().id().starts_with("mock");
         if model_override.is_none() && is_test_model {
             crate::llm::dispatcher::ResolvedModel {
                 provider: Arc::clone(engine.model()),
@@ -1376,40 +1534,90 @@ pub async fn refine_artifact(
             }
         } else {
             let ro_conn = engine.db().open_read_only().map_err(|e| e.to_string())?;
-            crate::llm::dispatcher::resolve_model_provider(&ro_conn, model_override, engine.model())
-                .map_err(|e| e.to_string())?
+            crate::llm::dispatcher::resolve_model_provider_with_policy(
+                &ro_conn,
+                model_override,
+                engine.model(),
+                policy,
+            )
+            .map_err(|e| e.to_string())?
         }
     };
 
     let schema = schemars::schema_for!(RefinementOutput);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
-    let system_prompt = "You are an expert systems researcher and technical editor. Elevate, synthesize, and refine notes based on user critiques.";
+    let system_prompt = format!("You are an expert systems researcher and technical editor. Elevate, synthesize, and refine pages based on user critiques.\n{}", crate::llm::page_blocks::PAGE_BLOCK_INSTRUCTIONS);
 
-    let mut refined_text = match tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        resolved_model.provider.generate_json(&schema_val, system_prompt, &user_prompt),
-    ).await {
-        Ok(Ok(json)) => {
-            serde_json::from_str::<RefinementOutput>(&json)
-                .map(|o| o.refined_content_md)
-                .unwrap_or_default()
+    let gen_fut = resolved_model
+        .provider
+        .generate_json(&schema_val, &system_prompt, &user_prompt);
+    let format_error = |err: crate::CoreError| -> String {
+        match err {
+            crate::CoreError::Request(kind) => {
+                kind.user_message("Refinement", "Original document")
+            }
+            other => format!("Model generation failed: {other}"),
         }
-        _ => String::new(),
     };
 
-    if refined_text.trim().is_empty() {
-        let mut fb = existing_content_md.trim().to_string();
-        fb.push_str("\n\n---\n### Refinement & Critique Notes\n");
-        fb.push_str(&format!("- **Critique Addressed:** {}\n", critique_prompt.trim()));
-        if !additional_evidence.is_empty() {
-            fb.push_str("- **Web Evidence Considered:** Yes (incorporated live search results)\n");
+    let raw_json = if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Refinement was cancelled. Original document is unchanged.".to_string());
         }
-        refined_text = fb;
+        tokio::select! {
+            res = tokio::time::timeout(policy.workflow_deadline, gen_fut) => {
+                match res {
+                    Ok(Ok(json)) => json,
+                    Ok(Err(err)) => return Err(format_error(err)),
+                    Err(_) => {
+                        let kind = crate::llm::lifecycle::RequestErrorKind::WorkflowDeadline {
+                            limit: policy.workflow_deadline,
+                        };
+                        return Err(kind.user_message("Refinement", "Original document"));
+                    }
+                }
+            }
+            _ = token.wait_for_cancellation() => {
+                return Err("Refinement was cancelled. Original document is unchanged.".to_string());
+            }
+        }
+    } else {
+        match tokio::time::timeout(policy.workflow_deadline, gen_fut).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(err)) => return Err(format_error(err)),
+            Err(_) => {
+                let kind = crate::llm::lifecycle::RequestErrorKind::WorkflowDeadline {
+                    limit: policy.workflow_deadline,
+                };
+                return Err(kind.user_message("Refinement", "Original document"));
+            }
+        }
+    };
+
+    if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Refinement was cancelled. Original document is unchanged.".to_string());
+        }
     }
 
-    // Capture ChangeSet snapshot of previous content before overwriting to allow 1-click undo
-    let cs_id = uuid::Uuid::new_v4().to_string();
-    let now_ms = engine.clock().now_ms();
+    let output: RefinementOutput = serde_json::from_str(&raw_json)
+        .map_err(|e| format!("Model returned malformed refinement response: {e}"))?;
+
+    if output.refined_content_md.trim().is_empty() {
+        return Err(
+            "Model returned empty refinement content. Original document is unchanged.".to_string(),
+        );
+    }
+
+    let refined_text =
+        crate::llm::page_blocks::append_page_blocks(output.refined_content_md, output.page_blocks);
+
+    if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Refinement was cancelled. Original document is unchanged.".to_string());
+        }
+    }
+
     let summary = format!("Refined: {}", art.title.as_deref().unwrap_or("Untitled"));
     let inverse_payload = serde_json::json!({
         "operations": [
@@ -1421,27 +1629,23 @@ pub async fn refine_artifact(
             }
         ]
     });
-    crate::reversibility::apply_change_set(
-        engine.db(),
-        &cs_id,
-        Actor::Ai,
-        None,
-        &summary,
-        &inverse_payload,
-        now_ms,
-    ).map_err(|e| e.to_string())?;
 
-    let updated_art = engine
-        .update_artifact(artifact_id, &refined_text, Actor::Ai, None)
-        .map_err(|e| e.to_string())?;
+    let (updated_art, cs_id) = engine
+        .apply_refinement_with_cancellation(
+            artifact_id,
+            &refined_text,
+            &summary,
+            &inverse_payload,
+            cancel_token,
+        )
+        .map_err(|e| match e {
+            CoreError::Request(kind) => kind.user_message("Refinement", "Original document"),
+            other => format!("Failed to apply refinement: {other}"),
+        })?;
 
-    if let Some(ref fp) = updated_art.file_path {
-        let full_path = engine.vault_dir().join(fp);
-        let rendered = crate::vault::render_file_with_frontmatter(&updated_art);
-        let _ = std::fs::write(&full_path, rendered);
-    }
-
-    engine.emit_event(CoreEvent::ArtifactChanged { id: artifact_id.to_string() });
+    engine.emit_event(CoreEvent::ArtifactChanged {
+        id: artifact_id.to_string(),
+    });
     engine.emit_event(CoreEvent::ChangeSetApplied { id: cs_id });
 
     Ok(updated_art.content_md)
@@ -1453,18 +1657,86 @@ pub async fn derive_artifact(
     target_derivation_type: &str,
     target_template_id: Option<&str>,
     model_override: Option<&str>,
+    target_project_id: Option<&str>,
 ) -> Result<String, String> {
-    let src = engine.get_artifact(source_artifact_id).map_err(|e| e.to_string())?;
+    derive_artifact_full(
+        engine,
+        source_artifact_id,
+        target_derivation_type,
+        target_template_id,
+        model_override,
+        target_project_id,
+        crate::llm::lifecycle::RequestPolicy::standard(),
+        None,
+    )
+    .await
+}
 
-    let template_skeleton = target_template_id
-        .and_then(|tid| engine.get_synthesis_template(tid).ok().flatten())
-        .or_else(|| {
-            if target_derivation_type == "plan_from_research" {
-                engine.get_default_synthesis_template("plan").ok().flatten()
+#[allow(clippy::too_many_arguments)]
+pub async fn derive_artifact_full(
+    engine: &Engine,
+    source_artifact_id: &str,
+    target_derivation_type: &str,
+    target_template_id: Option<&str>,
+    model_override: Option<&str>,
+    target_project_id: Option<&str>,
+    policy: crate::llm::lifecycle::RequestPolicy,
+    cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+) -> Result<String, String> {
+    let src = engine
+        .get_artifact(source_artifact_id)
+        .map_err(|e| e.to_string())?;
+
+    // Explicit destination validation:
+    // If the caller requested an explicit project destination, validate it immediately before inference.
+    // An explicit request for an unavailable/nonexistent project must fail honestly rather than
+    // silently creating an unintended standalone artifact.
+    let explicit_target_project = match target_project_id {
+        Some(pid) => {
+            let trimmed = pid.trim();
+            if trimmed.is_empty() || trimmed == "default_project" {
+                None
+            } else {
+                engine
+                    .get_project(trimmed)
+                    .map_err(|e| format!("Target project '{trimmed}' unavailable: {e}"))?;
+                Some(trimmed.to_string())
+            }
+        }
+        None => None,
+    };
+
+    // If no explicit destination was requested, resolve single-parent project inheritance:
+    // - If source note belongs to exactly one active project, inherit that project.
+    // - If source note is shared across multiple projects or standalone, remain standalone.
+    let inherited_target_project = if explicit_target_project.is_none() {
+        if let Ok(reader) = engine.db().reader() {
+            let stmt = reader.prepare(
+                "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL;"
+            ).ok();
+            if let Some(mut stmt) = stmt {
+                let pids: Vec<String> = stmt
+                    .query_map(rusqlite::params![source_artifact_id], |r| r.get(0))
+                    .ok()
+                    .map(|rows| rows.filter_map(Result::ok).collect())
+                    .unwrap_or_default();
+                if pids.len() == 1 {
+                    Some(pids[0].clone())
+                } else {
+                    None
+                }
             } else {
                 None
             }
-        })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let template_skeleton = target_template_id
+        .and_then(|tid| engine.get_synthesis_template(tid).ok().flatten())
         .map(|t| t.template_skeleton_md);
 
     let template_injection = match template_skeleton.as_deref() {
@@ -1496,7 +1768,7 @@ pub async fn derive_artifact(
                 template_injection
             ),
         ),
-        "extract_tasks" | _ => (
+        _ => (
             format!("Action Checklist: {}", src.title.as_deref().unwrap_or("Untitled")),
             "You are an operational task coordinator. Extract a consolidated checklist of action items from the context.",
             format!(
@@ -1509,7 +1781,8 @@ pub async fn derive_artifact(
     };
 
     let resolved_model = {
-        let is_test_model = engine.model().id().starts_with("test") || engine.model().id().starts_with("mock");
+        let is_test_model =
+            engine.model().id().starts_with("test") || engine.model().id().starts_with("mock");
         if model_override.is_none() && is_test_model {
             crate::llm::dispatcher::ResolvedModel {
                 provider: Arc::clone(engine.model()),
@@ -1520,122 +1793,141 @@ pub async fn derive_artifact(
             }
         } else {
             let ro_conn = engine.db().open_read_only().map_err(|e| e.to_string())?;
-            crate::llm::dispatcher::resolve_model_provider(&ro_conn, model_override, engine.model())
-                .map_err(|e| e.to_string())?
+            crate::llm::dispatcher::resolve_model_provider_with_policy(
+                &ro_conn,
+                model_override,
+                engine.model(),
+                policy,
+            )
+            .map_err(|e| e.to_string())?
         }
     };
 
     let schema = schemars::schema_for!(DerivationOutput);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
-    let derived_result = match tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        resolved_model.provider.generate_json(&schema_val, sys_prompt, &user_prompt),
-    ).await {
-        Ok(Ok(json)) => serde_json::from_str::<DerivationOutput>(&json).ok(),
-        _ => None,
+    let full_sys_prompt = format!(
+        "{sys_prompt}\n{}",
+        crate::llm::page_blocks::PAGE_BLOCK_INSTRUCTIONS
+    );
+    let gen_fut =
+        resolved_model
+            .provider
+            .generate_json(&schema_val, &full_sys_prompt, &user_prompt);
+
+    let format_error = |err: crate::CoreError| -> String {
+        match err {
+            crate::CoreError::Request(kind) => {
+                kind.user_message("Derivation", "Workspace and source document")
+            }
+            other => format!("Model generation failed: {other}"),
+        }
     };
 
-    let (final_title, final_content) = if let Some(out) = derived_result {
-        let title = if out.title.trim().is_empty() { default_title } else { out.title.trim().to_string() };
-        let content = if out.content_md.trim().is_empty() {
-            generate_derivation_fallback(target_derivation_type, &src, template_skeleton.as_deref())
-        } else {
-            out.content_md
-        };
-        (title, content)
+    let raw_json = if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+        }
+        tokio::select! {
+            res = tokio::time::timeout(policy.workflow_deadline, gen_fut) => {
+                match res {
+                    Ok(Ok(json)) => json,
+                    Ok(Err(err)) => return Err(format_error(err)),
+                    Err(_) => {
+                        let kind = crate::llm::lifecycle::RequestErrorKind::WorkflowDeadline {
+                            limit: policy.workflow_deadline,
+                        };
+                        return Err(kind.user_message("Derivation", "Workspace and source document"));
+                    }
+                }
+            }
+            _ = token.wait_for_cancellation() => {
+                return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+            }
+        }
     } else {
-        (default_title, generate_derivation_fallback(target_derivation_type, &src, template_skeleton.as_deref()))
+        match tokio::time::timeout(policy.workflow_deadline, gen_fut).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(err)) => return Err(format_error(err)),
+            Err(_) => {
+                let kind = crate::llm::lifecycle::RequestErrorKind::WorkflowDeadline {
+                    limit: policy.workflow_deadline,
+                };
+                return Err(kind.user_message("Derivation", "Workspace and source document"));
+            }
+        }
     };
 
-    let new_art = engine.create_derived_artifact(
-        ArtifactType::Note,
-        Authorship::AiGenerated,
-        Some(&final_title),
-        &final_content,
-        None,
-        Some(source_artifact_id),
-        Some(target_derivation_type),
-    ).map_err(|e| e.to_string())?;
-
-    // If parent was in a project, link derived artifact to the same project
-    if let Ok(reader) = engine.db().reader() {
-        let parent_project_id: Option<String> = reader.query_row(
-            "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL LIMIT 1;",
-            rusqlite::params![source_artifact_id],
-            |r| r.get(0),
-        ).ok();
-        if let Some(pid) = parent_project_id {
-            let _ = engine.attach_artifact(&pid, &new_art.id, "derivation", None);
+    if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
         }
     }
 
-    engine.emit_event(CoreEvent::ArtifactChanged { id: new_art.id.clone() });
+    let out: DerivationOutput = serde_json::from_str(&raw_json)
+        .map_err(|e| format!("Model returned malformed derivation response: {e}"))?;
 
-    Ok(new_art.id)
-}
-
-fn generate_derivation_fallback(
-    target_derivation_type: &str,
-    src: &crate::Artifact,
-    skeleton: Option<&str>,
-) -> String {
-    let src_title = src.title.as_deref().unwrap_or("Untitled Note");
-    if let Some(skel) = skeleton {
-        return format!(
-            "# Execution Plan: {src_title}\n\n\
-             > **Derived from:** [[{src_title}]] (`{}`)\n\
-             > **Derivation Type:** `{}`\n\n\
-             {}",
-            src.id,
-            target_derivation_type,
-            skel
+    if out.content_md.trim().is_empty() {
+        return Err(
+            "Model returned empty derivation content. Workspace and source document are unchanged."
+                .to_string(),
         );
     }
 
-    match target_derivation_type {
-        "plan_from_research" => format!(
-            "# Execution Plan: {src_title}\n\n\
-             > **Derived from:** [[{src_title}]] (`{}`)\n\
-             > **Derivation Type:** `plan_from_research`\n\n\
-             ## Executive Summary\n\
-             Synthesized from research findings to establish an actionable execution sequence.\n\n\
-             ## Milestones & Phasing\n\n\
-             ### Phase 1: Preparation & Scoping\n\
-             - [ ] Review verified quotes and baseline parameters from [[{src_title}]]\n\
-             - [ ] Establish environment prerequisites and risk boundaries\n\n\
-             ### Phase 2: Core Execution\n\
-             - [ ] Execute primary implementation tasks\n\
-             - [ ] Validate outcomes against empirical benchmarks\n\n\
-             ### Phase 3: Review & Finalization\n\
-             - [ ] Verify test coverage and sign-off criteria\n",
-            src.id
-        ),
-        "extract_ideas" => format!(
-            "# Discrete Ideas: {src_title}\n\n\
-             > **Derived from:** [[{src_title}]] (`{}`)\n\
-             > **Derivation Type:** `extract_ideas`\n\n\
-             ## Core Concept Angles & Hypotheses\n\n\
-             1. **Hypothesis A: Empirical Optimization**\n\
-                - Synthesizes findings from [[{src_title}]] into a high-leverage opportunity.\n\n\
-             2. **Hypothesis B: Architectural Simplification**\n\
-                - Isolates components to reduce systemic latency and operational friction.\n\n\
-             3. **Hypothesis C: User-Centric Feedback Loops**\n\
-                - Introduces fast validation stages based on derived metrics.\n",
-            src.id
-        ),
-        "extract_tasks" | _ => format!(
-            "# Action Checklist: {src_title}\n\n\
-             > **Derived from:** [[{src_title}]] (`{}`)\n\
-             > **Derivation Type:** `extract_tasks`\n\n\
-             ## Action Items\n\n\
-             - [ ] Review core observations from [[{src_title}]]\n\
-             - [ ] Document target architectural boundaries\n\
-             - [ ] Implement foundational changes\n\
-             - [ ] Conduct end-to-end regression validation\n\
-             - [ ] Publish synthesized documentation\n",
-            src.id
-        ),
+    let final_title = if out.title.trim().is_empty() {
+        default_title
+    } else {
+        out.title.trim().to_string()
+    };
+
+    let final_content =
+        crate::llm::page_blocks::append_page_blocks(out.content_md, out.page_blocks);
+
+    if let Some(token) = cancel_token {
+        if token.is_cancelled() {
+            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+        }
     }
+
+    // Re-verify destination before persistence:
+    // If an explicit target was requested, verify that the project is still valid and was not deleted during inference.
+    let resolved_attachment_project = if let Some(ref target_pid) = explicit_target_project {
+        engine.get_project(target_pid).map_err(|e| {
+            format!("Target project '{target_pid}' became unavailable during derivation: {e}")
+        })?;
+        Some(target_pid.clone())
+    } else if let Some(ref inherited_pid) = inherited_target_project {
+        // For inherited parent projects, if the parent project was removed during inference, fall back to standalone
+        if engine.get_project(inherited_pid).is_ok() {
+            Some(inherited_pid.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let new_art = engine
+        .create_derived_artifact_with_cancellation(
+            ArtifactType::Note,
+            Authorship::AiGenerated,
+            Some(&final_title),
+            &final_content,
+            None,
+            Some(source_artifact_id),
+            Some(target_derivation_type),
+            resolved_attachment_project.as_deref(),
+            cancel_token,
+        )
+        .map_err(|e| match e {
+            CoreError::Request(kind) => {
+                kind.user_message("Derivation", "Workspace and source document")
+            }
+            other => format!("Failed to create and attach derived artifact: {other}"),
+        })?;
+
+    engine.emit_event(CoreEvent::ArtifactChanged {
+        id: new_art.id.clone(),
+    });
+
+    Ok(new_art.id)
 }
-
-

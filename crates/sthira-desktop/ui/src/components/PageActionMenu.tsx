@@ -258,7 +258,7 @@ export const PageActionMenu: React.FC<PageActionMenuProps> = ({
             onClick={() =>
               run(async () => {
                 await detachArtifactFromProject(artifactId, projectId!);
-                afterMutation('Detached — moved to Standalone Notes');
+                afterMutation('Detached — moved to Standalone Pages');
               })
             }
             className={itemClass}

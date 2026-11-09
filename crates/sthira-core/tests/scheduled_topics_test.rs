@@ -87,6 +87,22 @@ fn seed_scrape_cache(engine: &Engine) {
     }
 }
 
+// Explicit model output keeps scheduler tests independent from runtime fallback behavior.
+struct SchedulerResearchModel;
+#[async_trait]
+impl sthira_core::ModelProvider for SchedulerResearchModel {
+    fn id(&self)->&str { "test-scheduler-research" }
+    fn locality(&self)->sthira_core::Locality { sthira_core::Locality::Local }
+    async fn generate_json(&self,schema:&serde_json::Value,_system:&str,_user:&str)->Result<String,sthira_core::CoreError> {
+        if schema.to_string().contains("contradictions_and_evolution") {
+            Ok(serde_json::json!({"synthesis":"Scheduler fixture synthesis from supplied sources.","contradictions_and_evolution":[],"open_questions":[]}).to_string())
+        } else { Ok("{}".into()) }
+    }
+    async fn embed(&self,texts:&[String])->Result<Vec<Vec<f32>>,sthira_core::CoreError> {
+        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("test-embedding"),texts).await
+    }
+}
+
 fn setup() -> (tempfile::TempDir, Arc<Engine>, Arc<FakeClock>) {
     let tmp = tempdir().unwrap();
     let db_path = tmp.path().join("scheduled_topics_test.db");
@@ -94,7 +110,7 @@ fn setup() -> (tempfile::TempDir, Arc<Engine>, Arc<FakeClock>) {
     std::fs::create_dir_all(&vault_dir).unwrap();
 
     let clock = Arc::new(FakeClock::new(1_700_000_000_000));
-    let model = Arc::new(DeterministicFakeModel::new("test-model"));
+    let model = Arc::new(SchedulerResearchModel);
 
     let engine = Arc::new(
         Engine::open(

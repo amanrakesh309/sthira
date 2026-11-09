@@ -33,9 +33,7 @@ pub enum ProgressiveStreamChunk {
         basis_fingerprint: String,
     },
     /// Non-fatal error / fallback indicator
-    FallbackNotice {
-        reason: String,
-    },
+    FallbackNotice { reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

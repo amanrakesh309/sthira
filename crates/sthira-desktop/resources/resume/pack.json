@@ -1,0 +1,42 @@
+{
+  "id": "resume-smollm2-360m-q8-b12110-v1",
+  "label": "SmolLM2-360M \u00b7 local preview",
+  "runtime_tag": "b12110",
+  "model": {
+    "url": "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/593b5a2e04c8f3e4ee880263f93e0bd2901ad47f/smollm2-360m-instruct-q8_0.gguf",
+    "sha256": "48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201",
+    "bytes": 386404992
+  },
+  "runtimes": {
+    "linux-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-x64.tar.gz",
+      "sha256": "368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55",
+      "bytes": 23051958
+    },
+    "linux-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-arm64.tar.gz",
+      "sha256": "4758b51335e37b4346251f2687d64841ff1c07ecb27fc46323945bb2ec9c44d2",
+      "bytes": 18723578
+    },
+    "macos-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz",
+      "sha256": "4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662",
+      "bytes": 16650691
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-x64.tar.gz",
+      "sha256": "c8094268b6bf62f4998f0e45656fd9f5e2d4afb6b1cd0044d761db64be1dd47d",
+      "bytes": 12388601
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip",
+      "sha256": "98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2",
+      "bytes": 24708445
+    },
+    "windows-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-arm64.zip",
+      "sha256": "f8d20fb07d0b499988ced8963afcd5ded2d2cdd9983b757fbc7e51c4abd722e8",
+      "bytes": 13197637
+    }
+  }
+}

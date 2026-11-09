@@ -1,12 +1,17 @@
 pub mod anthropic;
 pub mod autodiscover;
 pub mod dispatcher;
+pub mod endpoints;
+pub mod lifecycle;
+pub mod local_resume;
 pub mod models;
+pub mod page_blocks;
 pub mod streaming;
 
 pub use anthropic::AnthropicProvider;
 pub use autodiscover::{discover_local_ollama_models, sync_discovered_models};
-pub use dispatcher::{resolve_model_provider, ResolvedModel};
+pub use dispatcher::{resolve_model_provider, resolve_model_provider_with_policy, ResolvedModel};
+pub use lifecycle::*;
 pub use models::*;
 pub use streaming::*;
 
@@ -20,21 +25,30 @@ pub struct OllamaProvider {
     locality: Locality,
     client: reqwest::Client,
     embed_model: String,
+    api_key: Option<String>,
+    policy: RequestPolicy,
 }
 
 impl OllamaProvider {
     pub fn new(model_name: impl Into<String>, locality: Locality) -> Self {
-        let host = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let embed_model = std::env::var("OLLAMA_EMBED_MODEL")
-            .unwrap_or_else(|_| "bge-m3:latest".to_string());
+        let host =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let embed_model =
+            std::env::var("OLLAMA_EMBED_MODEL").unwrap_or_else(|_| "bge-m3:latest".to_string());
+        let policy = RequestPolicy::standard();
+        let client = reqwest::Client::builder()
+            .connect_timeout(policy.connect_timeout)
+            .build()
+            .unwrap_or_default();
 
         Self {
             model_name: model_name.into(),
             host: host.trim_end_matches('/').to_string(),
             locality,
-            client: reqwest::Client::new(),
+            client,
             embed_model,
+            api_key: None,
+            policy,
         }
     }
 
@@ -43,12 +57,11 @@ impl OllamaProvider {
         host: impl Into<String>,
         locality: Locality,
     ) -> Self {
-        let embed_model = std::env::var("OLLAMA_EMBED_MODEL")
-            .unwrap_or_else(|_| "bge-m3:latest".to_string());
-
+        let embed_model =
+            std::env::var("OLLAMA_EMBED_MODEL").unwrap_or_else(|_| "bge-m3:latest".to_string());
+        let policy = RequestPolicy::standard();
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .connect_timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(policy.connect_timeout)
             .build()
             .unwrap_or_default();
 
@@ -58,7 +71,24 @@ impl OllamaProvider {
             locality,
             client,
             embed_model,
+            api_key: None,
+            policy,
         }
+    }
+
+    pub fn with_policy(mut self, policy: RequestPolicy) -> Self {
+        self.policy = policy;
+        self.client = reqwest::Client::builder()
+            .connect_timeout(policy.connect_timeout)
+            .build()
+            .unwrap_or_default();
+        self
+    }
+
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
+        let key = api_key.into();
+        self.api_key = (!key.is_empty()).then_some(key);
+        self
     }
 
     pub fn with_embed_model(mut self, embed_model: impl Into<String>) -> Self {
@@ -83,9 +113,11 @@ impl ModelProvider for OllamaProvider {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, CoreError> {
-        let url = format!("{}/api/generate", self.host);
+        let url = endpoints::ollama_api_url(&self.host, "generate");
         let schema_str = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
-        let concise_example = if schema_str.contains("RawExtractedNode") || schema_str.contains("ExtractionOutput") {
+        let concise_example = if schema_str.contains("RawExtractedNode")
+            || schema_str.contains("ExtractionOutput")
+        {
             "\nExpected format example: {\"nodes\": [{\"node_type\": \"decision\", \"statement\": \"...\", \"quote\": \"...\"}]}"
         } else {
             ""
@@ -102,47 +134,68 @@ impl ModelProvider for OllamaProvider {
             "stream": false
         });
 
-        let resp = self
+        let mut request = self
             .client
             .post(&url)
-            .json(&req_body)
-            .send()
-            .await
-            .map_err(|e| CoreError::Model(format!("Ollama HTTP request failed: {e}")))?;
+            .timeout(self.policy.generation_budget)
+            .json(&req_body);
+        if let Some(key) = &self.api_key {
+            request = request.bearer_auth(key);
+        }
+        let resp = request.send().await.map_err(|e| {
+            let kind = classify_reqwest_error(&e, &self.policy);
+            CoreError::Request(kind)
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let err_text = resp.text().await.unwrap_or_default();
-            return Err(CoreError::Model(format!(
-                "Ollama returned HTTP error {status}: {err_text}"
-            )));
+            if status == reqwest::StatusCode::NOT_FOUND && err_text.trim() == "404 page not found" {
+                return Err(CoreError::Model("Ollama's generation endpoint was not found. Check the server address and API format in Settings → AI & Models. Your inquiry is still saved.".into()));
+            }
+            return Err(CoreError::Request(RequestErrorKind::HttpStatus {
+                status: status.as_u16(),
+                message: err_text,
+            }));
         }
 
-        let resp_json: Value = resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Model(format!("Ollama invalid JSON response: {e}")))?;
+        let resp_json: Value = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                CoreError::Request(RequestErrorKind::GenerationDeadline {
+                    limit: self.policy.generation_budget,
+                })
+            } else {
+                CoreError::Request(RequestErrorKind::MalformedResponse {
+                    details: e.to_string(),
+                })
+            }
+        })?;
 
         let raw_text = resp_json
             .get("response")
             .and_then(|v| v.as_str())
-            .unwrap_or("{}");
+            .unwrap_or("");
+
+        if raw_text.trim().is_empty() {
+            return Err(CoreError::Request(RequestErrorKind::EmptyResponse));
+        }
 
         let cleaned = clean_json_fences(raw_text);
         Ok(cleaned.to_string())
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
-        let url = format!("{}/api/embed", self.host);
+        let url = endpoints::ollama_api_url(&self.host, "embed");
         let req_body = serde_json::json!({
             "model": self.embed_model,
             "input": texts
         });
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&req_body)
+        let mut request = self.client.post(&url).json(&req_body);
+        if let Some(key) = &self.api_key {
+            request = request.bearer_auth(key);
+        }
+        let resp = request
             .send()
             .await
             .map_err(|e| CoreError::Model(format!("Ollama embed request failed: {e}")))?;
@@ -197,6 +250,7 @@ pub struct OpenAiCompatibleProvider {
     api_key: String,
     locality: Locality,
     client: reqwest::Client,
+    policy: RequestPolicy,
 }
 
 impl OpenAiCompatibleProvider {
@@ -204,13 +258,19 @@ impl OpenAiCompatibleProvider {
         let base_url = std::env::var("OPENAI_API_BASE")
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
         let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+        let policy = RequestPolicy::standard();
+        let client = reqwest::Client::builder()
+            .connect_timeout(policy.connect_timeout)
+            .build()
+            .unwrap_or_default();
 
         Self {
             model_name: model_name.into(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             locality,
-            client: reqwest::Client::new(),
+            client,
+            policy,
         }
     }
 
@@ -220,13 +280,29 @@ impl OpenAiCompatibleProvider {
         api_key: impl Into<String>,
         locality: Locality,
     ) -> Self {
+        let policy = RequestPolicy::standard();
+        let client = reqwest::Client::builder()
+            .connect_timeout(policy.connect_timeout)
+            .build()
+            .unwrap_or_default();
+
         Self {
             model_name: model_name.into(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
             locality,
-            client: reqwest::Client::new(),
+            client,
+            policy,
         }
+    }
+
+    pub fn with_policy(mut self, policy: RequestPolicy) -> Self {
+        self.policy = policy;
+        self.client = reqwest::Client::builder()
+            .connect_timeout(policy.connect_timeout)
+            .build()
+            .unwrap_or_default();
+        self
     }
 }
 
@@ -272,22 +348,34 @@ impl ModelProvider for OpenAiCompatibleProvider {
         }
 
         let resp = req
+            .timeout(self.policy.generation_budget)
             .send()
             .await
-            .map_err(|e| CoreError::Model(format!("OpenAI HTTP request failed: {e}")))?;
+            .map_err(|e| {
+                let kind = classify_reqwest_error(&e, &self.policy);
+                CoreError::Request(kind)
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let err_text = resp.text().await.unwrap_or_default();
-            return Err(CoreError::Model(format!(
-                "OpenAI returned HTTP error {status}: {err_text}"
-            )));
+            return Err(CoreError::Request(RequestErrorKind::HttpStatus {
+                status: status.as_u16(),
+                message: err_text,
+            }));
         }
 
-        let resp_json: Value = resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Model(format!("OpenAI invalid JSON response: {e}")))?;
+        let resp_json: Value = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                CoreError::Request(RequestErrorKind::GenerationDeadline {
+                    limit: self.policy.generation_budget,
+                })
+            } else {
+                CoreError::Request(RequestErrorKind::MalformedResponse {
+                    details: e.to_string(),
+                })
+            }
+        })?;
 
         let content = resp_json
             .get("choices")
@@ -296,7 +384,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
             .and_then(|ch| ch.get("message"))
             .and_then(|m| m.get("content"))
             .and_then(|v| v.as_str())
-            .unwrap_or("{}");
+            .unwrap_or("");
+
+        if content.trim().is_empty() {
+            return Err(CoreError::Request(RequestErrorKind::EmptyResponse));
+        }
 
         let cleaned = clean_json_fences(content);
         Ok(cleaned.to_string())
@@ -324,32 +416,61 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
 fn clean_json_fences(raw: &str) -> &str {
     let mut text = raw.trim();
-    if let Some(end_think) = text.find("</think>") {
-        text = text[end_think + 8..].trim();
+    // A valid response may itself contain Markdown fences or </think> in a
+    // document string. Never interpret those characters as response wrappers.
+    if serde_json::from_str::<Value>(text).is_ok() {
+        return text;
     }
-    if let Some(start) = text.find("```json") {
-        let after_fence = &text[start + 7..];
-        if let Some(end) = after_fence.find("```") {
-            return after_fence[..end].trim();
+    if text.starts_with("<think>") {
+        if let Some(end_think) = text.find("</think>") {
+            text = text[end_think + 8..].trim();
         }
     }
-    if let Some(start) = text.find("```") {
-        let after_fence = &text[start + 3..];
-        if let Some(end) = after_fence.find("```") {
-            return after_fence[..end].trim();
+    if let Some(body) = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+    {
+        if let Some(body) = body.trim().strip_suffix("```") {
+            text = body.trim();
         }
     }
-    if let (Some(obj_start), Some(obj_end)) = (text.find('{'), text.rfind('}')) {
-        if obj_end > obj_start {
-            return &text[obj_start..=obj_end];
-        }
-    }
-    if let (Some(arr_start), Some(arr_end)) = (text.find('['), text.rfind(']')) {
-        if arr_end > arr_start {
-            return &text[arr_start..=arr_end];
+    // Parse the first top-level object/array, respecting escaped document text
+    // and nesting, rather than looking for a closing fence inside JSON strings.
+    if let Some(start) = text.find(['{', '[']) {
+        let mut values = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
+        if let Some(Ok(value)) = values.next() {
+            if value.is_object() || value.is_array() {
+                return &text[start..start + values.byte_offset()];
+            }
         }
     }
     text
+}
+
+#[cfg(test)]
+mod json_wrapper_tests {
+    use super::clean_json_fences;
+    #[test]
+    fn preserves_embedded_document_fences_and_thinking_delimiters() {
+        let json = serde_json::json!({"content_md":r#"Before </think> ```json "literal"
+```widget:plan
+{"title":"Review"}
+```
+After"#})
+        .to_string();
+        for wrapped in [
+            json.clone(),
+            format!("```json\n{json}\n```"),
+            format!("<think>Check shape</think>\n```json\n{json}\n```"),
+            format!("Response:\n{json}\nEnd."),
+        ] {
+            assert_eq!(clean_json_fences(&wrapped), json);
+        }
+        let array =
+            serde_json::json!([{"text":"[nested] {braces} ```widget:decision"}]).to_string();
+        assert_eq!(clean_json_fences(&format!("```json\n{array}\n```")), array);
+        assert_eq!(clean_json_fences("{\"broken\":"), "{\"broken\":");
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,8 +500,8 @@ impl TieredModelProvider {
     }
 
     pub fn from_env() -> Self {
-        let host = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let host =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
         let fast_local_model = std::env::var("STHIRA_FAST_LOCAL_MODEL")
             .unwrap_or_else(|_| "llama3.2:latest".to_string());
@@ -429,33 +550,52 @@ impl TieredModelProvider {
     ) -> Result<String, CoreError> {
         match tier {
             TaskTier::FastLocal => {
-                match self.fast_local.generate_json(schema, system_prompt, user_prompt).await {
+                match self
+                    .fast_local
+                    .generate_json(schema, system_prompt, user_prompt)
+                    .await
+                {
                     Ok(res) => Ok(res),
-                    Err(e) => {
-                        self.synthesis_primary
-                            .generate_json(schema, system_prompt, user_prompt)
-                            .await
-                            .map_err(|_| e)
-                    }
+                    Err(e) => self
+                        .synthesis_primary
+                        .generate_json(schema, system_prompt, user_prompt)
+                        .await
+                        .map_err(|_| e),
                 }
             }
             TaskTier::SynthesisPrimary => {
-                match self.synthesis_primary.generate_json(schema, system_prompt, user_prompt).await {
+                match self
+                    .synthesis_primary
+                    .generate_json(schema, system_prompt, user_prompt)
+                    .await
+                {
                     Ok(res) => Ok(res),
                     Err(_) => {
                         // Automatic fallback to fast_local if cloud is unreachable
-                        self.fast_local.generate_json(schema, system_prompt, user_prompt).await
+                        self.fast_local
+                            .generate_json(schema, system_prompt, user_prompt)
+                            .await
                     }
                 }
             }
             TaskTier::DeepReview => {
-                match self.deep_review.generate_json(schema, system_prompt, user_prompt).await {
+                match self
+                    .deep_review
+                    .generate_json(schema, system_prompt, user_prompt)
+                    .await
+                {
                     Ok(res) => Ok(res),
                     Err(_) => {
-                        match self.synthesis_primary.generate_json(schema, system_prompt, user_prompt).await {
+                        match self
+                            .synthesis_primary
+                            .generate_json(schema, system_prompt, user_prompt)
+                            .await
+                        {
                             Ok(res) => Ok(res),
                             Err(_) => {
-                                self.fast_local.generate_json(schema, system_prompt, user_prompt).await
+                                self.fast_local
+                                    .generate_json(schema, system_prompt, user_prompt)
+                                    .await
                             }
                         }
                     }
@@ -500,7 +640,8 @@ impl ModelProvider for TieredModelProvider {
             TaskTier::SynthesisPrimary
         };
 
-        self.generate_for_task(tier, schema, system_prompt, user_prompt).await
+        self.generate_for_task(tier, schema, system_prompt, user_prompt)
+            .await
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {

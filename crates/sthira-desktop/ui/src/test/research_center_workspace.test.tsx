@@ -18,10 +18,12 @@ vi.mock('../api/ipc', async (importOriginal) => {
   return {
     ...actual,
     isTauri: false,
+    getProviderCatalog: vi.fn(async () => [{ id: 'qa-provider', is_enabled: true, models: [{ id: 'qa-model', display_name: 'QA model', model_identifier: 'qa', is_enabled: true, is_default: true }] }]),
     createResearchPage: vi.fn(),
     runResearchIntoPage: vi.fn(),
     createPage: vi.fn(),
     saveArtifact: vi.fn(),
+    saveGeneratedArtifact: vi.fn(),
     streamAdaptiveRun: vi.fn(),
     getArtifactContext: vi.fn(),
     // Silence incidental background IPC calls with no bearing on this suite.
@@ -61,6 +63,7 @@ const RESEARCH_RESULT: WebResearchResult = {
   findings: [],
   synthesized_markdown: GROUNDED_MARKDOWN,
   mode_used: 'always_search',
+  search_status: 'web_search_success', external_sources_count: 1,
   stages: [],
   sources: [],
 };
@@ -99,9 +102,10 @@ const renderApp = async () => {
 
 
 /** Types a prompt into the Universal Input Bar in the given mode and presses Enter. */
-const submitFromUniversalInput = (mode: 'research' | 'plan', text: string) => {
+const submitFromUniversalInput = async (mode: 'research' | 'plan', text: string) => {
   fireEvent.click(screen.getByTestId(`mode-btn-${mode}`));
-  const input = screen.getByPlaceholderText(/Ask, research, capture or plan/i);
+  await waitFor(() => expect(screen.getByTestId('home-model-selector')).toHaveTextContent('QA model'));
+  const input = screen.getByRole('textbox', { name: 'Your thought or question' });
   fireEvent.change(input, { target: { value: text } });
   fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
 };
@@ -142,7 +146,7 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
     expect(screen.queryByTestId('research-query-input')).toBeNull();
     expect(screen.queryByTestId('web-search-mode-pill')).toBeNull();
 
-    submitFromUniversalInput('research', QUERY);
+    await submitFromUniversalInput('research', QUERY);
 
     // 1. A draft artifact was initialised for the query.
     await waitFor(() => {
@@ -167,8 +171,8 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
     expect(ipc.runResearchIntoPage).toHaveBeenCalledWith(
       RESEARCH_ARTIFACT_ID,
       QUERY,
-      'auto',
-      expect.any(Function)
+      'always_search',
+      expect.any(Function), null, 'qa-model'
     );
 
     // 3. Stages stream in live, in order.
@@ -245,7 +249,7 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
     );
 
     await renderApp();
-    submitFromUniversalInput('plan', GOAL);
+    await submitFromUniversalInput('plan', GOAL);
 
     // 1. A `Plan: <Goal>` draft artifact was initialised.
     await waitFor(() => {
@@ -280,7 +284,7 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
       finishStream!();
     });
     await waitFor(() => {
-      expect(ipc.saveArtifact).toHaveBeenCalledWith(
+      expect(ipc.saveGeneratedArtifact).toHaveBeenCalledWith(
         PLAN_ARTIFACT_ID,
         expect.stringContaining('Ship the shell refactor.'),
         `Plan: ${GOAL}`,
