@@ -339,4 +339,61 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
     expect(center.nextElementSibling?.tagName).not.toBe('ASIDE');
   });
 
+  // ---------------------------------------------------------------------------
+  // 5. Batch 3 truthful stage banners for partial search & specific failures
+  // ---------------------------------------------------------------------------
+  it('surfaces partial search coverage warnings and specific failure banners in FocusView', async () => {
+    vi.mocked(ipc.createResearchPage).mockResolvedValue(RESEARCH_ARTIFACT_ID);
+    const partialWarningMsg =
+      'Research complete with partial search coverage (Partial web search coverage: 1 of 3 search queries failed (rate-limited); synthesized from remaining retrieved sources.)';
+    vi.mocked(ipc.runResearchIntoPage).mockResolvedValueOnce({
+      ...RESEARCH_RESULT,
+      search_status: 'web_search_success',
+      external_sources_count: 1,
+      stages: [
+        { stage: 'searching', message: 'Searching web...' },
+        { stage: 'scraped', message: 'Scraped 1 source...' },
+        {
+          stage: 'partial_search_failure',
+          message:
+            'Partial web search coverage: 1 of 3 search queries failed (rate-limited); synthesized from remaining retrieved sources.',
+        },
+        { stage: 'synthesizing', message: 'Synthesizing research...' },
+        { stage: 'done', message: partialWarningMsg },
+      ],
+    });
+
+    await renderApp();
+    await submitFromUniversalInput('research', QUERY);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-run-banner')).toHaveAttribute('data-run-status', 'warning');
+      expect(screen.getByTestId('document-run-message')).toHaveTextContent(partialWarningMsg);
+    });
+  });
+
+  it('surfaces specific anti-bot challenge fallback reason rather than generic empty message', async () => {
+    vi.mocked(ipc.createResearchPage).mockResolvedValue(RESEARCH_ARTIFACT_ID);
+    const challengeMsg =
+      '⚠️ Web search blocked by anti-bot challenge on DuckDuckGo; synthesized using local context.';
+    vi.mocked(ipc.runResearchIntoPage).mockResolvedValueOnce({
+      ...RESEARCH_RESULT,
+      mode_used: 'local_vault_only',
+      search_status: 'web_search_failed',
+      external_sources_count: 0,
+      stages: [
+        { stage: 'searching', message: challengeMsg },
+        { stage: 'done', message: challengeMsg },
+      ],
+    });
+
+    await renderApp();
+    await submitFromUniversalInput('research', QUERY);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-run-banner')).toHaveAttribute('data-run-status', 'warning');
+      expect(screen.getByTestId('document-run-message')).toHaveTextContent(challengeMsg);
+    });
+  });
+
 });

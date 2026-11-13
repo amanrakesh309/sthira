@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FocusView } from '../components/FocusView';
 import * as ipc from '../api/ipc';
 import { setEditorMarkdown, editorMarkdown } from './editor-helpers';
+
+async function flushMicrotasks(rounds = 8) {
+  await act(async () => {
+    for (let i = 0; i < rounds; i += 1) {
+      await Promise.resolve();
+    }
+  });
+}
 
 // Mock ipc calls
 vi.mock('../api/ipc', async (importOriginal) => {
@@ -92,6 +100,7 @@ vi.mock('../api/ipc', async (importOriginal) => {
     refineArtifact: vi.fn().mockResolvedValue(
       '# Distributed Systems Blueprint\n\nRefined with benchmark comparisons and Paxos trade-offs.'
     ),
+    undoRefinement: vi.fn(),
     deriveArtifact: vi.fn().mockResolvedValue('derived-new-plan-123'),
     cancelRequest: vi.fn().mockResolvedValue(true),
     listObjectTypes: vi.fn().mockResolvedValue([]),
@@ -401,8 +410,8 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
     // Now late response resolves
     resolveRefine!('# Late Refined Content That Must Be Ignored');
 
-    // Wait a tick to ensure any late callback would have fired
-    await new Promise((r) => setTimeout(r, 50));
+    // Drain promise continuations deterministically (no timing sleep)
+    await flushMicrotasks();
 
     // Content in document editor must remain unmutated original content
     const editor = screen.getByRole('textbox', { name: 'Document content' });
@@ -467,7 +476,7 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // 4. Resolve first request late while second is in flight
     resolveFirstRefine!('# First Request Content Should Be Discarded');
-    await new Promise((r) => setTimeout(r, 20));
+    await flushMicrotasks();
 
     // Modal is still open and loading for the second request
     expect(screen.getByText('Refining Note...')).toBeInTheDocument();
@@ -565,7 +574,7 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // Resolve late result for Page A
     resolveOldRefine('# Late result for Page A');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushMicrotasks();
 
     // Must not call onContentUpdate with Page A's text
     expect(onContentUpdate).not.toHaveBeenCalledWith('# Late result for Page A');
@@ -619,7 +628,7 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // 3. First request rejects late with error
     rejectFirst(new Error('Late network disconnect'));
-    await new Promise((r) => setTimeout(r, 20));
+    await flushMicrotasks();
 
     // Second request must still be loading without being aborted by first request's finally block
     expect(screen.getByText('Refining Note...')).toBeInTheDocument();
@@ -672,12 +681,13 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // Resolve refine with the committed content
     resolveRefine('# Distributed Systems Blueprint\n\nCommitted result must be reconciled');
-    await new Promise((resolve) => setTimeout(resolve, 75));
 
     // Editor content must reconcile with the committed result rather than remaining stale
-    expect(
-      editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))
-    ).toContain('Committed result must be reconciled');
+    await waitFor(() => {
+      expect(
+        editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))
+      ).toContain('Committed result must be reconciled');
+    });
   });
 
   it('cancel rejected after commit preserves newer user draft without overwriting or dispatching save', async () => {
@@ -726,7 +736,9 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // Model refinement resolves with committed result
     resolveRefine('# Distributed Systems Blueprint\n\nCommitted model result');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Conflict banner offers explicit reconciliation without destroying the draft
+    expect(await screen.findByTestId('banner-refinement-conflict')).toBeInTheDocument();
 
     // The newer user draft must NOT be overwritten by the committed model result
     expect(editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))).toContain(
@@ -738,9 +750,6 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
       .mocked(ipc.saveArtifact)
       .mock.calls.filter((call) => String(call[1]).includes('Committed model result'));
     expect(modelSaves).toHaveLength(0);
-
-    // Conflict banner offers explicit reconciliation without destroying the draft
-    expect(screen.getByTestId('banner-refinement-conflict')).toBeInTheDocument();
   });
 
   async function setupConflictFixture(options: {
@@ -1107,7 +1116,7 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
 
     // Old page refresh rejects after Page B has already loaded
     rejectRefresh(new Error('Old-page context refresh failed'));
-    await new Promise((resolve) => setTimeout(resolve, 75));
+    await flushMicrotasks();
 
     vi.mocked(ipc.saveArtifact).mockClear();
     setEditorMarkdown(
@@ -1157,7 +1166,7 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
     // Old page refresh succeeds late after Page B has already loaded
     const oldContext = await normalGet('test-art-1');
     resolveRefresh(oldContext);
-    await new Promise((resolve) => setTimeout(resolve, 75));
+    await flushMicrotasks();
 
     vi.mocked(ipc.saveArtifact).mockClear();
     setEditorMarkdown(
@@ -1180,15 +1189,333 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
     expect(screen.queryByTestId('banner-refinement-conflict')).not.toBeInTheDocument();
   });
 
-  it('same-artifact reload with a different load generation rejects stale conflict completion', async () => {
+  it('actual same-artifact reload via documentRun during deferred Keep save does not strand busy state', async () => {
     const { user, view, deferNextSave } = await setupConflictFixture({ waitForAutosave: false });
     const releaseSave = deferNextSave();
 
-    // Click Keep, starting in-flight save for test-art-1 under loadRequest generation 1
-    await user.click(screen.getByTestId('btn-dismiss-pending-refinement'));
-
-    // Trigger a same-artifact reload by rerendering FocusView
+    const register = vi.fn();
     view.rerender(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+        registerBeforeLeave={register}
+      />
+    );
+    await screen.findByTestId('input-artifact-title');
+
+    // Click Keep, starting in-flight save under loadRequest generation 1
+    await user.click(screen.getByTestId('btn-dismiss-pending-refinement'));
+    expect(screen.getByTestId('btn-dismiss-pending-refinement')).toBeDisabled();
+
+    const refreshBefore = vi.mocked(ipc.getArtifactContext).mock.calls.length;
+
+    // Trigger an actual same-page reload via documentRun.refreshToken
+    view.rerender(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+        registerBeforeLeave={register}
+        documentRun={{
+          artifactId: 'test-art-1',
+          refreshToken: 1,
+          status: 'done',
+          kind: 'research',
+          mode: 'local_vault_only',
+          message: 'Review fixture run finished',
+          query: 'Review fixture',
+        } as any}
+      />
+    );
+
+    // Release the in-flight save
+    releaseSave();
+
+    // Verify an actual reload occurred and async cleanup settled deterministically
+    await waitFor(() => expect(vi.mocked(ipc.getArtifactContext).mock.calls.length).toBeGreaterThan(refreshBefore));
+    await waitFor(() => expect(screen.queryByText('Opening document…')).not.toBeInTheDocument());
+    await flushMicrotasks();
+
+    // Settled conflict buttons must NOT be stranded in a disabled state
+    const keepBtn = screen.queryByTestId('btn-dismiss-pending-refinement') as HTMLButtonElement | null;
+    if (keepBtn) {
+      expect(keepBtn).toBeEnabled();
+    }
+    const applyBtn = screen.queryByTestId('btn-apply-pending-refinement') as HTMLButtonElement | null;
+    if (applyBtn) {
+      expect(applyBtn).toBeEnabled();
+    }
+
+    // Before-leave guard must not be blocked by stranded busy flag
+    const guard = register.mock.calls.at(-1)?.[0];
+    const allowed = guard ? await guard() : true;
+    expect(allowed).toBe(true);
+
+    // Manual save must function normally
+    expect(screen.getByTestId('btn-save-artifact')).toBeEnabled();
+  });
+
+  it('actual same-artifact reload via documentRun during deferred Apply save does not strand busy state', async () => {
+    const { user, view, deferNextSave } = await setupConflictFixture({ waitForAutosave: false });
+    const releaseSave = deferNextSave();
+
+    const register = vi.fn();
+    view.rerender(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+        registerBeforeLeave={register}
+      />
+    );
+    await screen.findByTestId('input-artifact-title');
+
+    // Click Apply, starting in-flight save under loadRequest generation 1
+    await user.click(screen.getByTestId('btn-apply-pending-refinement'));
+    expect(screen.getByTestId('btn-apply-pending-refinement')).toBeDisabled();
+
+    const refreshBefore = vi.mocked(ipc.getArtifactContext).mock.calls.length;
+
+    // Trigger an actual same-page reload via documentRun.refreshToken
+    view.rerender(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+        registerBeforeLeave={register}
+        documentRun={{
+          artifactId: 'test-art-1',
+          refreshToken: 2,
+          status: 'done',
+          kind: 'research',
+          mode: 'local_vault_only',
+          message: 'Review fixture run finished',
+          query: 'Review fixture',
+        } as any}
+      />
+    );
+
+    // Release the in-flight save
+    releaseSave();
+
+    // Verify an actual reload occurred and settled cleanly
+    await waitFor(() => expect(vi.mocked(ipc.getArtifactContext).mock.calls.length).toBeGreaterThan(refreshBefore));
+    await waitFor(() => expect(screen.queryByText('Opening document…')).not.toBeInTheDocument());
+    await flushMicrotasks();
+
+    // Settled conflict buttons must NOT be stranded in a disabled state
+    const keepBtn = screen.queryByTestId('btn-dismiss-pending-refinement') as HTMLButtonElement | null;
+    if (keepBtn) {
+      expect(keepBtn).toBeEnabled();
+    }
+    const applyBtn = screen.queryByTestId('btn-apply-pending-refinement') as HTMLButtonElement | null;
+    if (applyBtn) {
+      expect(applyBtn).toBeEnabled();
+    }
+
+    const guard = register.mock.calls.at(-1)?.[0];
+    const allowed = guard ? await guard() : true;
+    expect(allowed).toBe(true);
+
+    expect(screen.getByTestId('btn-save-artifact')).toBeEnabled();
+  });
+
+  it('deferred Apply save makes editing controls read-only and displays busy feedback', async () => {
+    const { user, deferNextSave } = await setupConflictFixture({ waitForAutosave: false });
+    const releaseSave = deferNextSave();
+
+    // Click Apply Refinement while next save is deferred
+    await user.click(screen.getByTestId('btn-apply-pending-refinement'));
+
+    // Rich editor should be read-only (contenteditable=false)
+    const editor = screen.getByRole('textbox', { name: 'Document content' });
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'));
+
+    // Title input must be disabled
+    expect(screen.getByTestId('input-artifact-title')).toBeDisabled();
+
+    // Toolbar actions and save button must be disabled
+    expect(screen.getByTestId('btn-save-artifact')).toBeDisabled();
+    expect(screen.getByTestId('btn-refine-artifact')).toBeDisabled();
+    expect(screen.getByTestId('btn-derive-menu')).toBeDisabled();
+
+    // Conflict action buttons show disabled and busy status
+    const applyBtn = screen.getByTestId('btn-apply-pending-refinement');
+    expect(applyBtn).toBeDisabled();
+    expect(applyBtn).toHaveTextContent('Applying Refinement…');
+    expect(screen.getByTestId('btn-dismiss-pending-refinement')).toBeDisabled();
+
+    // Release the pending save
+    releaseSave();
+
+    // Banner is dismissed and editor asynchronously returns to editable once TipTap effect commits
+    await waitFor(() => expect(screen.queryByTestId('banner-refinement-conflict')).not.toBeInTheDocument());
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'true'));
+    await waitFor(() => expect(screen.getByTestId('input-artifact-title')).toBeEnabled());
+    expect(editorMarkdown(editor)).toContain('COMMITTED MODEL CONTENT');
+  });
+
+  it('deferred Apply save failure re-enables editing controls, preserves draft, and allows retry', async () => {
+    const { user, makeNextSaveFail } = await setupConflictFixture({ waitForAutosave: false });
+    makeNextSaveFail();
+
+    await user.click(screen.getByTestId('btn-apply-pending-refinement'));
+
+    // Wait for failure
+    await waitFor(() => expect(screen.getByTestId('refinement-conflict-error')).toBeInTheDocument());
+    expect(screen.getByTestId('refinement-conflict-error')).toHaveTextContent(
+      'Couldn’t apply refinement. Try applying again.'
+    );
+
+    // Editor and title must be re-enabled
+    const editor = screen.getByRole('textbox', { name: 'Document content' });
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'true'));
+    expect(screen.getByTestId('input-artifact-title')).toBeEnabled();
+
+    // Draft is preserved
+    expect(editorMarkdown(editor)).toContain('NEWER USER DRAFT TO KEEP');
+
+    // Buttons are re-enabled for retry
+    expect(screen.getByTestId('btn-apply-pending-refinement')).toBeEnabled();
+    expect(screen.getByTestId('btn-dismiss-pending-refinement')).toBeEnabled();
+  });
+
+  it('newer edits during Apply save are preserved and conflict banner remains for reconciliation', async () => {
+    const { user, deferNextSave } = await setupConflictFixture({ waitForAutosave: false });
+    const releaseSave = deferNextSave();
+
+    await user.click(screen.getByTestId('btn-apply-pending-refinement'));
+    const editor = screen.getByRole('textbox', { name: 'Document content' });
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'));
+
+    // Even if an edit occurs programmatically while save is in flight
+    setEditorMarkdown(editor, '# Distributed Systems Blueprint\n\nNEW EDIT WHILE APPLY SAVING');
+    expect(editorMarkdown(editor)).toContain('NEW EDIT WHILE APPLY SAVING');
+
+    // Release the save and wait until Apply busy spinner settles
+    releaseSave();
+    await waitFor(() => expect(screen.getByTestId('btn-apply-pending-refinement')).toBeEnabled());
+
+    // Once save completes, the newer draft must NOT be overwritten!
+    expect(editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))).toContain(
+      'NEW EDIT WHILE APPLY SAVING'
+    );
+    // Conflict banner remains for reconciliation
+    expect(screen.getByTestId('banner-refinement-conflict')).toBeInTheDocument();
+  });
+
+  it('older conflict operation completion does not unlock a newer operation busy state', async () => {
+    const { user, view } = await setupConflictFixture({ waitForAutosave: false });
+
+    let resolveSave1!: () => void;
+    let saveCount = 0;
+
+    vi.mocked(ipc.saveArtifact).mockImplementation(async (id, content, title) => {
+      saveCount++;
+      if (saveCount === 1) {
+        await new Promise<void>((r) => {
+          resolveSave1 = r;
+        });
+      }
+      return {
+        id: id || 'test-art-1',
+        artifact_type: 'note',
+        authorship: 'user',
+        title: title || 'Distributed Systems Blueprint',
+        content_md: content,
+        content_hash: 'hash-saved',
+        version: 2,
+        is_unfinished_draft: false,
+        created_at: 1000,
+        updated_at: 2000,
+      };
+    });
+
+    // Start op 1 (Keep) with deferred save 1
+    await user.click(screen.getByTestId('btn-dismiss-pending-refinement'));
+    expect(screen.getByTestId('btn-dismiss-pending-refinement')).toBeDisabled();
+
+    // Navigate to page 2 (which resets activeConflictOpRef to null)
+    view.rerender(
+      <FocusView projectId="proj-1" artifactId="test-art-2" onBack={vi.fn()} onOpenCanvas={vi.fn()} />
+    );
+    await screen.findByTestId('input-artifact-title');
+
+    // Op 1 completes while FocusView is on page 2
+    resolveSave1();
+    await flushMicrotasks();
+
+    // Page 2's state is clean and not stranded
+    expect(screen.getByTestId('btn-save-artifact')).toBeEnabled();
+  });
+
+  it('clears owned save-success timer across unmount, document switch, and vault reset without orphan timer firing', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const view = render(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+      />
+    );
+    await screen.findByTestId('input-artifact-title');
+
+    // Trigger manual save -> arms 2500ms saveSuccess timer
+    fireEvent.click(screen.getByTestId('btn-save-artifact'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-artifact')).toHaveTextContent('Saved'));
+
+    const clearsBeforeSwitch = clearSpy.mock.calls.length;
+    view.rerender(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-2"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(clearSpy.mock.calls.length).toBeGreaterThan(clearsBeforeSwitch));
+    expect(screen.getByTestId('btn-save-artifact')).not.toHaveTextContent('Saved');
+
+    // Re-arm timer then trigger unmount cleanup
+    await waitFor(() => expect(screen.getByTestId('btn-save-artifact')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('btn-save-artifact'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-artifact')).toHaveTextContent('Saved'));
+    const clearsBeforeUnmount = clearSpy.mock.calls.length;
+    view.unmount();
+    expect(clearSpy.mock.calls.length).toBeGreaterThan(clearsBeforeUnmount);
+
+    // Mount fresh view, arm timer, then dispatch sthira:vault-reset
+    const view2 = render(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+      />
+    );
+    await screen.findByTestId('input-artifact-title');
+    await waitFor(() => expect(screen.getByTestId('btn-save-artifact')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('btn-save-artifact'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-artifact')).toHaveTextContent('Saved'));
+    const clearsBeforeReset = clearSpy.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new CustomEvent('sthira:vault-reset'));
+    });
+    await waitFor(() => expect(clearSpy.mock.calls.length).toBeGreaterThan(clearsBeforeReset));
+    view2.unmount();
+    clearSpy.mockRestore();
+  });
+
+  it('RefineArtifactModal exposes dialog semantics, portals ModelSelector outside clipping, traps Tab, and restores focus across Escape layers (F-B5-008, F-B5-019)', async () => {
+    const user = userEvent.setup();
+
+    render(
       <FocusView
         projectId="proj-1"
         artifactId="test-art-1"
@@ -1197,12 +1524,202 @@ describe('Chained Synthesis: Re-Research & Note Derivation', () => {
       />
     );
 
-    // Release the stale save from generation 1
-    releaseSave();
-    await new Promise((resolve) => setTimeout(resolve, 75));
+    const refineBtn = await screen.findByTestId('btn-refine-artifact');
+    refineBtn.focus();
+    await user.click(refineBtn);
 
-    // Stale operation should not have corrupted the fresh load generation
-    await screen.findByTestId('input-artifact-title');
-    expect(screen.getByTestId('input-artifact-title')).toHaveValue('Distributed Systems Blueprint');
+    const modal = await screen.findByTestId('refine-artifact-modal');
+    expect(modal).toHaveAttribute('role', 'dialog');
+    expect(modal).toHaveAttribute('aria-modal', 'true');
+    expect(modal).toHaveAttribute('aria-labelledby', 'refine-modal-title');
+    expect(modal.className).not.toContain('overflow-hidden');
+    expect(modal.className).toContain('overflow-y-auto');
+
+    const closeBtn = screen.getByTestId('btn-close-refine-modal');
+    expect(closeBtn).toHaveAccessibleName('Close refine modal');
+
+    // Open portaled ModelSelector dropdown
+    const modelChip = screen.getByTestId('refine-model-selector');
+    await user.click(modelChip);
+    const dropdown = screen.getByTestId('model-selector-dropdown');
+    expect(dropdown.parentElement).toBe(document.body);
+    expect(modal.contains(dropdown)).toBe(false);
+
+    // Tab wraps cleanly through portaled dropdown options back into dialog without escaping
+    const submitBtn = screen.getByTestId('btn-run-refinement');
+    expect(submitBtn).toBeDisabled();
+    const cancelBtn = screen.getByTestId('btn-cancel-refine-modal');
+    cancelBtn.focus();
+    await user.tab();
+    expect(dropdown.contains(document.activeElement)).toBe(true);
+
+    // Shift+Tab from closeBtn (first focusable inside dialog) wraps to last dropdown option
+    closeBtn.focus();
+    await user.tab({ shift: true });
+    expect(dropdown.contains(document.activeElement)).toBe(true);
+
+    // First Escape closes ONLY the portaled ModelSelector dropdown and focuses trigger chip
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument();
+    expect(screen.getByTestId('refine-artifact-modal')).toBeInTheDocument();
+    expect(modelChip).toHaveFocus();
+
+    // Second Escape closes RefineArtifactModal and restores focus to opener Refine button
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByTestId('refine-artifact-modal')).not.toBeInTheDocument();
+    });
+    expect(refineBtn).toHaveFocus();
+  });
+
+  it('Refine 1-click Undo restores exact pre-refine state, guards dirty drafts, and surfaces server conflict errors (F-B5-007)', async () => {
+    const user = userEvent.setup();
+    const originalMd = '# Distributed Systems Blueprint\n\nInitial findings on Paxos vs Raft.';
+    const refinedMd = '# Distributed Systems Blueprint\n\nRefined with BFT and throughput data.';
+    let currentDbMd = originalMd;
+
+    vi.mocked(ipc.getArtifactContext).mockImplementation(async (id) => ({
+      artifact: {
+        id,
+        artifact_type: 'note',
+        authorship: 'user',
+        title: 'Distributed Systems Blueprint',
+        content_md: currentDbMd,
+        content_hash: currentDbMd === originalMd ? 'hash-1' : 'hash-refined-1',
+        version: currentDbMd === originalMd ? 1 : 2,
+        is_unfinished_draft: false,
+        created_at: 1000,
+        updated_at: 2000,
+      },
+      epistemic_nodes: [],
+      pending_proposals: [],
+      project_id: 'proj-1',
+      is_unfinished_draft: false,
+      derived_from_title: null,
+    }));
+
+    vi.mocked(ipc.refineArtifact).mockImplementation(async () => {
+      currentDbMd = refinedMd;
+      return {
+        artifact_id: 'test-art-1',
+        content_md: refinedMd,
+        content_hash: 'hash-refined-1',
+        version: 2,
+        change_set_id: 'cs-refine-101',
+      };
+    });
+
+    vi.mocked(ipc.undoRefinement).mockImplementationOnce(async () => {
+      currentDbMd = originalMd;
+      return {
+        id: 'test-art-1',
+        artifact_type: 'note',
+        authorship: 'user',
+        title: 'Distributed Systems Blueprint',
+        content_md: originalMd,
+        content_hash: 'hash-1',
+        version: 3,
+        is_unfinished_draft: false,
+        created_at: 1000,
+        updated_at: 3000,
+      };
+    });
+
+    render(
+      <FocusView
+        projectId="proj-1"
+        artifactId="test-art-1"
+        onBack={vi.fn()}
+        onOpenCanvas={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('input-artifact-title')).toHaveValue('Distributed Systems Blueprint');
+    });
+
+    // 1. Trigger Refine -> returns RefineArtifactOutcome -> Undo toast surfaces
+    await user.click(screen.getByTestId('btn-refine-artifact'));
+    await user.type(screen.getByTestId('textarea-critique-prompt'), 'Add BFT benchmarks');
+    await user.click(screen.getByTestId('btn-run-refinement'));
+
+    const undoToast = await screen.findByTestId('undo-toast');
+    expect(undoToast).toHaveTextContent('Refinement applied');
+    await waitFor(() => {
+      expect(editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))).toContain(
+        'Refined with BFT and throughput data.'
+      );
+    });
+
+    // 2. Make local dirty edit -> clicking Undo must block locally rather than discarding dirty edits
+    const editor = screen.getByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, '# Distributed Systems Blueprint\n\nLocal newer draft edits.');
+    await user.click(screen.getByTestId('undo-toast-btn'));
+    expect(
+      await screen.findByText('Save or resolve your newer changes before undoing this refinement.')
+    ).toBeInTheDocument();
+    expect(ipc.undoRefinement).not.toHaveBeenCalled();
+
+    // 3. Reset back to clean refined state (via manual save mock updating DB) -> Undo works on clean match
+    currentDbMd = refinedMd;
+    setEditorMarkdown(editor, refinedMd);
+    vi.mocked(ipc.saveArtifact).mockResolvedValueOnce({
+      id: 'test-art-1',
+      artifact_type: 'note',
+      authorship: 'user',
+      title: 'Distributed Systems Blueprint',
+      content_md: refinedMd,
+      content_hash: 'hash-refined-1',
+      version: 2,
+      is_unfinished_draft: false,
+      created_at: 1000,
+      updated_at: 2100,
+    });
+    await user.click(screen.getByTestId('btn-save-artifact'));
+    await waitFor(() => {
+      const saveText = screen.getByTestId('btn-save-artifact').textContent || '';
+      expect(saveText === 'Saved' || saveText === 'Auto-saved').toBe(true);
+    });
+
+    // Dismiss dirty error banner and trigger real Undo
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await user.click(screen.getByTestId('undo-toast-btn'));
+    await waitFor(() => {
+      expect(ipc.undoRefinement).toHaveBeenCalledWith('test-art-1', 'cs-refine-101');
+    });
+    await waitFor(() => {
+      expect(editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))).toContain(
+        'Initial findings on Paxos vs Raft.'
+      );
+      expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+    });
+
+    // 4. Second refine where backend refuses undo due to newer saved work -> shows conflict error cleanly
+    vi.mocked(ipc.refineArtifact).mockImplementationOnce(async () => {
+      currentDbMd = refinedMd;
+      return {
+        artifact_id: 'test-art-1',
+        content_md: refinedMd,
+        content_hash: 'hash-refined-2',
+        version: 4,
+        change_set_id: 'cs-refine-102',
+      };
+    });
+    vi.mocked(ipc.undoRefinement).mockRejectedValueOnce(
+      'The document changed after this refinement. Undo would overwrite newer work.'
+    );
+
+    await user.click(screen.getByTestId('btn-refine-artifact'));
+    await user.type(screen.getByTestId('textarea-critique-prompt'), 'Second refinement pass');
+    await user.click(screen.getByTestId('btn-run-refinement'));
+    await screen.findByTestId('undo-toast');
+
+    await user.click(screen.getByTestId('undo-toast-btn'));
+    expect(
+      await screen.findByText(/The document changed after this refinement/)
+    ).toBeInTheDocument();
+    expect(editorMarkdown(screen.getByRole('textbox', { name: 'Document content' }))).toContain(
+      'Refined with BFT and throughput data.'
+    );
   });
 });

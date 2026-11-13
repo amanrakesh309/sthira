@@ -225,10 +225,10 @@ export function WorkspaceIndexView({ initialTab = 'all', initialNoteScope = 'all
           <option value="updated">Last Modified</option><option value="created">Date Created</option><option value="title_asc">Title (A–Z)</option><option value="title_desc">Title (Z–A)</option>
         </select></label>
       </div>
-      {actionError && <div className="directory-notice" role="alert"><p>{actionError}</p><button type="button" onClick={() => { if (retryAction.current) retryAction.current(); else { setActionError(null); void loadData(); } }}>Retry</button></div>}
+      {actionError && <div className="directory-notice"><p role="alert">{actionError}</p><button type="button" onClick={() => { if (retryAction.current) retryAction.current(); else { setActionError(null); void loadData(); } }}>Retry</button></div>}
       <p className="sr-only" role="status">{notice}</p>
       <div id="directory-results" role="tabpanel" aria-labelledby={`directory-tab-${activeTab}`} aria-busy={isLoading}>
-        {isLoading ? <div className="directory-empty" role="status">Loading workspace directory…</div>
+        {isLoading ? <div className="directory-empty"><p role="status">Loading workspace directory…</p></div>
           : loadError ? <div className="directory-empty"><p role="alert">{loadError}</p><button className="sthira-button-secondary" type="button" onClick={() => { void loadData(); }}>Try again</button></div>
           : filteredItems.length === 0 ? <div className="directory-empty"><Layers size={24} /><h2>No items found</h2><p>{searchQuery ? `No matches for “${searchQuery}”. Try clearing search.` : selectedTypeFilter ? 'No items match this type.' : noteScope !== 'all' && activeTab !== 'objects' && activeTab !== 'projects' ? 'No items match this scope.' : 'There are no items in this category yet.'}</p>
             {(searchQuery || selectedTypeFilter || noteScope !== 'all') && <button type="button" className="sthira-button-secondary" onClick={() => { setSearchQuery(''); setSelectedTypeFilter(null); setNoteScope('all'); }}>Clear filters</button>}</div>

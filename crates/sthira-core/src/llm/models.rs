@@ -1,13 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchCapability {
-    Native,              // Provider has built-in web grounding (e.g., Perplexity)
-    AgenticToolCall,     // Supports function calling for SearXNG / Brave
+    Native,          // Provider has built-in web grounding (e.g., Perplexity)
+    AgenticToolCall, // Supports function calling for SearXNG / Brave
     #[default]
     EngineAugmentedOnly, // Scraped text injected into context by Sthira backend
-    Unsupported,         // Search not allowed / supported
+    Unsupported,     // Search not allowed / supported
 }
 
 impl WebSearchCapability {

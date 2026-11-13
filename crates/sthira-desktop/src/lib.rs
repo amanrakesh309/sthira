@@ -1,25 +1,26 @@
 pub mod ai_setup;
-pub mod resume;
-pub mod naming;
-pub mod workspace_session;
-pub mod resume_pack;
-pub mod conversation;
-pub mod workflow_settings;
 pub mod commands;
 pub mod connections;
-pub mod projects;
+pub mod conversation;
 pub mod events;
+pub mod naming;
+pub mod projects;
+pub mod resume;
+pub mod resume_pack;
 pub mod scheduler;
 pub mod seed;
 pub mod state;
+pub mod workflow_settings;
+pub mod workspace_session;
 
 pub use commands::*;
 pub use connections::*;
-pub use projects::*;
 pub use events::spawn_event_bridge;
+pub use projects::*;
 pub use scheduler::{spawn_scheduled_topic_scheduler, ScheduledTopicReadyEvent};
 pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
 pub use state::AppState;
+pub use workspace_session::handle_get_workspace_session_key;
 
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
@@ -98,6 +99,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_inspect_project_deletion,
         commands::cmd_delete_project,
         commands::cmd_delete_artifact,
+        commands::cmd_filter_existing_artifacts,
         commands::cmd_get_knowledge_graph,
         commands::cmd_duplicate_artifact,
         commands::cmd_add_artifact_to_project,
@@ -127,9 +129,9 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_toggle_scheduled_topic_active,
         commands::cmd_delete_scheduled_topic,
         commands::cmd_refine_artifact,
+        commands::cmd_undo_refinement,
         commands::cmd_derive_artifact,
         commands::cmd_cancel_request,
         commands::cmd_list_synthesis_templates,
     ])
 }
-

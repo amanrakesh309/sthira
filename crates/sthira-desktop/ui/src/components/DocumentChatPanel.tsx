@@ -142,7 +142,7 @@ export function DocumentChatPanel({ sessionNamespace, artifactId, initialConvers
       {unavailable && <p role="status">This model is unavailable. Choose an enabled model to continue.</p>}
       {!catalogLoading && !catalogError && availableModels.length === 0 && <p role="status">Enable a model in Settings to continue.</p>}
     </div>
-    {error && <div role="alert" className="document-chat-error">{error}<button type="button" onClick={() => { void refresh().catch(e => setError(String(e))); }}>Reload conversation</button></div>}
+    {error && <div className="document-chat-error"><p role="alert">{error}</p><button type="button" onClick={() => { void refresh().catch(e => setError(String(e))); }}>Reload conversation</button></div>}
       <div className="document-chat-messages" role="log" aria-label="Conversation messages" aria-live="polite">
         {conversation.turns.length === 0 && <div className="document-chat-empty"><h3>Think it through.</h3><p>Ask a follow-up, explore an alternative, or request an edit to this document.</p></div>}
         {conversation.initial_prompt && <details className="document-chat-goal"><summary>Original goal</summary><p>{conversation.initial_prompt}</p></details>}
@@ -154,7 +154,7 @@ export function DocumentChatPanel({ sessionNamespace, artifactId, initialConvers
             {turn.proposed_content_md && turn.proposal_state !== 'pending' && <p className="document-chat-decision">{turn.proposal_state === 'applied' ? 'Edit applied' : turn.proposal_state === 'reverted' ? 'Edit undone' : 'Suggestion dismissed'}</p>}
           </div>
         </article>)}
-        {pending && <p className="document-chat-pending" role="status"><Loader2 size={16} className="animate-spin" /> Thinking…</p>}
+        {pending && <p className="document-chat-pending"><Loader2 size={16} className="animate-spin" aria-hidden="true" /><span role="status">Thinking…</span></p>}
         <div ref={end} />
       </div>
       <form className="document-chat-compose" onSubmit={send}>

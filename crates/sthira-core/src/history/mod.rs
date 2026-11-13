@@ -74,7 +74,9 @@ pub fn get_project_history(engine: &Engine, project_id: &str) -> Result<ProjectH
     )?;
 
     let purposes: Vec<(String, String, i64, Option<i64>)> = purp_stmt
-        .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![project_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     drop(purp_stmt);
@@ -114,14 +116,17 @@ pub fn get_project_history(engine: &Engine, project_id: &str) -> Result<ProjectH
 
     let subject_key = format!("pivot:{}", project_id);
     let proposals: Vec<(String, String, String, i64)> = prop_stmt
-        .query_map(params![project_id, subject_key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![project_id, subject_key], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     drop(prop_stmt);
 
     for (pr_id, payload_str, state, created_at) in proposals {
         if state == "pending" {
-            let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
             let inferred = payload
                 .get("new_purpose")
                 .and_then(|v| v.as_str())
@@ -152,7 +157,8 @@ pub fn get_project_history(engine: &Engine, project_id: &str) -> Result<ProjectH
         "SELECT n.id, n.node_type, n.origin, n.statement, n.quote, n.first_seen_at
          FROM project_artifacts pa
          JOIN epistemic_nodes n ON pa.artifact_id = n.artifact_id
-         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND n.lifecycle <> 'stale'
+         JOIN artifacts a ON a.id = n.artifact_id
+         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL AND n.lifecycle <> 'stale'
          ORDER BY n.first_seen_at ASC;",
     )?;
 
@@ -229,7 +235,9 @@ pub fn get_project_history(engine: &Engine, project_id: &str) -> Result<ProjectH
     )?;
 
     let se_rows: Vec<(String, Option<String>, i64, Option<String>)> = se_stmt
-        .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![project_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     drop(se_stmt);
@@ -248,7 +256,11 @@ pub fn get_project_history(engine: &Engine, project_id: &str) -> Result<ProjectH
     }
 
     // 5. Total order sort
-    milestones.sort_by(|a, b| a.timestamp_ms.cmp(&b.timestamp_ms).then_with(|| a.id.cmp(&b.id)));
+    milestones.sort_by(|a, b| {
+        a.timestamp_ms
+            .cmp(&b.timestamp_ms)
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     // 6. Build narrative segments
     let mut segments = Vec::new();
@@ -289,7 +301,7 @@ pub async fn detect_purpose_pivot(
         "SELECT a.id, a.content_md
          FROM project_artifacts pa
          JOIN artifacts a ON pa.artifact_id = a.id
-         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.type = 'note'
+         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL AND a.type = 'note'
          ORDER BY pa.added_at ASC, a.created_at ASC;",
     )?;
 

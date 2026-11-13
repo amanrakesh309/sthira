@@ -151,7 +151,10 @@ pub fn delete_object_type(conn: &Connection, id: &str) -> Result<(), CoreError> 
 
     let changed = conn.execute("DELETE FROM object_types WHERE id = ?1;", params![id])?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Object type '{}' not found", id)));
+        return Err(CoreError::NotFound(format!(
+            "Object type '{}' not found",
+            id
+        )));
     }
     Ok(())
 }
@@ -216,10 +219,7 @@ pub fn get_object_template(
     }
 }
 
-pub fn save_object_template(
-    conn: &Connection,
-    template: &ObjectTemplate,
-) -> Result<(), CoreError> {
+pub fn save_object_template(conn: &Connection, template: &ObjectTemplate) -> Result<(), CoreError> {
     let preset_json = serde_json::to_string(&template.properties_preset)?;
 
     // Invariant: only one template per object type may be flagged as the default.
@@ -281,11 +281,28 @@ pub fn list_objects_by_type(
             a.content_md,
             oi.object_type_id,
             oi.properties_json,
-            pa.project_id,
+            CASE
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM project_artifacts pa
+                    JOIN projects p ON p.id = pa.project_id
+                    WHERE pa.artifact_id = a.id
+                      AND pa.detached_at IS NULL
+                      AND p.deleted_at IS NULL
+                ) = 1 THEN (
+                    SELECT pa.project_id
+                    FROM project_artifacts pa
+                    JOIN projects p ON p.id = pa.project_id
+                    WHERE pa.artifact_id = a.id
+                      AND pa.detached_at IS NULL
+                      AND p.deleted_at IS NULL
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS project_id,
             oi.updated_at
          FROM object_instances oi
          JOIN artifacts a ON oi.artifact_id = a.id
-         LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
          WHERE oi.object_type_id = ?1
            AND a.deleted_at IS NULL
          ORDER BY oi.updated_at DESC;",
@@ -390,9 +407,7 @@ pub fn delete_object_instance(conn: &Connection, artifact_id: &str) -> Result<()
     Ok(())
 }
 
-pub fn count_objects_by_type(
-    conn: &Connection,
-) -> Result<HashMap<String, usize>, CoreError> {
+pub fn count_objects_by_type(conn: &Connection) -> Result<HashMap<String, usize>, CoreError> {
     let mut stmt = conn.prepare(
         "SELECT oi.object_type_id, COUNT(*)
          FROM object_instances oi
@@ -415,10 +430,7 @@ pub fn count_objects_by_type(
     Ok(map)
 }
 
-pub fn seed_default_object_types_if_empty(
-    conn: &Connection,
-    now_ms: i64,
-) -> Result<(), CoreError> {
+pub fn seed_default_object_types_if_empty(conn: &Connection, now_ms: i64) -> Result<(), CoreError> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM object_types;", [], |r| r.get(0))?;
     if count > 0 {
         // Phase 16: Templates are keyed by deterministic ids and upserted, so this is
@@ -460,8 +472,8 @@ pub fn seed_default_object_types_if_empty(
         is_system: true,
         created_at: now_ms,
         description: "A nascent thought worth exploring and validating.".to_string(),
-        default_template_md:
-            "## The Spark\n\n## Potential Impact\n\n## Next Experiments".to_string(),
+        default_template_md: "## The Spark\n\n## Potential Impact\n\n## Next Experiments"
+            .to_string(),
     };
     upsert_object_type(conn, &idea)?;
 

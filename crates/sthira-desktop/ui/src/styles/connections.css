@@ -4,7 +4,7 @@
 .connections-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--sthira-canvas); color: var(--sthira-text); border-left: 1px solid var(--sthira-border); font-family: var(--sthira-font-ui); font-size: 13px; }
 .connections-panel button { transition: background-color .15s, border-color .15s; }
 .connections-panel button:disabled { opacity: .55; cursor: default; }
-.connections-panel :is(button, input):focus-visible, .connection-inline-link:focus-visible { outline: 2px solid var(--sthira-primary); outline-offset: 3px; }
+.connections-panel :is(button, input):focus-visible, .connection-inline-link:focus-visible { outline: 2px solid var(--sthira-focus); outline-offset: 2px; }
 .connections-heading { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 8px 16px; border-bottom: 1px solid var(--sthira-border); flex-shrink: 0; }
 .connections-heading > span { display: flex; gap: 8px; align-items: center; font-weight: 600; }
 .connections-heading svg { color: var(--sthira-primary); flex-shrink: 0; }
@@ -82,6 +82,10 @@
   .focus-workspace[data-connections-open="true"] .focus-workspace-body,
   .focus-workspace[data-connections-open="true"][data-connection-preview="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr); }
   .connections-panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); z-index: 36; box-shadow: var(--sthira-shadow-popover); }
+  .focus-workspace[data-connections-open="true"] .focus-undo-slot { left: 12px; bottom: 16px; max-width: calc(100% - 444px); padding: 10px 12px; }
+}
+@container focus (max-width: 600px) {
+  .focus-workspace[data-connections-open="true"] .focus-undo-slot { left: 12px; bottom: 16px; max-width: calc(100% - 24px); z-index: 38; }
 }
 @container focus (min-width: 1001px) {
   .focus-workspace[data-connections-open="true"] .focus-document-sheet { padding-inline: 24px; }

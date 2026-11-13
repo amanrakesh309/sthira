@@ -1,6 +1,5 @@
 use crate::epistemic::{
-    derive_provenance, is_hedged, is_mid_sentence, EpistemicOrigin, NodeType,
-    VerifiedQuote,
+    derive_provenance, is_hedged, is_mid_sentence, EpistemicOrigin, NodeType, VerifiedQuote,
 };
 use crate::{CoreError, Engine};
 use rusqlite::params;
@@ -108,16 +107,18 @@ Output JSON:\n\
     }\n\
   ]\n\
 }";
-    let user_prompt = format!("Extract knowledge nodes from this document:\n\n{}", artifact.content_md);
+    let user_prompt = format!(
+        "Extract knowledge nodes from this document:\n\n{}",
+        artifact.content_md
+    );
 
     let json_resp = engine
         .model()
         .generate_json(&schema_val, system_prompt, &user_prompt)
         .await?;
 
-    let extraction_output: ExtractionOutput = serde_json::from_str(&json_resp).unwrap_or(ExtractionOutput {
-        nodes: Vec::new(),
-    });
+    let extraction_output: ExtractionOutput =
+        serde_json::from_str(&json_resp).unwrap_or(ExtractionOutput { nodes: Vec::new() });
 
     let run_id = uuid::Uuid::new_v4().to_string();
     let model_id = engine.model().id().to_string();

@@ -38,9 +38,10 @@ export const QuickObjectCreatorCard: React.FC<QuickObjectCreatorCardProps> = ({
     });
     setProperties(initialProps);
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       titleInputRef.current?.focus();
     }, 50);
+    return () => clearTimeout(timer);
   }, [objectType]);
 
   const handleSubmit = (e?: React.FormEvent) => {

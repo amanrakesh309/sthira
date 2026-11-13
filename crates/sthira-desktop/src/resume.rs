@@ -53,7 +53,11 @@ pub fn select_model(
     engine: &Engine,
     settings: &ResumeSettings,
 ) -> Result<Option<ResumeSelection>, String> {
-    select_model_with_policy(engine, settings, sthira_core::llm::lifecycle::RequestPolicy::standard())
+    select_model_with_policy(
+        engine,
+        settings,
+        sthira_core::llm::lifecycle::RequestPolicy::standard(),
+    )
 }
 
 pub fn select_model_with_policy(
@@ -81,8 +85,13 @@ pub fn select_model_with_policy(
         if !entry.is_enabled || !provider.is_enabled {
             return Err("The selected Resume model is disabled. Showing factual Resume.".into());
         }
-        let resolved = sthira_core::llm::dispatcher::resolve_model_provider_with_policy(&reader, Some(&id), engine.model(), policy)
-            .map_err(|error| error.to_string())?;
+        let resolved = sthira_core::llm::dispatcher::resolve_model_provider_with_policy(
+            &reader,
+            Some(&id),
+            engine.model(),
+            policy,
+        )
+        .map_err(|error| error.to_string())?;
         let basis = serde_json::to_vec(&(
             &provider.id,
             &provider.display_name,

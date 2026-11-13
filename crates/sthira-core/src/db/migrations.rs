@@ -253,7 +253,9 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         };
         for column in ["model_id", "model_name", "provider_id", "provider_name"] {
             if !columns.iter().any(|existing| existing == column) {
-                tx.execute_batch(&format!("ALTER TABLE document_conversation_turns ADD COLUMN {column} TEXT;"))?;
+                tx.execute_batch(&format!(
+                    "ALTER TABLE document_conversation_turns ADD COLUMN {column} TEXT;"
+                ))?;
             }
         }
         tx.execute_batch("PRAGMA user_version = 16;")?;
@@ -273,6 +275,41 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         tx.execute_batch("PRAGMA user_version = 18;")?;
         tx.commit()?;
     }
+    if user_version < 19 {
+        let tx = conn.transaction()?;
+        let project_columns = {
+            let mut statement = tx.prepare("PRAGMA table_info(projects)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<Result<Vec<_>>>()?
+        };
+        if !project_columns.iter().any(|column| column == "deleted_at") {
+            tx.execute_batch("ALTER TABLE projects ADD COLUMN deleted_at INTEGER;")?;
+        }
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vault_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            DROP TRIGGER IF EXISTS artifacts_fts_insert;
+            CREATE TRIGGER artifacts_fts_insert AFTER INSERT ON artifacts
+            WHEN NEW.deleted_at IS NULL
+            BEGIN
+                INSERT INTO artifacts_fts(artifact_id, title, content_md)
+                VALUES (NEW.id, NEW.title, NEW.content_md);
+            END;
+            DROP TRIGGER IF EXISTS artifacts_fts_update;
+            CREATE TRIGGER artifacts_fts_update AFTER UPDATE ON artifacts
+            BEGIN
+                DELETE FROM artifacts_fts WHERE artifact_id = OLD.id;
+                INSERT INTO artifacts_fts(artifact_id, title, content_md)
+                SELECT NEW.id, NEW.title, NEW.content_md
+                WHERE NEW.deleted_at IS NULL;
+            END;
+            DELETE FROM artifacts_fts
+            WHERE artifact_id IN (SELECT id FROM artifacts WHERE deleted_at IS NOT NULL);
+            PRAGMA user_version = 19;",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
-

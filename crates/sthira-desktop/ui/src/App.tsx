@@ -50,6 +50,28 @@ export const App: React.FC = () => {
     window.addEventListener('sthira:open-settings', open);
     return () => window.removeEventListener('sthira:open-settings', open);
   }, []);
+  useEffect(() => {
+    const onVaultReset = () => {
+      navigating.current = false;
+      beforeLeaveRef.current = null;
+      newTabIntent.current = false;
+      searchNewTab.current = false;
+      projectBrowseById.current = {};
+      setProjectBrowse(DEFAULT_PROJECT_BROWSE);
+      setOverviewProjectId(null);
+      setProjectReturnId(null);
+      setActiveProjectId(null);
+      setActiveArtifactId(null);
+      setActiveCanvasId(null);
+      setActiveObjectTypeId(null);
+      setDocumentRun(null);
+      setRealtimeTitleUpdate(null);
+      setCurrentView('home');
+      void loadState();
+    };
+    window.addEventListener('sthira:vault-reset', onVaultReset);
+    return () => window.removeEventListener('sthira:vault-reset', onVaultReset);
+  }, []);
   const [currentView, setCurrentView] = useState<
     | 'home'
     | 'focus'
@@ -203,9 +225,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     loadState();
 
-    // Keydown shortcut: Cmd+K / Ctrl+K opens search
+    // Keydown shortcut: Cmd+K / Ctrl+K opens search unless another modal dialog owns focus
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const activeModal = document.querySelector('[role="dialog"][aria-modal="true"]');
+        if (activeModal && activeModal.getAttribute('data-testid') !== 'search-workspace-dialog') {
+          return;
+        }
         e.preventDefault();
         searchNewTab.current = false;
         setIsSearchOpen((prev) => !prev);
@@ -252,7 +278,7 @@ export const App: React.FC = () => {
     const newTab = inNewTab ?? (newTabIntent.current || searchNewTab.current);
     searchNewTab.current = false;
     const recent = homeState.recent_items.find(item => item.artifact_id === artifactId);
-    const project = projectId !== undefined ? projectId : recent?.project_id || null;
+    const project = projectId !== undefined ? projectId : null;
     void navigate(() => {
       const next = openDocumentTab(documentTabs.stateRef.current, {id:artifactId,title:recent?.title || 'Loading page…',projectId:project,returnProjectId,scrollTop:0},newTab);
       documentTabs.update(next);
@@ -371,18 +397,26 @@ export const App: React.FC = () => {
 
       // 3. Mark complete and ask the editor to reload the now-populated page.
       const isFailedSearch = result.search_status === 'web_search_failed' || result.search_status === 'unsupported_model';
+      const lastStage = result.stages && result.stages.length > 0 ? result.stages[result.stages.length - 1] : null;
+      const lastStageMsg = lastStage?.message?.trim() || null;
+      const isPartialCoverage = Boolean(
+        lastStage?.stage === 'partial_search_failure' ||
+          lastStageMsg?.toLowerCase().includes('partial search coverage')
+      );
 
       setDocumentRun((prev) =>
         prev && prev.artifactId === artifactId
           ? {
               ...prev,
-              status: isFailedSearch ? 'warning' : 'done',
+              status: isFailedSearch || isPartialCoverage ? 'warning' : 'done',
               mode: result.mode_used,
               search_status: result.search_status,
               external_sources_count: result.external_sources_count,
-              message: isFailedSearch
-                ? '⚠️ Web search returned no results; synthesized using local context.'
-                : 'Research complete.',
+              message:
+                lastStageMsg ||
+                (isFailedSearch
+                  ? '⚠️ Web search returned no results; synthesized using local context.'
+                  : 'Research complete.'),
               refreshToken: prev.refreshToken + 1,
             }
           : prev
@@ -616,14 +650,27 @@ export const App: React.FC = () => {
             initialScrollTop={documentTabs.state.tabs.find(tab => tab.id === activeArtifactId)?.scrollTop || 0}
             onScrollPosition={top => { if(activeArtifactId) documentTabs.update(previous => ({...previous,tabs:previous.tabs.map(tab => tab.id === activeArtifactId ? {...tab,scrollTop:top} : tab)})); }}
             onOpenInNewTab={openAnotherDocument}
+            onCloseUnavailable={activeArtifactId ? () => {
+              const previous = documentTabs.stateRef.current;
+              const next = closeDocumentTab(previous, activeArtifactId);
+              documentTabs.update(next);
+              const tab = next.tabs.find(item => item.id === next.activeId);
+              if (tab) {
+                applyTab(tab);
+              } else {
+                setCurrentView('home');
+                setActiveArtifactId(null);
+                setActiveProjectId(null);
+                void loadState();
+              }
+            } : undefined}
             onDocumentLoaded={(artifact,resolvedProjectId) => {
               if(!artifact.id)return;
               const current=activeRouteRef.current.view==='focus'&&activeRouteRef.current.artifactId===artifact.id;
               documentTabs.update(previous => {
-                if(!previous.tabs.some(tab=>tab.id===artifact.id))return current?openDocumentTab(previous,{id:artifact.id,title:artifact.title||'Untitled page',projectId:resolvedProjectId,returnProjectId:projectReturnId,scrollTop:0},true):previous;
-                return {...previous,tabs:previous.tabs.map(tab => tab.id === artifact.id ? {...tab,title:artifact.title || 'Untitled page',projectId:resolvedProjectId} : tab)};
+                if(!previous.tabs.some(tab=>tab.id===artifact.id))return current?openDocumentTab(previous,{id:artifact.id,title:artifact.title||'Untitled page',projectId:activeProjectId ?? resolvedProjectId,returnProjectId:projectReturnId,scrollTop:0},true):previous;
+                return {...previous,tabs:previous.tabs.map(tab => tab.id === artifact.id ? {...tab,title:artifact.title || 'Untitled page'} : tab)};
               });
-              if(current && resolvedProjectId !== activeProjectId)setActiveProjectId(resolvedProjectId);
             }}
             projectId={activeProjectId || undefined}
             artifactId={activeArtifactId || undefined}

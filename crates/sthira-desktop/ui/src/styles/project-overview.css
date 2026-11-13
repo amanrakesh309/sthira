@@ -113,7 +113,7 @@
 .project-page-footer > span { display: flex; align-items: center; gap: 7px; }
 .project-empty, .project-loading { min-height: 260px; padding: 40px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; color: var(--sthira-text-muted); }
 .project-empty h1, .project-empty h3 { font: 500 25px/1.3 var(--sthira-font-editorial); color: var(--sthira-text); }
-.project-empty > p { max-width: 420px; font-size: 13px; line-height: 1.7; }
+.project-empty p { max-width: 420px; font-size: 13px; line-height: 1.7; }
 .project-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; padding: 10px 16px; border: 1px solid var(--sthira-border); border-radius: 12px; background: var(--sthira-surface-raised); color: var(--sthira-danger); font-size: 12px; line-height: 1.7; }
 .project-error button { min-height: 40px; text-decoration: underline; text-underline-offset: 3px; flex-shrink: 0; }
 .project-muted { color: var(--sthira-text-muted); font-size: 12px; line-height: 1.7; }

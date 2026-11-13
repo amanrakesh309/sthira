@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use sthira_core::{
-    ArtifactType, Authorship, Clock, CoreError, Engine, Locality, ModelProvider,
-};
+use sthira_core::{ArtifactType, Authorship, Clock, CoreError, Engine, Locality, ModelProvider};
 
 struct SystemClock;
 impl Clock for SystemClock {
@@ -173,10 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ref target) = plan.target_project_id {
                 println!("Target Project ID: {}", target);
             }
-            println!(
-                "Payload: {}",
-                serde_json::to_string_pretty(&plan.payload)?
-            );
+            println!("Payload: {}", serde_json::to_string_pretty(&plan.payload)?);
         }
 
         "project" => {
@@ -256,7 +251,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         "history" => {
             if cmd_idx + 1 >= args.len() {
-                eprintln!("Error: history requires a project_id\nUsage: sthira-cli history <project_id>");
+                eprintln!(
+                    "Error: history requires a project_id\nUsage: sthira-cli history <project_id>"
+                );
                 std::process::exit(1);
             }
             let project_id = &args[cmd_idx + 1];

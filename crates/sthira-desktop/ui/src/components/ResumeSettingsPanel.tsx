@@ -62,7 +62,7 @@ export function ResumeSettingsPanel({ providers }: { providers: ProviderEntry[] 
       {pack.notice && <p>{pack.notice}</p>}
       {pack.ready ? <button type="button" className="settings-btn-secondary" disabled={downloading||pack.downloading} onClick={async()=>{if(!confirm('Remove the local Resume pack? Your documents and provider connections will be kept.'))return;try{setPack(await removeResumePack());}catch{setError('Could not remove the local Resume pack.');}}}>Remove local pack</button> : <button type="button" className="settings-btn-secondary" disabled={!pack.supported||downloading||pack.downloading} onClick={download}>{downloading||pack.downloading?<RefreshCw size={15} className="animate-spin"/>:<Download size={15}/>} {downloading||pack.downloading?'Downloading…':'Download local Resume pack'}</button>}
     </div></details>}
-    {error && <p className="focus-error" role="alert">{error} <button type="button" disabled={pending||downloading} onClick={load}>Retry</button></p>}
+    {error && <div className="focus-error flex items-center gap-2"><span role="alert">{error}</span><button type="button" disabled={pending||downloading} onClick={load}>Retry</button></div>}
     {notice && <p className="resume-helper" role="status">{notice}</p>}
   </article>;
 }

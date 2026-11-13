@@ -41,7 +41,10 @@ enum LifecycleResponse {
     /// Returns 200 OK headers with chunked encoding, sends whitespace/heartbeats continuously.
     StreamContinuousHeartbeats { interval: Duration, count: usize },
     /// Returns 200 OK headers with chunked encoding, sends chunks spaced by interval, then terminates.
-    StreamSlowSuccess { chunks: Vec<String>, interval: Duration },
+    StreamSlowSuccess {
+        chunks: Vec<String>,
+        interval: Duration,
+    },
     /// Returns 200 OK with Content-Length, sends partial body, then sleeps delay before sending remainder.
     BodyReadTimeout { delay: Duration, partial: String },
     /// Returns an HTTP error status code immediately.
@@ -172,14 +175,19 @@ impl LifecycleFixture {
                             let _ = socket.write_all(headers.as_bytes()).await;
                             let _ = socket.flush().await;
                             let payload = if is_openai {
-                                format!("data: {}\n\n", serde_json::json!({
-                                    "choices": [{"delta": {"content": first_chunk}}]
-                                }))
+                                format!(
+                                    "data: {}\n\n",
+                                    serde_json::json!({
+                                        "choices": [{"delta": {"content": first_chunk}}]
+                                    })
+                                )
                             } else {
                                 serde_json::json!({
                                     "response": first_chunk,
                                     "done": false
-                                }).to_string() + "\n"
+                                })
+                                .to_string()
+                                    + "\n"
                             };
                             let _ = write_chunk(&mut socket, payload.as_bytes()).await;
                             tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -191,14 +199,19 @@ impl LifecycleFixture {
                             for _ in 0..count {
                                 tokio::time::sleep(interval).await;
                                 let payload = if is_openai {
-                                    format!("data: {}\n\n", serde_json::json!({
-                                        "choices": [{"delta": {"content": " "}}]
-                                    }))
+                                    format!(
+                                        "data: {}\n\n",
+                                        serde_json::json!({
+                                            "choices": [{"delta": {"content": " "}}]
+                                        })
+                                    )
                                 } else {
                                     serde_json::json!({
                                         "response": " ",
                                         "done": false
-                                    }).to_string() + "\n"
+                                    })
+                                    .to_string()
+                                        + "\n"
                                 };
                                 if write_chunk(&mut socket, payload.as_bytes()).await.is_err() {
                                     break;
@@ -214,14 +227,19 @@ impl LifecycleFixture {
                                     tokio::time::sleep(interval).await;
                                 }
                                 let payload = if is_openai {
-                                    format!("data: {}\n\n", serde_json::json!({
-                                        "choices": [{"delta": {"content": c}}]
-                                    }))
+                                    format!(
+                                        "data: {}\n\n",
+                                        serde_json::json!({
+                                            "choices": [{"delta": {"content": c}}]
+                                        })
+                                    )
                                 } else {
                                     serde_json::json!({
                                         "response": c,
                                         "done": false
-                                    }).to_string() + "\n"
+                                    })
+                                    .to_string()
+                                        + "\n"
                                 };
                                 if write_chunk(&mut socket, payload.as_bytes()).await.is_err() {
                                     return;
@@ -233,7 +251,9 @@ impl LifecycleFixture {
                                 serde_json::json!({
                                     "response": "",
                                     "done": true
-                                }).to_string() + "\n"
+                                })
+                                .to_string()
+                                    + "\n"
                             };
                             let _ = write_chunk(&mut socket, term.as_bytes()).await;
                             let _ = socket.write_all(b"0\r\n\r\n").await;
@@ -517,7 +537,10 @@ fn assert_artifact_snapshot_unchanged(before: &WorkspaceSnapshot, engine: &Engin
     );
 }
 
-fn setup_test_engine_with_provider_type(endpoint: &str, provider_type: &str) -> (tempfile::TempDir, Arc<Engine>) {
+fn setup_test_engine_with_provider_type(
+    endpoint: &str,
+    provider_type: &str,
+) -> (tempfile::TempDir, Arc<Engine>) {
     let tmp = tempdir().unwrap();
     let db_path = tmp.path().join("request_lifecycle_test.db");
     let vault_dir = tmp.path().join("vault");
@@ -730,7 +753,8 @@ async fn test_c1_refused_connection_is_classified_as_connection_failure() {
         "Must classify as connection failure, got: {err}"
     );
     assert!(
-        !err.contains("timed out after 180 seconds") && !err.contains("timed out after 185 seconds"),
+        !err.contains("timed out after 180 seconds")
+            && !err.contains("timed out after 185 seconds"),
         "Connection failure must not masquerade as generation timeout, got: {err}"
     );
 
@@ -1093,7 +1117,10 @@ async fn test_f2_cancellation_at_completion_boundary_before_persistence_leaves_s
         .await;
 
     assert!(token.is_cancelled());
-    assert!(res.is_err(), "Must reject with cancellation error at pre-commit boundary");
+    assert!(
+        res.is_err(),
+        "Must reject with cancellation error at pre-commit boundary"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("Refinement was cancelled") && err.contains("Original document is unchanged"),
@@ -1218,7 +1245,9 @@ async fn test_f4_production_command_cancellation_via_request_registry() {
     let res = handle.await.expect("join handle");
     assert!(res.is_err(), "Cancelled command must return error");
     let err = res.unwrap_err();
-    assert!(err.contains("Refinement was cancelled") && err.contains("Original document is unchanged"));
+    assert!(
+        err.contains("Refinement was cancelled") && err.contains("Original document is unchanged")
+    );
 
     assert_snapshot_unchanged(&before, &engine, &art.id);
 }
@@ -1320,20 +1349,30 @@ async fn test_f5_switch_documents_concurrent_cancellation_isolation() {
     assert_artifact_snapshot_unchanged(&before1, &engine, &doc1.id);
 
     // Verify zero artifacts created in Project 1
-    let p1_count: i64 = engine.db().open_read_only().unwrap().query_row(
-        "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL",
-        [&proj1.id],
-        |r| r.get(0),
-    ).unwrap();
+    let p1_count: i64 = engine
+        .db()
+        .open_read_only()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL",
+            [&proj1.id],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(p1_count, 0, "No artifacts attached to Project 1");
 
     assert!(res2.is_ok(), "Request 2 must succeed: {:?}", res2.err());
     assert_artifact_snapshot_unchanged(&before2, &engine, &doc2.id);
-    let p2_count: i64 = engine.db().open_read_only().unwrap().query_row(
-        "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL",
-        [&proj2.id],
-        |r| r.get(0),
-    ).unwrap();
+    let p2_count: i64 = engine
+        .db()
+        .open_read_only()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL",
+            [&proj2.id],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(p2_count, 1, "Exactly 1 artifact attached to Project 2");
 }
 
@@ -1631,7 +1670,9 @@ async fn test_f6d_cancellation_after_commit_begins_returns_false() {
         tmp.path().join("sthira.db"),
         tmp.path().join("vault"),
         Arc::new(sthira_testkit::FakeClock::new(1_700_000_000_000)),
-        Arc::new(sthira_testkit::DeterministicFakeModel::new("test-commit-model")),
+        Arc::new(sthira_testkit::DeterministicFakeModel::new(
+            "test-commit-model",
+        )),
     )
     .unwrap();
 
@@ -1661,7 +1702,10 @@ async fn test_f6d_cancellation_after_commit_begins_returns_false() {
         Some(sthira_core::llm::lifecycle::CancelOutcome::AlreadyCommitting)
     );
     let cancelled = registry.cancel("test-commit-wins");
-    assert!(!cancelled, "Cancellation must be rejected once committing begins");
+    assert!(
+        !cancelled,
+        "Cancellation must be rejected once committing begins"
+    );
 
     // Persist changes
     let (updated, _cs_id) = engine
@@ -1697,7 +1741,9 @@ async fn test_f7a_refine_records_durable_activity_event_and_substantive_material
         tmp.path().join("sthira.db"),
         tmp.path().join("vault"),
         clock.clone(),
-        Arc::new(sthira_testkit::DeterministicFakeModel::new("test-event-model")),
+        Arc::new(sthira_testkit::DeterministicFakeModel::new(
+            "test-event-model",
+        )),
     )
     .unwrap();
 
@@ -1776,7 +1822,9 @@ async fn test_f7b_cancelled_refine_records_zero_session_events() {
         tmp.path().join("sthira.db"),
         tmp.path().join("vault"),
         clock.clone(),
-        Arc::new(sthira_testkit::DeterministicFakeModel::new("test-cancel-model")),
+        Arc::new(sthira_testkit::DeterministicFakeModel::new(
+            "test-cancel-model",
+        )),
     )
     .unwrap();
 
@@ -1832,7 +1880,10 @@ async fn test_f7b_cancelled_refine_records_zero_session_events() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(cs_count, 0, "Cancelled refinement must record zero change_sets");
+    assert_eq!(
+        cs_count, 0,
+        "Cancelled refinement must record zero change_sets"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1943,7 +1994,11 @@ async fn test_g_concurrent_requests_remain_isolated() {
 
 #[tokio::test]
 async fn test_h1_http_500_with_timeout_in_body_reported_as_http_status_not_deadline() {
-    let fixture = LifecycleFixture::start(LifecycleResponse::HttpError(500, "fixture upstream timeout")).await;
+    let fixture = LifecycleFixture::start(LifecycleResponse::HttpError(
+        500,
+        "fixture upstream timeout",
+    ))
+    .await;
     let (_tmp, engine) = setup_test_engine(&fixture.base);
 
     let art = engine
@@ -1968,7 +2023,8 @@ async fn test_h1_http_500_with_timeout_in_body_reported_as_http_status_not_deadl
         "Error must report HTTP status 500, got: {err}"
     );
     assert!(
-        !err.contains("timed out after 180 seconds") && !err.contains("timed out after 185 seconds"),
+        !err.contains("timed out after 180 seconds")
+            && !err.contains("timed out after 185 seconds"),
         "HTTP 500 must NOT be misclassified as timeout deadline, got: {err}"
     );
 
@@ -2185,7 +2241,8 @@ async fn test_j1_naming_response_within_45s_succeeds() {
 
     let resolved = {
         let reader = engine.db().open_read_only().unwrap();
-        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model()).unwrap()
+        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model())
+            .unwrap()
     };
 
     let handle = tokio::spawn(async move {
@@ -2217,7 +2274,8 @@ async fn test_j2_naming_response_delayed_past_45s_fails_at_45s_generation_budget
 
     let resolved = {
         let reader = engine.db().open_read_only().unwrap();
-        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model()).unwrap()
+        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model())
+            .unwrap()
     };
 
     let handle = tokio::spawn(async move {
@@ -2254,7 +2312,8 @@ async fn test_j3_naming_hung_fails_at_45s_with_correct_classification() {
 
     let resolved = {
         let reader = engine.db().open_read_only().unwrap();
-        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model()).unwrap()
+        sthira_core::llm::resolve_model_provider(&reader, Some("fixture-model"), engine.model())
+            .unwrap()
     };
 
     let handle = tokio::spawn(async move {
@@ -2309,7 +2368,10 @@ async fn test_s1_streaming_connection_withholding_headers_times_out_at_initial_d
     tokio::time::advance(Duration::from_secs(61)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_err(), "Streaming must time out when headers are withheld");
+    assert!(
+        res.is_err(),
+        "Streaming must time out when headers are withheld"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("timed out") || err.contains("60 seconds") || err.contains("connect"),
@@ -2342,7 +2404,10 @@ async fn test_s2_streaming_headers_with_no_body_times_out() {
     tokio::time::advance(Duration::from_secs(61)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_err(), "Streaming must time out when body chunks are withheld");
+    assert!(
+        res.is_err(),
+        "Streaming must time out when body chunks are withheld"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("timed out") || err.contains("stalled") || err.contains("60 seconds"),
@@ -2378,7 +2443,10 @@ async fn test_s3_streaming_stalled_body_after_first_chunk_times_out() {
     tokio::time::advance(Duration::from_secs(31)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_err(), "Streaming must time out when stream stalls after first chunk");
+    assert!(
+        res.is_err(),
+        "Streaming must time out when stream stalls after first chunk"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("30 seconds") || err.contains("stalled"),
@@ -2415,7 +2483,10 @@ async fn test_s4_streaming_continuous_heartbeats_past_185s_overall_cap() {
     tokio::time::advance(Duration::from_secs(186)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_err(), "Streaming must terminate at 185s deadline despite continuous heartbeats");
+    assert!(
+        res.is_err(),
+        "Streaming must terminate at 185s deadline despite continuous heartbeats"
+    );
     let err = res.unwrap_err();
     assert!(
         err.contains("185 seconds") || err.contains("timed out"),
@@ -2460,7 +2531,11 @@ async fn test_s5_streaming_successful_slow_stream() {
     tokio::time::advance(Duration::from_secs(55)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_ok(), "Slow streaming must succeed within budget: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "Slow streaming must succeed within budget: {:?}",
+        res.err()
+    );
 
     let mut received_any = false;
     while receiver.try_recv().is_ok() {
@@ -2502,11 +2577,18 @@ async fn test_s6_streaming_openai_compatible_branch() {
     tokio::time::advance(Duration::from_secs(20)).await;
 
     let res = task.await.expect("join task");
-    assert!(res.is_ok(), "OpenAI streaming must succeed: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "OpenAI streaming must succeed: {:?}",
+        res.err()
+    );
 
     let mut received_any = false;
     while receiver.try_recv().is_ok() {
         received_any = true;
     }
-    assert!(received_any, "Must receive streamed chunks from OpenAI branch");
+    assert!(
+        received_any,
+        "Must receive streamed chunks from OpenAI branch"
+    );
 }

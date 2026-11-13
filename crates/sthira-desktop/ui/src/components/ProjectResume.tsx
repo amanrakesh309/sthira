@@ -46,7 +46,7 @@ export function ProjectResume({ projectId, onSelectArtifact }: { projectId:strin
       {settings.enabled&&settings.preferences.model_mode!=='factual'?<button type="button" className="settings-btn-secondary" disabled={busy||loading} onClick={generate}><Sparkles size={14}/>{busy?'Preparing…':generated?'Refresh summary':'Summarize'}</button>:<button type="button" className="settings-btn-secondary" onClick={openWorkflowSettings}>Set up model summaries</button>}
     </div></div>
     {loading&&!brief&&<p className="resume-helper" role="status">Reading saved working state…</p>}
-    {error&&<p className="focus-error" role="alert">{error}<button type="button" onClick={load}>Retry</button></p>}
+    {error&&<div className="focus-error flex items-center gap-2"><span role="alert">{error}</span><button type="button" onClick={load}>Retry</button></div>}
     {brief?.generation?.notice&&<p className="resume-helper" role="status">{brief.generation.notice}</p>}
     {brief&&<ContextualResumePane brief={brief} isOpen={open} onToggleOpen={()=>setOpen(value=>!value)} onExpandReview={review} isExpandedReview={expanded} isReviewLoading={busy} onSelectArtifact={onSelectArtifact} wordBudget={55}/>}
     {!!brief?.generation?.factual_progress?.length && <details className="resume-pack"><summary>Saved working state</summary><ul>{brief.generation.factual_progress.map((claim,index)=><li key={index}><p>{claim.text}</p>{claim.artifact_ids.map(id=><button key={id} type="button" className="focus-brief-source" onClick={()=>onSelectArtifact(id)}>Open source</button>)}</li>)}</ul></details>}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText } from 'lucide-react';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
 import { plainPageMarkdown } from '../editor/plainPageMarkdown';
@@ -255,6 +255,18 @@ export const AdaptiveResponseRenderer: React.FC<AdaptiveResponseRendererProps> =
   rawText, phases = [], decisions = [], comparisonRows = [], status = 'completed', basisFingerprint, onOpenInEditor,
 }) => {
   const [copied, setCopied] = useState(false);
+  const mountedRef = useRef(true);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
   let markdown = plainPageMarkdown(rawText);
   // Older streaming protocols may deliver content separately from their text tokens.
   for (const [kind, data, label] of [
@@ -265,8 +277,17 @@ export const AdaptiveResponseRenderer: React.FC<AdaptiveResponseRendererProps> =
     if (!markdown.includes(label)) markdown += `\n\n${plainPageMarkdown(`\`\`\`widget:${kind}\n${JSON.stringify(data)}\n\`\`\``)}`;
   }
   const copy = async () => {
-    try { await navigator.clipboard.writeText(markdown); setCopied(true); setTimeout(() => setCopied(false), 2000); }
-    catch { setCopied(false); }
+    try {
+      await navigator.clipboard.writeText(markdown);
+      if (!mountedRef.current) return;
+      setCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
+        if (mountedRef.current) setCopied(false);
+      }, 2000);
+    }
+    catch { if (mountedRef.current) setCopied(false); }
   };
   return <section className="adaptive-response space-y-3">
     <div className="flex items-center justify-between gap-3 text-xs text-sthira-text-muted">

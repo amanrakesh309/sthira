@@ -104,7 +104,7 @@ pub fn revert_change_set(
                     let content_hash = op.get("content_hash").and_then(|v| v.as_str()).unwrap();
 
                     let current_version: i64 = tx.query_row(
-                        "SELECT version FROM artifacts WHERE id = ?1;",
+                        "SELECT version FROM artifacts WHERE id = ?1 AND deleted_at IS NULL;",
                         params![art_id],
                         |r| r.get(0),
                     )?;
@@ -113,7 +113,7 @@ pub fn revert_change_set(
                     tx.execute(
                         "UPDATE artifacts
                          SET content_md = ?1, content_hash = ?2, version = ?3, updated_at = ?4
-                         WHERE id = ?5;",
+                         WHERE id = ?5 AND deleted_at IS NULL;",
                         params![content_md, content_hash, new_version, now_ms, art_id],
                     )?;
 
@@ -136,9 +136,18 @@ pub fn revert_change_set(
                     )?;
                 }
                 "remove_link" => {
-                    let src = op.get("source_artifact_id").and_then(|v| v.as_str()).unwrap();
-                    let dst = op.get("target_artifact_id").and_then(|v| v.as_str()).unwrap();
-                    let rel = op.get("relationship_type").and_then(|v| v.as_str()).unwrap();
+                    let src = op
+                        .get("source_artifact_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap();
+                    let dst = op
+                        .get("target_artifact_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap();
+                    let rel = op
+                        .get("relationship_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap();
 
                     tx.execute(
                         "DELETE FROM artifact_links WHERE source_artifact_id = ?1 AND target_artifact_id = ?2 AND relationship_type = ?3;",
@@ -147,7 +156,10 @@ pub fn revert_change_set(
                 }
                 "restore_proposal" => {
                     let prop_id = op.get("proposal_id").and_then(|v| v.as_str()).unwrap();
-                    let state = op.get("state").and_then(|v| v.as_str()).unwrap_or("dismissed");
+                    let state = op
+                        .get("state")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("dismissed");
 
                     tx.execute(
                         "UPDATE ai_proposals SET state = ?1, decided_at = ?2 WHERE id = ?3;",

@@ -21,7 +21,13 @@ async fn test_system_object_types_seeded_and_protected() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     let reader = engine.db().reader().unwrap();
@@ -34,31 +40,49 @@ async fn test_system_object_types_seeded_and_protected() {
     assert_eq!(idea.icon, "💡");
     assert_eq!(idea.color, "#F59E0B");
     assert!(idea.is_system);
-    assert!(idea.schema.iter().any(|p| p.key == "status" && p.property_type == PropertyType::Select));
+    assert!(idea
+        .schema
+        .iter()
+        .any(|p| p.key == "status" && p.property_type == PropertyType::Select));
 
     let todo = types.iter().find(|t| t.id == "todo").expect("todo missing");
     assert_eq!(todo.icon, "☑️");
     assert_eq!(todo.color, "#10B981");
     assert!(todo.is_system);
-    assert!(todo.schema.iter().any(|p| p.key == "completed" && p.property_type == PropertyType::Boolean));
+    assert!(todo
+        .schema
+        .iter()
+        .any(|p| p.key == "completed" && p.property_type == PropertyType::Boolean));
 
-    let decision = types.iter().find(|t| t.id == "decision").expect("decision missing");
+    let decision = types
+        .iter()
+        .find(|t| t.id == "decision")
+        .expect("decision missing");
     assert_eq!(decision.icon, "⚖️");
     assert_eq!(decision.color, "#6366F1");
     assert!(decision.is_system);
     assert!(decision.schema.iter().any(|p| p.key == "rationale"));
 
-    let source = types.iter().find(|t| t.id == "source").expect("source missing");
+    let source = types
+        .iter()
+        .find(|t| t.id == "source")
+        .expect("source missing");
     assert_eq!(source.icon, "🔗");
     assert_eq!(source.color, "#3B82F6");
     assert!(source.is_system);
-    assert!(source.schema.iter().any(|p| p.key == "url" && p.property_type == PropertyType::Url));
+    assert!(source
+        .schema
+        .iter()
+        .any(|p| p.key == "url" && p.property_type == PropertyType::Url));
 
     // Invariant: System types cannot be deleted
     drop(reader);
     let writer = engine.db().writer();
     let del_res = delete_object_type(&writer, "idea");
-    assert!(del_res.is_err(), "System object types must be protected against deletion");
+    assert!(
+        del_res.is_err(),
+        "System object types must be protected against deletion"
+    );
 }
 
 #[tokio::test]
@@ -72,7 +96,13 @@ async fn test_custom_object_type_creation_and_instance_lifecycle() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     let now_ms = clock.now_ms();
@@ -104,7 +134,11 @@ async fn test_custom_object_type_creation_and_instance_lifecycle() {
                 key: "genre".to_string(),
                 label: "Genre".to_string(),
                 property_type: PropertyType::Select,
-                options: vec!["Sci-Fi".to_string(), "Philosophy".to_string(), "Systems".to_string()],
+                options: vec![
+                    "Sci-Fi".to_string(),
+                    "Philosophy".to_string(),
+                    "Systems".to_string(),
+                ],
                 required: true,
                 default_value: Some(serde_json::json!("Systems")),
             },
@@ -122,7 +156,9 @@ async fn test_custom_object_type_creation_and_instance_lifecycle() {
 
     // Verify type was persisted
     let reader = engine.db().reader().unwrap();
-    let loaded_type = get_object_type(&reader, "book").unwrap().expect("Book type missing");
+    let loaded_type = get_object_type(&reader, "book")
+        .unwrap()
+        .expect("Book type missing");
     assert_eq!(loaded_type.display_name, "Book");
     assert_eq!(loaded_type.schema.len(), 3);
     assert!(!loaded_type.is_system);
@@ -184,12 +220,18 @@ async fn test_custom_object_type_creation_and_instance_lifecycle() {
 
     {
         let writer = engine.db().writer();
-        upsert_object_instance(&writer, &updated_instance).expect("Failed to update object instance");
+        upsert_object_instance(&writer, &updated_instance)
+            .expect("Failed to update object instance");
     }
 
     let reader = engine.db().reader().unwrap();
-    let fetched = get_object_instance(&reader, &art.id).unwrap().expect("Instance missing");
-    assert_eq!(fetched.properties["notes"], "Essential reading for distributed state.");
+    let fetched = get_object_instance(&reader, &art.id)
+        .unwrap()
+        .expect("Instance missing");
+    assert_eq!(
+        fetched.properties["notes"],
+        "Essential reading for distributed state."
+    );
 }
 
 #[tokio::test]
@@ -203,7 +245,13 @@ async fn test_properties_json_enforces_valid_json_constraint() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     let art = engine
@@ -224,7 +272,10 @@ async fn test_properties_json_enforces_valid_json_constraint() {
          VALUES (?1, 'idea', 'INVALID NOT JSON', 1000);",
         rusqlite::params![art.id],
     );
-    assert!(invalid_json_res.is_err(), "Raw insert with invalid JSON must fail SQLite CHECK constraint");
+    assert!(
+        invalid_json_res.is_err(),
+        "Raw insert with invalid JSON must fail SQLite CHECK constraint"
+    );
 
     // 2. Direct raw SQL insert with invalid JSON in schema_json on object_types must fail
     let invalid_schema_res = writer.execute(
@@ -232,7 +283,10 @@ async fn test_properties_json_enforces_valid_json_constraint() {
          VALUES ('bad_type', 'Bad', '❌', '#000', '{bad: json}', 0, 1000);",
         [],
     );
-    assert!(invalid_schema_res.is_err(), "Raw insert with invalid schema_json must fail SQLite CHECK constraint");
+    assert!(
+        invalid_schema_res.is_err(),
+        "Raw insert with invalid schema_json must fail SQLite CHECK constraint"
+    );
 
     // 3. Valid JSON succeeds
     let valid_json_res = writer.execute(

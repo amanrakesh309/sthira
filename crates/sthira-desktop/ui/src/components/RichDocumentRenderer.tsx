@@ -54,6 +54,19 @@ const InteractiveTable: React.FC<InteractiveTableProps> = ({ children }) => {
   const [filterQuery, setFilterQuery] = useState('');
   const [copied, setCopied] = useState(false);
   const tableRef = useRef<HTMLTableElement>(null);
+  const mountedRef = useRef(true);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleCopyTable = () => {
     if (!tableRef.current) return;
@@ -66,8 +79,13 @@ const InteractiveTable: React.FC<InteractiveTableProps> = ({ children }) => {
       .join('\n');
 
     navigator.clipboard.writeText(tsv).then(() => {
+      if (!mountedRef.current) return;
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
+        if (mountedRef.current) setCopied(false);
+      }, 2000);
     });
   };
 
@@ -162,6 +180,19 @@ const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
   const [error, setError] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -219,8 +250,13 @@ const MermaidBlock: React.FC<MermaidBlockProps> = ({ code }) => {
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(code).then(() => {
+      if (!mountedRef.current) return;
       setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        copyTimerRef.current = null;
+        if (mountedRef.current) setIsCopied(false);
+      }, 2000);
     });
   };
 
@@ -614,16 +650,42 @@ export const RichDocumentRenderer: React.FC<RichDocumentRendererProps> = ({
           a: ({ href, children }) => {
             const entity = parseEntityHref(href);
             if (entity && onOpenEntity) return <button type="button" className="connection-inline-link" onClick={() => onOpenEntity(entity)}>{children}</button>;
+            if (href?.startsWith('sthira:')) {
+              return (
+                <button
+                  type="button"
+                  disabled={!entity || !onOpenEntity}
+                  className="connection-inline-link"
+                  onClick={() => { if (entity && onOpenEntity) onOpenEntity(entity); }}
+                >
+                  {children}
+                </button>
+              );
+            }
+            const isSafeExternal = Boolean(href && /^(https?:|mailto:)/i.test(href));
             return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-emerald-700 dark:text-emerald-400 font-medium underline underline-offset-3 hover:opacity-80 transition-opacity"
-            >
-              {children}
-            </a>
-          );
+              <a
+                href={href}
+                tabIndex={0}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => {
+                  if (isSafeExternal && href) {
+                    event.preventDefault();
+                    window.open(href, '_blank', 'noopener,noreferrer');
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if ((event.key === 'Enter' || event.key === ' ') && isSafeExternal && href) {
+                    event.preventDefault();
+                    window.open(href, '_blank', 'noopener,noreferrer');
+                  }
+                }}
+                className="text-emerald-700 dark:text-emerald-400 font-medium underline underline-offset-3 hover:opacity-80 transition-opacity focus-visible:outline-2 focus-visible:outline-[var(--sthira-focus)] focus-visible:outline-offset-2 rounded-xs cursor-pointer"
+              >
+                {children}
+              </a>
+            );
           },
           strong: ({ children }) => (
             <strong className="font-bold text-[#1E201C] dark:text-[#EDEAE2]">{children}</strong>

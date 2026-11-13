@@ -3,6 +3,8 @@ import type {
   ApplyOutcome,
   Artifact,
   ArtifactContext,
+  RefineArtifactOutcome,
+  SaveArtifactOutcome,
   CanvasOpsResponse,
   GuidedProjectResult,
   HomeStateView,
@@ -54,7 +56,15 @@ const fallbackHomeState: HomeStateView = {
 const mockArtifactStore = new Map<string, { artifact: Artifact; project_id?: string | null }>();
 const browserProjectAttachments = new Map<string, Set<string>>();
 const browserHasProject = (artifactId: string, projectId: string) => mockArtifactStore.get(artifactId)?.project_id === projectId || !!browserProjectAttachments.get(artifactId)?.has(projectId);
-const browserArtifactProject = (artifactId: string, original?: string | null) => original || [...(browserProjectAttachments.get(artifactId) || [])].sort()[0] || null;
+const browserArtifactProjects = (artifactId: string, original?: string | null) => {
+  const projects = new Set<string>(browserProjectAttachments.get(artifactId) || []);
+  if (original) projects.add(original);
+  return [...projects].sort();
+};
+const browserArtifactProject = (artifactId: string, original?: string | null) => {
+  const projects = browserArtifactProjects(artifactId, original);
+  return projects.length === 1 ? projects[0] : null;
+};
 
 export function getBrowserProjectItems(): import('../types/sthira').ProjectContentItem[] {
   const artifacts: import('../types/sthira').ProjectContentItem[] = [...mockArtifactStore.values()].map(({ artifact, project_id }) => ({
@@ -243,6 +253,7 @@ export async function getArtifactContext(artifactId: string): Promise<ArtifactCo
 
   const stored = mockArtifactStore.get(artifactId);
   if (stored) {
+    const projectIds = browserArtifactProjects(artifactId, stored.project_id);
     return {
       artifact: stored.artifact,
       epistemic_nodes: [
@@ -259,7 +270,8 @@ export async function getArtifactContext(artifactId: string): Promise<ArtifactCo
         },
       ],
       pending_proposals: [],
-      project_id: stored.project_id || null,
+      project_id: projectIds.length === 1 ? projectIds[0] : null,
+      project_ids: projectIds,
       is_unfinished_draft: false,
     };
   }
@@ -317,6 +329,25 @@ export async function getArtifactContext(artifactId: string): Promise<ArtifactCo
   };
 }
 
+const saveOutcomes = new WeakMap<object, SaveArtifactOutcome>();
+
+export function getSaveOutcome(result: Artifact | SaveArtifactOutcome): SaveArtifactOutcome {
+  if (result && typeof result === 'object' && 'artifact' in result && result.artifact) {
+    return result;
+  }
+  if (result && typeof result === 'object') {
+    const recorded = saveOutcomes.get(result);
+    if (recorded) return recorded;
+  }
+  return {
+    artifact: result as Artifact,
+    mirror_synced: true,
+    mirror_sync_error: null,
+    unchanged: false,
+    repaired_mirror_only: false,
+  };
+}
+
 export async function saveArtifact(
   artifactId: string,
   contentMd: string,
@@ -335,7 +366,7 @@ export async function saveArtifact(
 
   if (isTauri) {
     try {
-      return await invoke<Artifact>('cmd_save_artifact', {
+      const raw = await invoke<SaveArtifactOutcome | Artifact>('cmd_save_artifact', {
         artifactId,
         artifact_id: artifactId,
         contentMd,
@@ -344,6 +375,11 @@ export async function saveArtifact(
         projectId: resolvedProjectId,
         project_id: resolvedProjectId,
       });
+      if (raw && typeof raw === 'object' && 'artifact' in raw && raw.artifact) {
+        saveOutcomes.set(raw.artifact, raw);
+        return raw.artifact;
+      }
+      return raw as Artifact;
     } catch (err) {
       console.error('cmd_save_artifact failed:', err);
       throw err;
@@ -367,7 +403,25 @@ export async function saveArtifact(
     updated_at: Date.now(),
   };
   mockArtifactStore.set(aid, { artifact: updatedArt, project_id: resolvedProjectId !== null ? resolvedProjectId : (existing?.project_id || null) });
+  saveOutcomes.set(updatedArt, {
+    artifact: updatedArt,
+    mirror_synced: true,
+    mirror_sync_error: null,
+    unchanged: false,
+    repaired_mirror_only: false,
+  });
   return updatedArt;
+}
+
+export async function filterExistingArtifacts(artifactIds: string[]): Promise<string[]> {
+  if (artifactIds.length === 0) return [];
+  if (isTauri) {
+    return await invoke<string[]>('cmd_filter_existing_artifacts', {
+      artifactIds,
+      artifact_ids: artifactIds,
+    });
+  }
+  return artifactIds;
 }
 
 export async function decideProposal(proposalId: string, decision: 'accept' | 'dismiss'): Promise<string> {
@@ -524,6 +578,14 @@ export async function createGuidedProject(
 export async function clearVaultData(): Promise<void> {
   if (isTauri) {
     await invoke('cmd_clear_vault_data');
+  }
+  mockArtifactStore.clear();
+  browserProjectAttachments.clear();
+  fallbackHomeState.projects = [];
+  fallbackHomeState.recent_items = [];
+  fallbackHomeState.loose_captures = [];
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('sthira:vault-reset'));
   }
 }
 
@@ -1963,9 +2025,9 @@ export async function refineArtifact(
   modelId?: string | null,
   webSearch: boolean = false,
   requestId?: string | null
-): Promise<string> {
+): Promise<string | RefineArtifactOutcome> {
   if (isTauri) {
-    return await invoke<string>('cmd_refine_artifact', {
+    return await invoke<string | RefineArtifactOutcome>('cmd_refine_artifact', {
       artifactId,
       artifact_id: artifactId,
       critique,
@@ -1979,6 +2041,23 @@ export async function refineArtifact(
   }
 
   return `# Refined Note\n\n> Critique: ${critique}\n\nEnhanced synthesis in preview mode.`;
+}
+
+export async function undoRefinement(
+  artifactId: string,
+  changeSetId: string
+): Promise<Artifact> {
+  const raw = await invoke<SaveArtifactOutcome | Artifact>('cmd_undo_refinement', {
+    artifactId,
+    artifact_id: artifactId,
+    changeSetId,
+    change_set_id: changeSetId,
+  });
+  if (raw && typeof raw === 'object' && 'artifact' in raw && raw.artifact) {
+    saveOutcomes.set(raw.artifact, raw);
+    return raw.artifact;
+  }
+  return raw as Artifact;
 }
 
 export async function deriveArtifact(

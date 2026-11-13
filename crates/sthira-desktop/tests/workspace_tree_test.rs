@@ -21,7 +21,13 @@ async fn test_workspace_tree_separates_project_bound_from_unassociated_pages() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     // 1. Initially, workspace tree has zero projects and zero unassociated pages
@@ -63,7 +69,9 @@ async fn test_workspace_tree_separates_project_bound_from_unassociated_pages() {
         .unwrap();
 
     // 4. Create a Canvas bound to Project A
-    let _canvas_a = engine.create_canvas(Some(&proj_a.id), "Horizon Canvas").unwrap();
+    let _canvas_a = engine
+        .create_canvas(Some(&proj_a.id), "Horizon Canvas")
+        .unwrap();
 
     // 5. Create Project B with 1 page
     let proj_b = engine.create_project("Project Aurora", None).unwrap();
@@ -81,8 +89,14 @@ async fn test_workspace_tree_separates_project_bound_from_unassociated_pages() {
         .unwrap();
 
     // 6. Create 3 Unassociated (loose) notes with no project attached
-    let loose_1 = handle_create_page(&engine, None, Some("Quick thought on embeddings".to_string())).unwrap();
-    let loose_2 = handle_create_page(&engine, None, Some("Shopping & errands".to_string())).unwrap();
+    let loose_1 = handle_create_page(
+        &engine,
+        None,
+        Some("Quick thought on embeddings".to_string()),
+    )
+    .unwrap();
+    let loose_2 =
+        handle_create_page(&engine, None, Some("Shopping & errands".to_string())).unwrap();
     let loose_3 = engine
         .create_artifact(
             ArtifactType::Note,
@@ -99,7 +113,11 @@ async fn test_workspace_tree_separates_project_bound_from_unassociated_pages() {
     // Verify projects count
     assert_eq!(tree.projects.len(), 2, "Expected 2 projects");
 
-    let p_horizon = tree.projects.iter().find(|p| p.id == proj_a.id).expect("Horizon missing");
+    let p_horizon = tree
+        .projects
+        .iter()
+        .find(|p| p.id == proj_a.id)
+        .expect("Horizon missing");
     assert_eq!(p_horizon.name, "Project Horizon");
     assert_eq!(p_horizon.purpose, "Build next-gen habit tracking system");
     assert_eq!(p_horizon.pages.len(), 2, "Horizon should have 2 pages");
@@ -108,7 +126,11 @@ async fn test_workspace_tree_separates_project_bound_from_unassociated_pages() {
     assert_eq!(p_horizon.canvases.len(), 1, "Horizon should have 1 canvas");
     assert_eq!(p_horizon.canvases[0].name, "Horizon Canvas");
 
-    let p_aurora = tree.projects.iter().find(|p| p.id == proj_b.id).expect("Aurora missing");
+    let p_aurora = tree
+        .projects
+        .iter()
+        .find(|p| p.id == proj_b.id)
+        .expect("Aurora missing");
     assert_eq!(p_aurora.pages.len(), 1, "Aurora should have 1 page");
     assert_eq!(p_aurora.pages[0].id, page_b1.id);
 
@@ -141,12 +163,21 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     // 1. Fresh workspaces have no assumed provider or model.
     let catalog = handle_get_provider_catalog(&engine).expect("Failed to get provider catalog");
-    assert!(catalog.is_empty(), "Fresh workspaces must wait for explicit AI setup");
+    assert!(
+        catalog.is_empty(),
+        "Fresh workspaces must wait for explicit AI setup"
+    );
 
     // 2. Add an OpenAI-compatible provider with models
     let custom_provider = ProviderEntry {
@@ -166,7 +197,8 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: true,
-                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
+                web_search_capability:
+                    sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
             ProviderModelEntry {
                 id: "custom_groq:gemma4:31b".to_string(),
@@ -177,7 +209,8 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
                 supports_structured_output: true,
                 is_enabled: true,
                 is_default: false,
-                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
+                web_search_capability:
+                    sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
             },
         ],
     };
@@ -197,7 +230,8 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
     }
 
     // 4. Run clean_duplicate_models_on_startup
-    let cleaned = clean_duplicate_models_on_startup(&engine).expect("Failed to clean duplicate models");
+    let cleaned =
+        clean_duplicate_models_on_startup(&engine).expect("Failed to clean duplicate models");
     // Either clean deleted rows or unique constraint prevented duplicate
     println!("Cleaned {} duplicate rows", cleaned);
 
@@ -216,6 +250,13 @@ async fn test_model_queries_return_zero_duplicates_and_de_duplication() {
         }
     }
 
-    let groq = updated_catalog.iter().find(|p| p.id == "custom_groq").unwrap();
-    assert_eq!(groq.models.len(), 2, "Groq must contain exactly 2 distinct models");
+    let groq = updated_catalog
+        .iter()
+        .find(|p| p.id == "custom_groq")
+        .unwrap();
+    assert_eq!(
+        groq.models.len(),
+        2,
+        "Groq must contain exactly 2 distinct models"
+    );
 }

@@ -182,7 +182,7 @@ describe('Custom objects and plain document responses', () => {
     await waitFor(() => {
       expect(screen.getByTestId('slash-cmd-experiment')).toBeInTheDocument();
       expect(screen.getByText('Custom & Typed Objects')).toBeInTheDocument();
-      expect(screen.getByText('Experiment')).toBeInTheDocument();
+      expect(screen.getByText('New Experiment')).toBeInTheDocument();
     });
 
     // 4. Click the /experiment slash command

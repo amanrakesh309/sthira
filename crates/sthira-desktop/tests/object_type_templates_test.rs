@@ -6,7 +6,8 @@ use sthira_core::{
 };
 use sthira_desktop::{
     handle_create_object_type, handle_delete_object_type, handle_get_type_templates,
-    handle_instantiate_object_from_template, handle_save_object_template, handle_update_object_type,
+    handle_instantiate_object_from_template, handle_save_object_template,
+    handle_update_object_type,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
@@ -21,7 +22,13 @@ fn setup_test_engine() -> (tempfile::TempDir, Arc<Engine>) {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     (tmp, engine)
@@ -66,8 +73,8 @@ fn meeting_type() -> ObjectType {
 async fn test_instantiate_object_from_template_hydrates_content_and_properties() {
     let (_tmp, engine) = setup_test_engine();
 
-    let created_id =
-        handle_create_object_type(&engine, meeting_type()).expect("handle_create_object_type failed");
+    let created_id = handle_create_object_type(&engine, meeting_type())
+        .expect("handle_create_object_type failed");
     assert_eq!(created_id, "meeting");
 
     // The type's description + default template must round-trip through SQLite.
@@ -92,7 +99,9 @@ async fn test_instantiate_object_from_template_hydrates_content_and_properties()
     assert!(!artifact_id.is_empty());
 
     // content_md is pre-populated with the title + the default Markdown skeleton.
-    let artifact = engine.get_artifact(&artifact_id).expect("artifact must exist");
+    let artifact = engine
+        .get_artifact(&artifact_id)
+        .expect("artifact must exist");
     assert_eq!(artifact.title.as_deref(), Some("Sprint Sync"));
     assert!(artifact.content_md.starts_with("# Sprint Sync"));
     assert!(artifact.content_md.contains("## Agenda"));
@@ -111,7 +120,10 @@ async fn test_instantiate_object_from_template_hydrates_content_and_properties()
             Some("scheduled")
         );
         assert_eq!(
-            instance.properties.get("attendees").and_then(|v| v.as_str()),
+            instance
+                .properties
+                .get("attendees")
+                .and_then(|v| v.as_str()),
             Some("")
         );
     }
@@ -173,7 +185,10 @@ async fn test_named_template_overrides_default_body_and_property_preset() {
             Some("held")
         );
         assert_eq!(
-            instance.properties.get("attendees").and_then(|v| v.as_str()),
+            instance
+                .properties
+                .get("attendees")
+                .and_then(|v| v.as_str()),
             Some("Team")
         );
     }
@@ -258,7 +273,10 @@ async fn test_editing_schema_preserves_existing_instance_values() {
             Some("held")
         );
         assert_eq!(
-            instance.properties.get("attendees").and_then(|v| v.as_str()),
+            instance
+                .properties
+                .get("attendees")
+                .and_then(|v| v.as_str()),
             Some("Ada, Grace")
         );
     }
@@ -296,7 +314,11 @@ async fn test_builtin_default_templates_and_type_deletion_protection() {
         // Every built-in type ships exactly one seeded default template.
         for type_id in ["idea", "todo", "decision", "source"] {
             let templates = list_templates_for_type(&reader, type_id).unwrap();
-            assert_eq!(templates.len(), 1, "expected one seeded template for {type_id}");
+            assert_eq!(
+                templates.len(),
+                1,
+                "expected one seeded template for {type_id}"
+            );
             assert!(templates[0].is_default);
         }
     }
@@ -314,4 +336,3 @@ async fn test_builtin_default_templates_and_type_deletion_protection() {
         assert!(get_object_type(&reader, "meeting").unwrap().is_none());
     }
 }
-

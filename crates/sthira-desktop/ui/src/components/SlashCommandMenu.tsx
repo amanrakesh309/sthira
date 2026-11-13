@@ -16,11 +16,16 @@ import {
   Sparkles,
   Search,
   Maximize2,
+  FilePlus2,
+  FolderPlus,
+  Shapes,
+  Minus,
 } from 'lucide-react';
 
 import type { ObjectType } from '../types/sthira';
 
-export type SlashCategory = 'formatting' | 'epistemic' | 'objects' | 'ai';
+export type SlashCategory = 'formatting' | 'workspace' | 'epistemic' | 'objects' | 'ai';
+const CATEGORIES: SlashCategory[] = ['formatting', 'workspace', 'epistemic', 'objects', 'ai'];
 
 export interface SlashCommandItem {
   id: string;
@@ -34,6 +39,7 @@ export interface SlashCommandItem {
   aiMode?: 'plan' | 'research' | 'expand';
   isObjectAction?: boolean;
   objectType?: ObjectType;
+  workspaceAction?: 'page' | 'project' | 'object-type';
 }
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
@@ -102,6 +108,15 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
     template: '```rust\n// Implementation\n```\n',
   },
   {
+    id: 'divider',
+    title: 'Divider',
+    description: 'Separate sections with a horizontal line',
+    category: 'formatting',
+    icon: <Minus className="w-4 h-4" />,
+    keywords: ['divider', 'separator', 'horizontal', 'rule', 'line', 'hr'],
+    template: '\n\n---\n\n',
+  },
+  {
     id: 'callout',
     title: 'Callout Note',
     description: 'Highlighted note / invariant block',
@@ -109,6 +124,37 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
     icon: <Info className="w-4 h-4 text-blue-700 dark:text-blue-400" />,
     keywords: ['callout', 'note', 'alert', 'info', 'highlight'],
     template: '> [!NOTE]\n> Key architectural invariant or observation.\n',
+  },
+
+  {
+    id: 'page',
+    title: 'New Page',
+    description: 'Create a page in the current project or Pages',
+    category: 'workspace',
+    icon: <FilePlus2 className="w-4 h-4" />,
+    keywords: ['new page', 'page', 'new note', 'document', 'create'],
+    template: '',
+    workspaceAction: 'page',
+  },
+  {
+    id: 'project',
+    title: 'New Project',
+    description: 'Create a project and open its overview',
+    category: 'workspace',
+    icon: <FolderPlus className="w-4 h-4" />,
+    keywords: ['new project', 'project', 'create'],
+    template: '',
+    workspaceAction: 'project',
+  },
+  {
+    id: 'object-type',
+    title: 'New Custom Object Type',
+    description: 'Define a type and its properties, then create an object',
+    category: 'workspace',
+    icon: <Shapes className="w-4 h-4" />,
+    keywords: ['new custom object', 'new object type', 'schema', 'create', 'type'],
+    template: '',
+    workspaceAction: 'object-type',
   },
 
   // Sthira Epistemic & Invariant Blocks
@@ -197,7 +243,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
   // Dynamically generate commands from custom & system object types
   const dynamicObjectCommands: SlashCommandItem[] = customObjectTypes.map((objType) => ({
     id: objType.id,
-    title: objType.display_name,
+    title: `New ${objType.display_name}`,
     description: `Insert and link typed ${objType.display_name} object`,
     category: 'objects',
     icon: (
@@ -211,6 +257,8 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
     keywords: [
       objType.id.toLowerCase(),
       objType.display_name.toLowerCase(),
+      `new ${objType.id.toLowerCase()}`,
+      `new ${objType.display_name.toLowerCase()}`,
       'object',
       'typed',
       'custom',
@@ -220,7 +268,8 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
     objectType: objType,
   }));
 
-  const allCommands = [...SLASH_COMMANDS, ...dynamicObjectCommands];
+  // Keyboard navigation follows the same category order as the rendered menu.
+  const allCommands = CATEGORIES.flatMap(category => [...SLASH_COMMANDS, ...dynamicObjectCommands].filter(item => item.category === category));
 
   const filteredCommands = allCommands.filter((cmd) => {
     if (!cleanQuery) return true;
@@ -277,6 +326,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     };
@@ -298,12 +348,11 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 
   const categoryLabels: Record<SlashCategory, string> = {
     formatting: 'Formatting Blocks',
+    workspace: 'Create in Workspace',
     epistemic: 'Sthira Epistemic & Invariants',
     objects: 'Custom & Typed Objects',
     ai: `Inline AI Compute (${activeModelName})`,
   };
-
-  const categories: SlashCategory[] = ['formatting', 'epistemic', 'objects', 'ai'];
 
   return createPortal(
     <div
@@ -324,7 +373,7 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 
       <div className="sthira-slash-options p-1.5 space-y-2">
         {filteredCommands.length === 0 && <p className="sthira-slash-empty" role="status">No matching commands. Press Escape to return to your document.</p>}
-        {categories.map((cat) => {
+        {CATEGORIES.map((cat) => {
           const catCommands = filteredCommands.filter((c) => c.category === cat);
           if (catCommands.length === 0) return null;
 

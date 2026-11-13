@@ -39,7 +39,14 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
         let is_enabled: bool = r.get::<_, i32>(5)? != 0;
         let has_api_key = api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
 
-        Ok((id, display_name, provider_type, base_url, has_api_key, is_enabled))
+        Ok((
+            id,
+            display_name,
+            provider_type,
+            base_url,
+            has_api_key,
+            is_enabled,
+        ))
     })?;
 
     let mut providers = Vec::new();
@@ -47,7 +54,9 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
         let (id, display_name, provider_type, base_url, has_api_key, is_enabled) = row?;
 
         let model_rows = model_stmt.query_map(params![id], |mr| {
-            let cap_str: String = mr.get(8).unwrap_or_else(|_| "engine_augmented_only".to_string());
+            let cap_str: String = mr
+                .get(8)
+                .unwrap_or_else(|_| "engine_augmented_only".to_string());
             Ok(ProviderModelEntry {
                 id: mr.get(0)?,
                 provider_id: mr.get(1)?,
@@ -80,7 +89,10 @@ pub fn list_providers_with_models(conn: &Connection) -> Result<Vec<ProviderEntry
     Ok(providers)
 }
 
-pub fn get_provider_api_key(conn: &Connection, provider_id: &str) -> Result<Option<String>, CoreError> {
+pub fn get_provider_api_key(
+    conn: &Connection,
+    provider_id: &str,
+) -> Result<Option<String>, CoreError> {
     let mut stmt = conn.prepare("SELECT api_key FROM providers WHERE id = ?1;")?;
     let mut rows = stmt.query(params![provider_id])?;
     if let Some(row) = rows.next()? {
@@ -91,7 +103,10 @@ pub fn get_provider_api_key(conn: &Connection, provider_id: &str) -> Result<Opti
     }
 }
 
-pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(ProviderModelEntry, ProviderEntry, Option<String>)>, CoreError> {
+pub fn get_model_entry(
+    conn: &Connection,
+    model_id: &str,
+) -> Result<Option<(ProviderModelEntry, ProviderEntry, Option<String>)>, CoreError> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.provider_id, m.model_identifier, m.display_name, m.context_window,
                 m.supports_structured_output, m.is_enabled, m.is_default,
@@ -119,7 +134,9 @@ pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(Prov
         let p_url: String = r.get(10)?;
         let p_key: Option<String> = r.get(11)?;
         let p_enabled: bool = r.get::<_, i32>(12)? != 0;
-        let m_cap_str: String = r.get(13).unwrap_or_else(|_| "engine_augmented_only".to_string());
+        let m_cap_str: String = r
+            .get(13)
+            .unwrap_or_else(|_| "engine_augmented_only".to_string());
 
         let model = ProviderModelEntry {
             id: m_id,
@@ -149,7 +166,9 @@ pub fn get_model_entry(conn: &Connection, model_id: &str) -> Result<Option<(Prov
     }
 }
 
-pub fn get_default_model(conn: &Connection) -> Result<Option<(ProviderModelEntry, ProviderEntry, Option<String>)>, CoreError> {
+pub fn get_default_model(
+    conn: &Connection,
+) -> Result<Option<(ProviderModelEntry, ProviderEntry, Option<String>)>, CoreError> {
     let mut stmt = conn.prepare("SELECT id FROM provider_models WHERE is_default = 1 LIMIT 1;")?;
     let mut rows = stmt.query([])?;
     if let Some(r) = rows.next()? {
@@ -157,7 +176,8 @@ pub fn get_default_model(conn: &Connection) -> Result<Option<(ProviderModelEntry
         get_model_entry(conn, &id)
     } else {
         // Fallback to any enabled model
-        let mut fallback_stmt = conn.prepare("SELECT id FROM provider_models WHERE is_enabled = 1 LIMIT 1;")?;
+        let mut fallback_stmt =
+            conn.prepare("SELECT id FROM provider_models WHERE is_enabled = 1 LIMIT 1;")?;
         let mut f_rows = fallback_stmt.query([])?;
         if let Some(fr) = f_rows.next()? {
             let id: String = fr.get(0)?;
@@ -233,7 +253,11 @@ pub fn upsert_model(
             model.model_identifier,
             model.display_name,
             model.context_window,
-            if model.supports_structured_output { 1 } else { 0 },
+            if model.supports_structured_output {
+                1
+            } else {
+                0
+            },
             if model.is_enabled { 1 } else { 0 },
             if model.is_default { 1 } else { 0 },
             model.web_search_capability.as_str(),
@@ -253,7 +277,10 @@ pub fn update_model_search_capability(
         params![capability.as_str(), model_id],
     )?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Model ID '{}' not found", model_id)));
+        return Err(CoreError::NotFound(format!(
+            "Model ID '{}' not found",
+            model_id
+        )));
     }
     Ok(())
 }
@@ -265,7 +292,10 @@ pub fn set_default_model(conn: &Connection, model_id: &str) -> Result<(), CoreEr
         params![model_id],
     )?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Model ID '{}' not found", model_id)));
+        return Err(CoreError::NotFound(format!(
+            "Model ID '{}' not found",
+            model_id
+        )));
     }
     Ok(())
 }
@@ -276,7 +306,10 @@ pub fn toggle_model(conn: &Connection, model_id: &str, enabled: bool) -> Result<
         params![if enabled { 1 } else { 0 }, model_id],
     )?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Model ID '{}' not found", model_id)));
+        return Err(CoreError::NotFound(format!(
+            "Model ID '{}' not found",
+            model_id
+        )));
     }
     Ok(())
 }
@@ -284,15 +317,24 @@ pub fn toggle_model(conn: &Connection, model_id: &str, enabled: bool) -> Result<
 pub fn delete_provider(conn: &Connection, provider_id: &str) -> Result<(), CoreError> {
     let changed = conn.execute("DELETE FROM providers WHERE id = ?1;", params![provider_id])?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Provider ID '{}' not found", provider_id)));
+        return Err(CoreError::NotFound(format!(
+            "Provider ID '{}' not found",
+            provider_id
+        )));
     }
     Ok(())
 }
 
 pub fn delete_model(conn: &Connection, model_id: &str) -> Result<(), CoreError> {
-    let changed = conn.execute("DELETE FROM provider_models WHERE id = ?1;", params![model_id])?;
+    let changed = conn.execute(
+        "DELETE FROM provider_models WHERE id = ?1;",
+        params![model_id],
+    )?;
     if changed == 0 {
-        return Err(CoreError::NotFound(format!("Model ID '{}' not found", model_id)));
+        return Err(CoreError::NotFound(format!(
+            "Model ID '{}' not found",
+            model_id
+        )));
     }
     Ok(())
 }

@@ -14,6 +14,7 @@ vi.mock('../api/ipc', () => ({
   saveArtifact: vi.fn(),
   createTypedObject: vi.fn(),
   saveObjectInstance: vi.fn(),
+  getObjectInstance: vi.fn().mockResolvedValue(null),
   decideProposal: vi.fn(),
   revertChangeSet: vi.fn(),
   streamAdaptiveRun: vi.fn(),
@@ -259,5 +260,25 @@ Some additional context notes below.
     fireEvent.keyDown(window, { key: 'e', metaKey: true });
     expect(screen.getByTestId('document-editor')).toBe(editor);
 
+  });
+
+  it('activates internal buttons and external links safely via keyboard in read-only renderer', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const onOpenEntity = vi.fn();
+    render(
+      <RichDocumentRenderer
+        content={'[Internal](#/sthira/artifact/a1) and [External](https://example.org/guide)'}
+        onOpenEntity={onOpenEntity}
+      />
+    );
+    const internalBtn = screen.getByRole('button', { name: 'Internal' });
+    fireEvent.click(internalBtn);
+    expect(onOpenEntity).toHaveBeenCalledWith({ kind: 'artifact', id: 'a1' });
+
+    const externalLink = screen.getByRole('link', { name: 'External' });
+    expect(externalLink).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(externalLink, { key: ' ' });
+    expect(openSpy).toHaveBeenCalledWith('https://example.org/guide', '_blank', 'noopener,noreferrer');
+    openSpy.mockRestore();
   });
 });

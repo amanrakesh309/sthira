@@ -21,7 +21,13 @@ async fn test_list_available_models_and_update_capability() {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     // Save a custom provider with local, cloud, and native search models
@@ -87,21 +93,44 @@ async fn test_list_available_models_and_update_capability() {
     assert!(models.len() >= 4);
 
     let m_llama = models.iter().find(|m| m.id == "prov:llama3.2").unwrap();
-    assert_eq!(m_llama.web_search_capability, WebSearchCapability::EngineAugmentedOnly);
+    assert_eq!(
+        m_llama.web_search_capability,
+        WebSearchCapability::EngineAugmentedOnly
+    );
 
     let m_claude = models.iter().find(|m| m.id == "prov:claude-3-7").unwrap();
-    assert_eq!(m_claude.web_search_capability, WebSearchCapability::AgenticToolCall);
+    assert_eq!(
+        m_claude.web_search_capability,
+        WebSearchCapability::AgenticToolCall
+    );
 
     let m_sonar = models.iter().find(|m| m.id == "prov:sonar-pro").unwrap();
     assert_eq!(m_sonar.web_search_capability, WebSearchCapability::Native);
 
-    let m_offline = models.iter().find(|m| m.id == "prov:offline-model").unwrap();
-    assert_eq!(m_offline.web_search_capability, WebSearchCapability::Unsupported);
+    let m_offline = models
+        .iter()
+        .find(|m| m.id == "prov:offline-model")
+        .unwrap();
+    assert_eq!(
+        m_offline.web_search_capability,
+        WebSearchCapability::Unsupported
+    );
 
     // 2. Update model search capability via handle_update_model_search_capability
-    handle_update_model_search_capability(&engine, "prov:llama3.2".to_string(), WebSearchCapability::AgenticToolCall).unwrap();
+    handle_update_model_search_capability(
+        &engine,
+        "prov:llama3.2".to_string(),
+        WebSearchCapability::AgenticToolCall,
+    )
+    .unwrap();
 
     let updated_models = handle_list_available_models(&engine).unwrap();
-    let updated_llama = updated_models.iter().find(|m| m.id == "prov:llama3.2").unwrap();
-    assert_eq!(updated_llama.web_search_capability, WebSearchCapability::AgenticToolCall);
+    let updated_llama = updated_models
+        .iter()
+        .find(|m| m.id == "prov:llama3.2")
+        .unwrap();
+    assert_eq!(
+        updated_llama.web_search_capability,
+        WebSearchCapability::AgenticToolCall
+    );
 }

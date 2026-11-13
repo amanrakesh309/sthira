@@ -180,7 +180,6 @@ pub fn next_scheduled_instant(now_ms: i64, weekday: Option<u8>, minutes: i64) ->
     }
 }
 
-
 impl ScheduledTopic {
     /// Returns `true` when this topic should execute at `now_ms`.
     ///
@@ -210,7 +209,8 @@ impl ScheduledTopic {
                 Some(last) => now_ms.saturating_sub(last) > interval,
             },
             Some(minutes) => {
-                let instant = most_recent_scheduled_instant(now_ms, self.schedule_anchor_weekday(), minutes);
+                let instant =
+                    most_recent_scheduled_instant(now_ms, self.schedule_anchor_weekday(), minutes);
                 // Never fire for an occurrence that predates the topic itself.
                 if self.created_at > instant {
                     return false;
@@ -261,4 +261,3 @@ pub fn is_topic_due(cadence: TopicCadence, last_run_at: Option<i64>, now_ms: i64
         },
     }
 }
-

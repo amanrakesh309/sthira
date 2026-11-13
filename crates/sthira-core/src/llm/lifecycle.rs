@@ -218,7 +218,11 @@ pub enum RequestErrorKind {
 impl RequestErrorKind {
     /// Returns a truthful, human-readable error message indicating stage and configured limit.
     pub fn user_message(&self, stage: &str, unaffected_scope: &str) -> String {
-        let verb = if unaffected_scope.contains(" and ") { "are" } else { "is" };
+        let verb = if unaffected_scope.contains(" and ") {
+            "are"
+        } else {
+            "is"
+        };
         match self {
             Self::ConnectionTimeout { limit } => {
                 format!(
@@ -253,13 +257,17 @@ impl RequestErrorKind {
                 format!("{stage} was cancelled. {unaffected_scope} {verb} unchanged.")
             }
             Self::HttpStatus { status, message } => {
-                format!("Model generation failed: The model provider returned HTTP {status}: {message}")
+                format!(
+                    "Model generation failed: The model provider returned HTTP {status}: {message}"
+                )
             }
             Self::MalformedResponse { details } => {
                 format!("Model returned malformed {stage} response: {details}")
             }
             Self::EmptyResponse => {
-                format!("Model returned empty {stage} content. {unaffected_scope} {verb} unchanged.")
+                format!(
+                    "Model returned empty {stage} content. {unaffected_scope} {verb} unchanged."
+                )
             }
         }
     }

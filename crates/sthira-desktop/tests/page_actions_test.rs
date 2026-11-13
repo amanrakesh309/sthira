@@ -21,7 +21,13 @@ fn setup_test_engine() -> (tempfile::TempDir, Arc<Engine>) {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     (tmp, engine)
@@ -29,7 +35,13 @@ fn setup_test_engine() -> (tempfile::TempDir, Arc<Engine>) {
 
 fn make_note(engine: &Engine, title: &str, body: &str) -> String {
     engine
-        .create_artifact(ArtifactType::Note, Authorship::User, Some(title), body, None)
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some(title),
+            body,
+            None,
+        )
         .unwrap()
         .id
 }
@@ -62,7 +74,11 @@ async fn test_link_artifact_to_project_links_without_duplication() {
     let (_tmp, engine) = setup_test_engine();
 
     let project = handle_create_project(&engine, "Retrieval Systems".into(), None).unwrap();
-    let artifact_id = make_note(&engine, "Vector Index Notes", "# Vector Index Notes\n\nHNSW body.");
+    let artifact_id = make_note(
+        &engine,
+        "Vector Index Notes",
+        "# Vector Index Notes\n\nHNSW body.",
+    );
     let before = engine.get_artifact(&artifact_id).unwrap();
     let artifacts_before = count_all_artifacts(&engine);
 
@@ -122,7 +138,10 @@ async fn test_create_project_with_artifact_creates_project_and_associates_note()
     }
 
     // Note is actively associated.
-    assert_eq!(count_active_links(&engine, &new_project_id, &artifact_id), 1);
+    assert_eq!(
+        count_active_links(&engine, &new_project_id, &artifact_id),
+        1
+    );
 
     // An empty name is rejected.
     assert!(
@@ -192,7 +211,6 @@ async fn test_duplicate_artifact_produces_independent_note_with_fresh_uuid() {
     assert_eq!(count_active_links(&engine, &other.id, &named_id), 1);
 }
 
-
 // ---------------------------------------------------------------------------
 // 4. cmd_convert_artifact_to_object: writes object_instances, never touches the body.
 // ---------------------------------------------------------------------------
@@ -260,7 +278,10 @@ async fn test_convert_artifact_to_object_creates_instance_and_preserves_content(
             Some("proposed")
         );
         assert_eq!(
-            instance.properties.get("hypothesis").and_then(|v| v.as_str()),
+            instance
+                .properties
+                .get("hypothesis")
+                .and_then(|v| v.as_str()),
             Some("p99 < 20ms")
         );
     }
@@ -280,18 +301,18 @@ async fn test_convert_artifact_to_object_creates_instance_and_preserves_content(
             .unwrap()
             .unwrap();
         assert_eq!(
-            instance.properties.get("hypothesis").and_then(|v| v.as_str()),
+            instance
+                .properties
+                .get("hypothesis")
+                .and_then(|v| v.as_str()),
             Some("p99 < 20ms"),
             "re-converting must not wipe stored property values"
         );
     }
 
     // 4. Unknown object type is rejected.
-    assert!(
-        handle_convert_artifact_to_object(&engine, artifact_id, "nope".into(), None).is_err()
-    );
+    assert!(handle_convert_artifact_to_object(&engine, artifact_id, "nope".into(), None).is_err());
 }
-
 
 // ---------------------------------------------------------------------------
 // 5. cmd_move_artifact_to_project / cmd_detach_artifact_from_project
@@ -359,4 +380,3 @@ async fn test_move_and_detach_artifact_between_projects() {
     handle_link_artifact_to_project(&engine, artifact_id.clone(), p1.id.clone()).unwrap();
     assert_eq!(count_active_links(&engine, &p1.id, &artifact_id), 1);
 }
-

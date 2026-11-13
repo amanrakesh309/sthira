@@ -5,9 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use sthira_core::llm::OllamaProvider;
 use sthira_core::memory::{ungrounded_tokens, visible_words};
-use sthira_core::{
-    ArtifactType, Authorship, Engine, IntentType, Locality,
-};
+use sthira_core::{ArtifactType, Authorship, Engine, IntentType, Locality};
 use sthira_testkit::FakeClock;
 use tempfile::tempdir;
 
@@ -85,7 +83,10 @@ async fn run_gauntlet_for_model(
     ollama_host: &str,
 ) -> Result<ModelAuditReport, Box<dyn std::error::Error>> {
     println!("\n========================================================");
-    println!(">>> RUNNING 4-TASK GAUNTLET FOR: {} ({})", model_id, model_tag);
+    println!(
+        ">>> RUNNING 4-TASK GAUNTLET FOR: {} ({})",
+        model_id, model_tag
+    );
     println!("========================================================");
 
     let temp_dir = tempdir()?;
@@ -93,11 +94,7 @@ async fn run_gauntlet_for_model(
     let vault_dir = temp_dir.path().join(".sthira_vault").join("artifacts");
     let clock = Arc::new(FakeClock::new(1_700_000_000_000)); // deterministic start
 
-    let provider = Arc::new(OllamaProvider::with_host(
-        model_tag,
-        ollama_host,
-        locality,
-    ));
+    let provider = Arc::new(OllamaProvider::with_host(model_tag, ollama_host, locality));
 
     let engine = Engine::open(&db_path, &vault_dir, clock.clone(), provider.clone())?;
 
@@ -106,7 +103,11 @@ async fn run_gauntlet_for_model(
     // ---------------------------------------------------------
     println!("\n[Test 1] Universal Input Router (5 Inputs)...");
     let test_inputs = vec![
-        ("What is speculative decoding?", IntentType::TransientQa, false),
+        (
+            "What is speculative decoding?",
+            IntentType::TransientQa,
+            false,
+        ),
         (
             "Save this thought: smaller models may be easier to specialize",
             IntentType::CaptureNote,
@@ -405,8 +406,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("# Sthira Core: 15-Minute Live Multi-Model Trust Audit           #");
     println!("################################################################");
 
-    let ollama_host = std::env::var("OLLAMA_HOST")
-        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let ollama_host =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
     println!("Ollama Endpoint: {}", ollama_host);
 
     // The 3 target models specified in user task
@@ -466,7 +467,9 @@ fn generate_audit_markdown_report(
     md.push_str("> **Audit Goal:** Live side-by-side verification of local & cloud LLMs against `sthira-core` epistemic invariants, router accuracy, quote survival, and resumption brief generation.\n\n");
 
     md.push_str("## 1. Executive Summary Table\n\n");
-    md.push_str("| Metric / Test | Llama 3.2 (3.2B Local) | Gemma 4 (31B Cloud) | GPT-OSS (120B Cloud) |\n");
+    md.push_str(
+        "| Metric / Test | Llama 3.2 (3.2B Local) | Gemma 4 (31B Cloud) | GPT-OSS (120B Cloud) |\n",
+    );
     md.push_str("| :--- | :---: | :---: | :---: |\n");
 
     // Router Accuracy
@@ -634,11 +637,16 @@ fn generate_audit_markdown_report(
 
     md.push_str("## 3. Detailed Task Breakdown\n\n");
     for report in reports {
-        md.push_str(&format!("### Model: {} (`{}`)\n", report.model_id, report.model_tag));
+        md.push_str(&format!(
+            "### Model: {} (`{}`)\n",
+            report.model_id, report.model_tag
+        ));
         md.push_str(&format!("- **Locality:** {:?}\n\n", report.locality));
 
         md.push_str("#### Task 1: Universal Input Router Results\n");
-        md.push_str("| Input | Expected Intent | Classified Intent | Latency | DB Writes | Status |\n");
+        md.push_str(
+            "| Input | Expected Intent | Classified Intent | Latency | DB Writes | Status |\n",
+        );
         md.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
         for item in &report.router_items {
             md.push_str(&format!(
@@ -653,22 +661,58 @@ fn generate_audit_markdown_report(
         }
 
         md.push_str("\n#### Task 2 & 3: Epistemic & Authorship Safety\n");
-        md.push_str(&format!("- **Raw LLM Nodes Emitted:** {}\n", report.extraction.raw_nodes_count));
-        md.push_str(&format!("- **Nodes Survived VerifiedQuote:** {}\n", report.extraction.survived_nodes_count));
-        md.push_str(&format!("- **Hedge Guard Correctness:** {}\n", if report.extraction.hedge_classified_hypothesis { "PASSED" } else { "N/A" }));
-        md.push_str(&format!("- **Blockquote Infiltration Prevented:** {}\n", if report.extraction.blockquote_ignored { "PASSED" } else { "FAIL" }));
-        md.push_str(&format!("- **AI Authorship Laundering Guard:** {}\n", if report.laundering.passed { "PASSED (0 UserRecorded, 0 Decision)" } else { "FAIL" }));
+        md.push_str(&format!(
+            "- **Raw LLM Nodes Emitted:** {}\n",
+            report.extraction.raw_nodes_count
+        ));
+        md.push_str(&format!(
+            "- **Nodes Survived VerifiedQuote:** {}\n",
+            report.extraction.survived_nodes_count
+        ));
+        md.push_str(&format!(
+            "- **Hedge Guard Correctness:** {}\n",
+            if report.extraction.hedge_classified_hypothesis {
+                "PASSED"
+            } else {
+                "N/A"
+            }
+        ));
+        md.push_str(&format!(
+            "- **Blockquote Infiltration Prevented:** {}\n",
+            if report.extraction.blockquote_ignored {
+                "PASSED"
+            } else {
+                "FAIL"
+            }
+        ));
+        md.push_str(&format!(
+            "- **AI Authorship Laundering Guard:** {}\n",
+            if report.laundering.passed {
+                "PASSED (0 UserRecorded, 0 Decision)"
+            } else {
+                "FAIL"
+            }
+        ));
 
         md.push_str("\n#### Task 4: Persistent Memory Resumption\n");
-        md.push_str(&format!("- **Level 1 Brief Generation:** {} ms ({} visible words)\n", report.resumption.level1_latency_ms, report.resumption.level1_words));
-        md.push_str(&format!("- **Level 2 Brief Generation:** {} ms\n", report.resumption.level2_latency_ms));
+        md.push_str(&format!(
+            "- **Level 1 Brief Generation:** {} ms ({} visible words)\n",
+            report.resumption.level1_latency_ms, report.resumption.level1_words
+        ));
+        md.push_str(&format!(
+            "- **Level 2 Brief Generation:** {} ms\n",
+            report.resumption.level2_latency_ms
+        ));
         let mirror_filename = match report.model_id.as_str() {
             "llama3.2" => "mirror_llama3_2.md",
             "gemma-4-31b-cloud" => "mirror_gemma4_31b.md",
             "gpt-oss-120b-cloud" => "mirror_gpt_oss_120b.md",
             _ => "mirror.md",
         };
-        md.push_str(&format!("- **Mirror Saved To:** `gate_reports/live_model_comparison/{}`\n\n", mirror_filename));
+        md.push_str(&format!(
+            "- **Mirror Saved To:** `gate_reports/live_model_comparison/{}`\n\n",
+            mirror_filename
+        ));
     }
 
     fs::write(out_path, md)?;

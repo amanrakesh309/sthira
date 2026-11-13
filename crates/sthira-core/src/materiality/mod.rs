@@ -51,16 +51,22 @@ pub fn compute_materiality(old_content: &str, new_content: &str) -> Materiality 
     let extract_identifiers = |text: &str| -> Vec<String> {
         text.split_whitespace()
             .filter_map(|w| {
-                let clean = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
-                let inner = clean.trim_matches(|c: char| c == '.' || c == ',' || c == '!' || c == '?' || c == ':' || c == ';');
+                let clean = w.trim_matches(|c: char| {
+                    !c.is_alphanumeric() && c != '-' && c != '_' && c != '.'
+                });
+                let inner = clean.trim_matches(|c: char| {
+                    c == '.' || c == ',' || c == '!' || c == '?' || c == ':' || c == ';'
+                });
                 if inner.is_empty() {
                     return None;
                 }
                 let has_internal_punct = inner.contains('-')
                     || inner.contains('_')
                     || (inner.contains('.') && !inner.starts_with('.') && !inner.ends_with('.'));
-                let has_mixed = inner.chars().any(|c| c.is_uppercase()) && inner.chars().any(|c| c.is_lowercase());
-                let has_alpha_num = inner.chars().any(|c| c.is_alphabetic()) && inner.chars().any(|c| c.is_ascii_digit());
+                let has_mixed = inner.chars().any(|c| c.is_uppercase())
+                    && inner.chars().any(|c| c.is_lowercase());
+                let has_alpha_num = inner.chars().any(|c| c.is_alphabetic())
+                    && inner.chars().any(|c| c.is_ascii_digit());
                 if has_internal_punct || (has_mixed && has_alpha_num) {
                     Some(inner.to_string())
                 } else {

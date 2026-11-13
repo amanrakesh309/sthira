@@ -176,4 +176,64 @@ describe('SearchModal Global Search (NAV-05)', () => {
       expect(screen.getByText(/No matching projects or notes found for/)).toBeInTheDocument();
     });
   });
+
+  it('traps Tab inside the search dialog and activates focused options with Space or Enter (F-B5-018)', async () => {
+    const user = userEvent.setup();
+    const handleClose = vi.fn();
+    const handleOpenProject = vi.fn();
+    const handleOpenArtifact = vi.fn();
+
+    render(
+      <div>
+        <button type="button" data-testid="outside-before">Before</button>
+        <SearchModal
+          isOpen={true}
+          onClose={handleClose}
+          onOpenProject={handleOpenProject}
+          onOpenArtifact={handleOpenArtifact}
+        />
+        <button type="button" data-testid="outside-after">After</button>
+      </div>
+    );
+
+    const dialog = screen.getByTestId('search-workspace-dialog');
+    const input = screen.getByRole('textbox', { name: 'Search workspace entities' });
+    await user.type(input, 'Platform');
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Open Knowledge Platform' })).toBeInTheDocument();
+    });
+
+    const closeBtn = screen.getByRole('button', { name: 'Close search' });
+    const clearBtn = screen.getByRole('button', { name: 'Clear search input' });
+    const firstOption = screen.getByRole('option', { name: 'Open Knowledge Platform' });
+    const secondOption = screen.getByRole('option', { name: 'Open Architecture Spec' });
+
+    // Shift+Tab from first control wraps to last option inside dialog (never escapes to outside-before)
+    input.focus();
+    await user.tab({ shift: true });
+    expect(secondOption).toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // Tab forward from last option wraps to search input
+    await user.tab();
+    expect(input).toHaveFocus();
+
+    // Tab sequentially across clear -> Esc -> firstOption -> secondOption -> wraps
+    await user.tab();
+    expect(clearBtn).toHaveFocus();
+    await user.tab();
+    expect(closeBtn).toHaveFocus();
+    await user.tab();
+    expect(firstOption).toHaveFocus();
+
+    // Pressing Space on a focused div[role="option"] opens the project and closes SearchModal
+    fireEvent.keyDown(firstOption, { key: ' ' });
+    expect(handleOpenProject).toHaveBeenCalledWith('proj-1');
+    expect(handleClose).toHaveBeenCalledTimes(1);
+
+    // Pressing Enter directly on second option also opens artifact
+    fireEvent.keyDown(secondOption, { key: 'Enter' });
+    expect(handleOpenArtifact).toHaveBeenCalledWith('art-1');
+  });
 });

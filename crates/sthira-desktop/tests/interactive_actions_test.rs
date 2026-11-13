@@ -1,13 +1,10 @@
-use std::sync::Arc;
 use serde_json::json;
-use sthira_core::{
-    models::objects::ObjectType,
-    Engine,
-};
+use std::sync::Arc;
+use sthira_core::{models::objects::ObjectType, Engine};
 use sthira_desktop::{
     handle_create_object_type, handle_create_page, handle_create_project,
     handle_create_typed_object, handle_get_workspace_tree, handle_list_object_types,
-    handle_list_objects_by_type, handle_save_artifact, handle_rename_artifact,
+    handle_list_objects_by_type, handle_rename_artifact, handle_save_artifact,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
@@ -22,7 +19,13 @@ fn setup_test_engine() -> (tempfile::TempDir, Arc<Engine>) {
     let model = Arc::new(DeterministicFakeModel::new("test-model"));
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     (tmp, engine)
@@ -33,7 +36,7 @@ async fn test_save_artifact_direct_and_title_extraction() {
     let (_tmp, engine) = setup_test_engine();
 
     // 1. Create a brand new artifact via handle_save_artifact with empty artifact_id
-    let new_art = handle_save_artifact(
+    let new_save = handle_save_artifact(
         &engine,
         "".to_string(),
         "# First Heading Note\n\nBody content of the note.".to_string(),
@@ -41,6 +44,8 @@ async fn test_save_artifact_direct_and_title_extraction() {
         None,
     )
     .expect("handle_save_artifact should create new note if id is empty");
+    assert!(new_save.mirror_synced);
+    let new_art = new_save.artifact;
 
     assert!(!new_art.id.is_empty());
     assert_eq!(new_art.title.as_deref(), Some("First Heading Note"));
@@ -53,7 +58,7 @@ async fn test_save_artifact_direct_and_title_extraction() {
     assert_eq!(content, "# First Heading Note\n\nBody content of the note.");
 
     // 2. Update existing artifact with an explicit title override
-    let updated_art = handle_save_artifact(
+    let updated_save = handle_save_artifact(
         &engine,
         new_art.id.clone(),
         "# Renamed Note Title\n\nUpdated body lines.".to_string(),
@@ -61,6 +66,8 @@ async fn test_save_artifact_direct_and_title_extraction() {
         None,
     )
     .expect("handle_save_artifact should update existing note");
+    assert!(updated_save.mirror_synced);
+    let updated_art = updated_save.artifact;
 
     assert_eq!(updated_art.id, new_art.id);
 
@@ -81,7 +88,10 @@ async fn test_save_artifact_direct_and_title_extraction() {
         .get_artifact(&new_art.id)
         .expect("Should read updated content")
         .content_md;
-    assert_eq!(updated_content, "# Explicit Title Override\n\nUpdated body lines.");
+    assert_eq!(
+        updated_content,
+        "# Explicit Title Override\n\nUpdated body lines."
+    );
 }
 
 #[tokio::test]
@@ -149,7 +159,11 @@ async fn test_create_object_type_persistence() {
                 key: "severity".to_string(),
                 label: "Severity".to_string(),
                 property_type: sthira_core::models::objects::PropertyType::Select,
-                options: vec!["low".to_string(), "medium".to_string(), "critical".to_string()],
+                options: vec![
+                    "low".to_string(),
+                    "medium".to_string(),
+                    "critical".to_string(),
+                ],
                 required: false,
                 default_value: None,
             },
@@ -243,7 +257,8 @@ async fn test_save_artifact_with_sentinel_or_invalid_project_id_no_foreign_key_f
         Some("Captured Thought Test".to_string()),
         Some("default_project".to_string()),
     )
-    .expect("handle_save_artifact with default_project must succeed without foreign key error");
+    .expect("handle_save_artifact with default_project must succeed without foreign key error")
+    .artifact;
 
     assert_eq!(saved.id, page.id);
 
@@ -255,7 +270,10 @@ async fn test_save_artifact_with_sentinel_or_invalid_project_id_no_foreign_key_f
         None,
         Some("non_existent_fake_proj_id".to_string()),
     )
-    .expect("handle_save_artifact with non-existent project id must succeed without foreign key error");
+    .expect(
+        "handle_save_artifact with non-existent project id must succeed without foreign key error",
+    )
+    .artifact;
 
     assert!(!loose.id.is_empty());
 
@@ -267,7 +285,8 @@ async fn test_save_artifact_with_sentinel_or_invalid_project_id_no_foreign_key_f
         None,
         Some("non_existent_fake_proj_id".to_string()),
     )
-    .expect("handle_save_artifact update with non-existent project id must succeed");
+    .expect("handle_save_artifact update with non-existent project id must succeed")
+    .artifact;
 
     assert_eq!(updated_loose.id, loose.id);
 }

@@ -50,18 +50,30 @@ async fn test_9_1_provider_grouping_and_explicit_setup() {
     let (engine, clock, _dir) = setup_test_engine();
     let reader = engine.db().reader().expect("reader failed");
 
-    let catalog = providers_repo::list_providers_with_models(&reader)
-        .expect("Failed to list providers");
+    let catalog =
+        providers_repo::list_providers_with_models(&reader).expect("Failed to list providers");
 
-    assert!(catalog.is_empty(), "Fresh workspaces must not assume an installed runtime");
-    assert!(providers_repo::get_default_model(&reader).unwrap().is_none());
+    assert!(
+        catalog.is_empty(),
+        "Fresh workspaces must not assume an installed runtime"
+    );
+    assert!(providers_repo::get_default_model(&reader)
+        .unwrap()
+        .is_none());
     drop(reader);
     connect_ollama_fixture(&engine, &clock);
     let reader = engine.db().reader().expect("reader failed");
     let catalog = providers_repo::list_providers_with_models(&reader).unwrap();
-    assert_eq!(catalog.len(), 1, "The explicitly connected provider should be visible");
+    assert_eq!(
+        catalog.len(),
+        1,
+        "The explicitly connected provider should be visible"
+    );
 
-    let ollama = catalog.iter().find(|p| p.id == "ollama").expect("Ollama provider missing");
+    let ollama = catalog
+        .iter()
+        .find(|p| p.id == "ollama")
+        .expect("Ollama provider missing");
     assert_eq!(ollama.provider_type, "ollama");
     assert!(ollama.is_enabled);
 
@@ -83,22 +95,25 @@ async fn test_9_1_provider_grouping_and_explicit_setup() {
         base_url: "https://api.groq.com/openai/v1".to_string(),
         has_api_key: true,
         is_enabled: true,
-        models: vec![
-            ProviderModelEntry {
-                id: "groq:llama-3.3-70b-versatile".to_string(),
-                provider_id: "groq".to_string(),
-                model_identifier: "llama-3.3-70b-versatile".to_string(),
-                display_name: "Llama 3.3 70B (Groq)".to_string(),
-                context_window: 128000,
-                supports_structured_output: true,
-                is_enabled: true,
-                is_default: false,
-                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
-            },
-        ],
+        models: vec![ProviderModelEntry {
+            id: "groq:llama-3.3-70b-versatile".to_string(),
+            provider_id: "groq".to_string(),
+            model_identifier: "llama-3.3-70b-versatile".to_string(),
+            display_name: "Llama 3.3 70B (Groq)".to_string(),
+            context_window: 128000,
+            supports_structured_output: true,
+            is_enabled: true,
+            is_default: false,
+            web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
+        }],
     };
-    providers_repo::upsert_provider(&writer, &groq_provider, Some("test-groq-key"), clock.now_ms())
-        .expect("Failed to connect groq provider");
+    providers_repo::upsert_provider(
+        &writer,
+        &groq_provider,
+        Some("test-groq-key"),
+        clock.now_ms(),
+    )
+    .expect("Failed to connect groq provider");
 
     // Switch default to Groq model
     providers_repo::set_default_model(&writer, "groq:llama-3.3-70b-versatile")
@@ -130,7 +145,8 @@ async fn test_9_2_ollama_autodiscover_and_sync() {
             supports_structured_output: true,
             is_enabled: true,
             is_default: false,
-            web_search_capability: sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
+            web_search_capability:
+                sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
         },
         ProviderModelEntry {
             id: "ollama-phi3-mini".to_string(),
@@ -141,7 +157,8 @@ async fn test_9_2_ollama_autodiscover_and_sync() {
             supports_structured_output: true,
             is_enabled: true,
             is_default: false,
-            web_search_capability: sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
+            web_search_capability:
+                sthira_core::llm::models::WebSearchCapability::EngineAugmentedOnly,
         },
     ];
 
@@ -150,12 +167,18 @@ async fn test_9_2_ollama_autodiscover_and_sync() {
     drop(writer);
 
     let reader = engine.db().reader().expect("reader failed");
-    let catalog = providers_repo::list_providers_with_models(&reader)
-        .expect("Failed to list catalog");
+    let catalog =
+        providers_repo::list_providers_with_models(&reader).expect("Failed to list catalog");
     let ollama = catalog.iter().find(|p| p.id == "ollama").unwrap();
 
-    let has_mistral = ollama.models.iter().any(|m| m.model_identifier == "mistral:7b");
-    let has_phi = ollama.models.iter().any(|m| m.model_identifier == "phi3:mini");
+    let has_mistral = ollama
+        .models
+        .iter()
+        .any(|m| m.model_identifier == "mistral:7b");
+    let has_phi = ollama
+        .models
+        .iter()
+        .any(|m| m.model_identifier == "phi3:mini");
     assert!(has_mistral, "Synced mistral model must be present");
     assert!(has_phi, "Synced phi3 model must be present");
 }
@@ -197,7 +220,9 @@ async fn test_9_3_frictionless_capture_invariant() {
 
             // Verify background attachment to matching project
             let mut link_stmt = reader
-                .prepare("SELECT project_id, link_origin FROM project_artifacts WHERE artifact_id = ?1;")
+                .prepare(
+                    "SELECT project_id, link_origin FROM project_artifacts WHERE artifact_id = ?1;",
+                )
                 .expect("link prepare failed");
             let linked: (String, String) = link_stmt
                 .query_row([&artifact_id], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -225,8 +250,14 @@ async fn test_9_4_plan_mode_structured_breakdown() {
     match outcome {
         RouteOutcome::StructuredPreview(preview) => {
             assert_eq!(preview.mode, OperationalMode::Plan);
-            assert!(preview.identified_phases.len() >= 3, "Must have >= 3 phases");
-            assert!(preview.open_questions.len() >= 2, "Must have >= 2 questions");
+            assert!(
+                preview.identified_phases.len() >= 3,
+                "Must have >= 3 phases"
+            );
+            assert!(
+                preview.open_questions.len() >= 2,
+                "Must have >= 2 questions"
+            );
 
             let has_create_proj = preview
                 .proposed_actions
@@ -355,7 +386,10 @@ async fn test_9_5_project_and_page_reversibility() {
             |r| r.get(0),
         )
         .expect("Link count query failed");
-    assert_eq!(active_link_count, 0, "Attachment must be detached upon revert");
+    assert_eq!(
+        active_link_count, 0,
+        "Attachment must be detached upon revert"
+    );
 
     let detached_at: Option<i64> = reader4
         .query_row(
@@ -364,7 +398,10 @@ async fn test_9_5_project_and_page_reversibility() {
             |r| r.get(0),
         )
         .expect("Detached at query failed");
-    assert!(detached_at.is_some(), "Attachment must have detached_at timestamp set");
+    assert!(
+        detached_at.is_some(),
+        "Attachment must have detached_at timestamp set"
+    );
 }
 
 #[tokio::test]
@@ -381,19 +418,17 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
         base_url: "https://api.groq.com/openai/v1".to_string(),
         has_api_key: true,
         is_enabled: true,
-        models: vec![
-            ProviderModelEntry {
-                id: "groq:llama-3.3-70b-versatile".to_string(),
-                provider_id: "groq".to_string(),
-                model_identifier: "llama-3.3-70b-versatile".to_string(),
-                display_name: "Llama 3.3 70B (Groq)".to_string(),
-                context_window: 128000,
-                supports_structured_output: true,
-                is_enabled: true,
-                is_default: false,
-                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
-            },
-        ],
+        models: vec![ProviderModelEntry {
+            id: "groq:llama-3.3-70b-versatile".to_string(),
+            provider_id: "groq".to_string(),
+            model_identifier: "llama-3.3-70b-versatile".to_string(),
+            display_name: "Llama 3.3 70B (Groq)".to_string(),
+            context_window: 128000,
+            supports_structured_output: true,
+            is_enabled: true,
+            is_default: false,
+            web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
+        }],
     };
     providers_repo::upsert_provider(&writer, &groq_provider, Some("gsk_test"), clock.now_ms())
         .expect("Failed to upsert groq");
@@ -405,22 +440,25 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
         base_url: "https://api.anthropic.com/v1".to_string(),
         has_api_key: true,
         is_enabled: true,
-        models: vec![
-            ProviderModelEntry {
-                id: "anthropic:claude-3-7-sonnet".to_string(),
-                provider_id: "anthropic".to_string(),
-                model_identifier: "claude-3-7-sonnet-20250219".to_string(),
-                display_name: "Claude 3.7 Sonnet".to_string(),
-                context_window: 200000,
-                supports_structured_output: true,
-                is_enabled: true,
-                is_default: false,
-                web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
-            },
-        ],
+        models: vec![ProviderModelEntry {
+            id: "anthropic:claude-3-7-sonnet".to_string(),
+            provider_id: "anthropic".to_string(),
+            model_identifier: "claude-3-7-sonnet-20250219".to_string(),
+            display_name: "Claude 3.7 Sonnet".to_string(),
+            context_window: 200000,
+            supports_structured_output: true,
+            is_enabled: true,
+            is_default: false,
+            web_search_capability: sthira_core::llm::models::WebSearchCapability::AgenticToolCall,
+        }],
     };
-    providers_repo::upsert_provider(&writer, &anthropic_provider, Some("sk-ant-test"), clock.now_ms())
-        .expect("Failed to upsert anthropic");
+    providers_repo::upsert_provider(
+        &writer,
+        &anthropic_provider,
+        Some("sk-ant-test"),
+        clock.now_ms(),
+    )
+    .expect("Failed to upsert anthropic");
     drop(writer);
 
     let reader = engine.db().reader().expect("reader failed");
@@ -433,19 +471,20 @@ async fn test_9_6_multi_provider_dispatch_resolution() {
     assert_eq!(res_default.model_identifier, "llama3.2:latest");
 
     // 2. Groq resolution
-    let res_groq = resolve_model_provider(&reader, Some("groq:llama-3.3-70b-versatile"), engine.model())
-        .expect("Resolve groq model failed");
+    let res_groq = resolve_model_provider(
+        &reader,
+        Some("groq:llama-3.3-70b-versatile"),
+        engine.model(),
+    )
+    .expect("Resolve groq model failed");
     assert_eq!(res_groq.provider_id, "groq");
     assert_eq!(res_groq.model_id, "groq:llama-3.3-70b-versatile");
     assert_eq!(res_groq.model_identifier, "llama-3.3-70b-versatile");
 
     // 3. Anthropic resolution
-    let res_anthropic = resolve_model_provider(
-        &reader,
-        Some("anthropic:claude-3-7-sonnet"),
-        engine.model(),
-    )
-    .expect("Resolve anthropic model failed");
+    let res_anthropic =
+        resolve_model_provider(&reader, Some("anthropic:claude-3-7-sonnet"), engine.model())
+            .expect("Resolve anthropic model failed");
     assert_eq!(res_anthropic.provider_id, "anthropic");
     assert_eq!(res_anthropic.model_id, "anthropic:claude-3-7-sonnet");
     assert_eq!(res_anthropic.model_identifier, "claude-3-7-sonnet-20250219");

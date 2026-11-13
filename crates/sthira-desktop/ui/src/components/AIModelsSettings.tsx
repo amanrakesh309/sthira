@@ -125,7 +125,7 @@ export function AIModelsSettings({ providers, loading, reload, onCatalogChanged 
   return <div className="ai-models-page">
     <div className="ai-section-heading"><div><h3 className="settings-section-title">AI &amp; Models</h3><p className="settings-section-sub">Choose a model for your workspace. Connect more when you need them.</p></div>
       {!adding && providers.length > 0 && <button type="button" className="settings-btn-secondary" onClick={() => setAdding(true)}><Plus size={16} />Add connection</button>}</div>
-    {message && <p className="ai-feedback" role="status"><Check size={15} />{message}</p>}
+    {message && <p className="ai-feedback"><Check size={15} aria-hidden="true" /><span role="status">{message}</span></p>}
     {error && <p className="ai-error" role="alert">{error}</p>}
     {loading && !providers.length ? <p role="status" className="ai-helper">Loading connections…</p> : <>
       {!providers.length && !adding && <div className="ai-empty-state"><span className="ai-empty-icon"><Server size={24} /></span><h4>Set up AI when you’re ready</h4><p>Connect Ollama, LM Studio, or another AI service.<br />Your notes work without an AI connection.</p><button type="button" className="settings-btn-primary" onClick={() => setAdding(true)}>Set up AI</button></div>}

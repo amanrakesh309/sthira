@@ -44,8 +44,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
   const alive = useRef(true);
   const navigationKey = useRef('');
   const current = trail[trail.length - 1]?.entity || entity;
-  const currentTitle = detail?.entity.title || trail[trail.length - 1]?.title || title;
   const preview = trail.length > 0;
+  const currentTitle = preview
+    ? detail?.entity.title || trail[trail.length - 1]?.title || title
+    : title || detail?.entity.title || 'Untitled page';
   navigationKey.current = `${current.kind}:${current.id}`;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
@@ -185,7 +187,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
         <p>{preview ? detail?.entity.type_label || 'Reference' : 'Follow a connection without leaving your work.'}</p>
         {preview && detail && onOpenFull && <button type="button" className="connection-open-full" onClick={() => onOpenFull(detail.entity)}>Open in workspace<ArrowUpRight size={14} /></button>}
       </div>
-      {loading ? <div className="connection-state" role="status"><Loader2 size={18} className="animate-spin" />Loading connections…</div> : error ? <div className="connection-state" role="alert"><p>{error}</p><button type="button" onClick={() => setRefresh((value) => value + 1)}>Try again</button></div> : <>
+      {loading ? <div className="connection-state"><Loader2 size={18} className="animate-spin" aria-hidden="true" /><span role="status">Loading connections…</span></div> : error ? <div className="connection-state"><p role="alert">{error}</p><button type="button" onClick={() => setRefresh((value) => value + 1)}>Try again</button></div> : <>
         {preview && detail && <section className="connection-document" aria-label="Reference content">
           {detail.object_instance && <dl className="connection-properties" aria-label="Object properties">{Object.entries(detail.object_instance.properties).map(([key, value]) => <div key={key}><dt>{detail.object_type?.schema.find((field) => field.key === key)?.label || key}</dt><dd>{value == null || value === '' ? 'Empty' : typeof value === 'boolean' ? value ? 'Yes' : 'No' : Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>}
           {detail.entity.kind === 'project' ? <>
@@ -195,13 +197,13 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
           </> : detail.content_md.trim() ? <RichDocumentRenderer content={detail.content_md} documentTitle={detail.entity.title} className="focus-prose connection-prose" onOpenEntity={(target) => open(target)} /> : <p className="connection-muted">This page is empty.</p>}
         </section>}
         {actionError && <p className="connection-error" role="alert">{actionError}</p>}
-        {removed && <div className="connection-notice" role="status"><span>Connection removed.</span><button type="button" disabled={busy} onClick={undo}>Undo</button></div>}
+        {removed && <div className="connection-notice"><span role="status">Connection removed.</span><button type="button" disabled={busy} onClick={undo}>Undo</button></div>}
         <button type="button" className="connection-add" ref={addButton} disabled={busy} onClick={() => { setPicker(true); setActionError(null); }} aria-expanded={picker}><Plus size={16} />Link an item</button>
         {picker && <section className="connection-picker" aria-label="Link an item">
           <div className="connection-picker-title"><h3>Find a connection</h3><button type="button" className="focus-icon-button" aria-label="Cancel linking" disabled={busy} onClick={closePicker}><X size={16} /></button></div>
           <label className="connection-search"><Search size={16} /><input ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Pages, projects, objects…" aria-label="Search connection targets" /></label>
           <p className="connection-muted">Search by title or object type. Showing up to 60 items.</p>
-          {searching ? <p className="connection-muted" role="status">Searching…</p> : searchError ? <div role="alert"><p className="connection-error">{searchError}</p><button type="button" onClick={() => setRefresh((value) => value + 1)}>Try again</button></div> : available.length === 0 ? <p className="connection-muted">No matching items. Try another title.</p> : <ul className="connection-results">{available.map((target) => {
+          {searching ? <p className="connection-muted" role="status">Searching…</p> : searchError ? <div><p role="alert" className="connection-error">{searchError}</p><button type="button" onClick={() => setRefresh((value) => value + 1)}>Try again</button></div> : available.length === 0 ? <p className="connection-muted">No matching items. Try another title.</p> : <ul className="connection-results">{available.map((target) => {
             const linked = outgoing.some((link) => sameEntity(link.target, target));
             return <li key={`${target.kind}-${target.id}`}><button type="button" disabled={busy || linked} onClick={() => add(target, false)} aria-label={linked ? `${target.title} already linked` : `Link ${target.title}`}>
               {target.kind === 'project' ? <Folder size={16} /> : <FileText size={16} />}<span><strong>{target.title}</strong><small>{target.type_label}</small></span>{linked ? <Check size={15} /> : <Plus size={15} />}

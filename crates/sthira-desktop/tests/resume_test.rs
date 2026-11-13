@@ -288,8 +288,10 @@ async fn unavailable_explicit_model_and_absent_local_pack_remain_factual() {
             .mode,
         "factual"
     );
-    let mut preferences = ResumePreferences::default();
-    preferences.model_mode = "local".into();
+    let preferences = ResumePreferences {
+        model_mode: "local".into(),
+        ..Default::default()
+    };
     save_settings(
         &engine,
         ResumeSettings {
@@ -306,8 +308,10 @@ async fn unavailable_explicit_model_and_absent_local_pack_remain_factual() {
         .notice
         .unwrap()
         .contains("Download"));
-    let mut invalid = ResumePreferences::default();
-    invalid.model_id = Some("removed".into());
+    let invalid = ResumePreferences {
+        model_id: Some("removed".into()),
+        ..Default::default()
+    };
     assert!(save_settings(
         &engine,
         ResumeSettings {
@@ -358,10 +362,12 @@ fn settings_bound_sources_persist_and_never_rewrite_documents() {
     let temp = tempfile::tempdir().unwrap();
     let engine = open(temp.path());
     let (pid, aid) = project(&engine);
-    let mut preferences = ResumePreferences::default();
-    preferences.include_tasks = false;
-    preferences.include_excerpts = false;
-    preferences.max_sources = 2;
+    let mut preferences = ResumePreferences {
+        include_tasks: false,
+        include_excerpts: false,
+        max_sources: 2,
+        ..Default::default()
+    };
     let packet = engine.prepare_resume(&pid, &preferences).unwrap();
     assert!(packet.sources.is_empty());
     save_settings(
@@ -537,8 +543,10 @@ async fn real_local_pack_download_and_inference_smoke() {
     let (pid, _) = project(&engine);
     assert!(!resume_pack::status(&engine).unwrap().ready);
     assert!(resume_pack::install(&engine).await.unwrap().ready);
-    let mut preferences = ResumePreferences::default();
-    preferences.model_mode = "local".into();
+    let preferences = ResumePreferences {
+        model_mode: "local".into(),
+        ..Default::default()
+    };
     save_settings(
         &engine,
         ResumeSettings {

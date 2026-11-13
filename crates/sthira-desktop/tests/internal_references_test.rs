@@ -71,11 +71,33 @@ fn internal_reference_urls_resolve_exact_saved_identity_and_remain_searchable_af
         assert_eq!(results[0].id, note.id);
         assert_ne!(results[0].id, other.id);
         assert_ne!(results[0].id, report.id);
-        assert!(results[0].project_id.is_some());
+        // Shared across p and q: search resolves exact identity without fabricating an arbitrary single parent.
+        assert_eq!(results[0].project_id, None);
         let targets = handle_search_connection_targets(&engine, query.clone()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, note.id);
+        assert_eq!(targets[0].project_id, None);
     }
+    // Single-parent notes retain their unambiguous project_id in search/connection resolution.
+    let single_note = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Single Context Reference"),
+            "Single project note body.",
+            None,
+        )
+        .unwrap();
+    engine
+        .attach_artifact(&p.id, &single_note.id, "user_explicit", None)
+        .unwrap();
+    let single_uri = format!("sthira://artifact/{}", single_note.id);
+    let single_results = handle_search_all(&engine, single_uri.clone()).unwrap();
+    assert_eq!(single_results.len(), 1);
+    assert_eq!(single_results[0].project_id.as_deref(), Some(p.id.as_str()));
+    let single_targets = handle_search_connection_targets(&engine, single_uri).unwrap();
+    assert_eq!(single_targets.len(), 1);
+    assert_eq!(single_targets[0].project_id.as_deref(), Some(p.id.as_str()));
     engine
         .db()
         .writer()

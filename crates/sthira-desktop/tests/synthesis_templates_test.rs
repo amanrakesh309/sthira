@@ -103,11 +103,20 @@ impl TemplateFixture {
                 });
             }
         });
-        Self { base, prompts, task }
+        Self {
+            base,
+            prompts,
+            task,
+        }
     }
 
     fn last_prompt(&self) -> String {
-        self.prompts.lock().unwrap().last().cloned().unwrap_or_default()
+        self.prompts
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -121,7 +130,13 @@ fn setup_test_engine(fixture_base: &str) -> (tempfile::TempDir, Arc<Engine>) {
     let model = Arc::new(DeterministicFakeModel::new("test-unused").with_panic_on_call());
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_dir, Arc::clone(&clock) as _, Arc::clone(&model) as _).unwrap(),
+        Engine::open(
+            &db_path,
+            &vault_dir,
+            Arc::clone(&clock) as _,
+            Arc::clone(&model) as _,
+        )
+        .unwrap(),
     );
 
     engine.db().writer().execute_batch(&format!(
@@ -129,8 +144,16 @@ fn setup_test_engine(fixture_base: &str) -> (tempfile::TempDir, Arc<Engine>) {
         INSERT INTO provider_models(id,provider_id,model_identifier,display_name,is_enabled,is_default,created_at) VALUES('fixture-model','fixture','fixture-model','Fixture model',1,1,0);"
     )).unwrap();
     for workflow in ["plan", "draft"] {
-        sthira_desktop::workflow_settings::save_workflow_setting(&engine, workflow,
-            sthira_desktop::workflow_settings::WorkflowSetting { enabled: true, model_id: Some("fixture-model".into()), templates_enabled: workflow == "plan" }).unwrap();
+        sthira_desktop::workflow_settings::save_workflow_setting(
+            &engine,
+            workflow,
+            sthira_desktop::workflow_settings::WorkflowSetting {
+                enabled: true,
+                model_id: Some("fixture-model".into()),
+                templates_enabled: workflow == "plan",
+            },
+        )
+        .unwrap();
     }
     (tmp, engine)
 }
@@ -152,15 +175,23 @@ async fn test_synthesis_templates_seeding_and_filtering() {
     // 2. Filter by target_mode = "research"
     let research_templates = handle_list_synthesis_templates(&engine, Some("research".to_string()))
         .expect("Listing research templates must succeed");
-    assert!(!research_templates.is_empty(), "Must have research templates");
+    assert!(
+        !research_templates.is_empty(),
+        "Must have research templates"
+    );
     for t in &research_templates {
         assert_eq!(t.target_mode, "research");
     }
     let default_research = research_templates.iter().find(|t| t.is_default);
-    assert!(default_research.is_some(), "Default research template must exist");
+    assert!(
+        default_research.is_some(),
+        "Default research template must exist"
+    );
     let def_res = default_research.unwrap();
     assert_eq!(def_res.name, "Comparative Tech Evaluation");
-    assert!(def_res.template_skeleton_md.contains("## Comparison Matrix"));
+    assert!(def_res
+        .template_skeleton_md
+        .contains("## Comparison Matrix"));
 
     // 3. Filter by target_mode = "plan"
     let plan_templates = handle_list_synthesis_templates(&engine, Some("plan".to_string()))
@@ -208,7 +239,8 @@ async fn test_derive_artifact_with_template_skeleton_injection() {
     // Outbound prompt assertion: verify the actual template skeleton and directive reached the provider
     let outbound_prompt = fixture.last_prompt();
     assert!(
-        outbound_prompt.contains("Synthesize strictly into this markdown skeleton preserving all headers:"),
+        outbound_prompt
+            .contains("Synthesize strictly into this markdown skeleton preserving all headers:"),
         "Outbound prompt must include template synthesis directive"
     );
     assert!(
@@ -249,15 +281,21 @@ async fn test_derive_artifact_with_template_skeleton_injection() {
         "Derived plan must preserve template skeleton header: Scope & Objectives"
     );
     assert!(
-        derived_art.content_md.contains("## Phase 1: Foundation & Core Setup"),
+        derived_art
+            .content_md
+            .contains("## Phase 1: Foundation & Core Setup"),
         "Derived plan must preserve template skeleton header: Phase 1"
     );
     assert!(
-        derived_art.content_md.contains("## Phase 2: Feature Implementation"),
+        derived_art
+            .content_md
+            .contains("## Phase 2: Feature Implementation"),
         "Derived plan must preserve template skeleton header: Phase 2"
     );
     assert!(
-        derived_art.content_md.contains("## Open Decisions & Trade-offs"),
+        derived_art
+            .content_md
+            .contains("## Open Decisions & Trade-offs"),
         "Derived plan must preserve template skeleton header: Open Decisions & Trade-offs"
     );
 }
@@ -302,7 +340,8 @@ async fn test_derive_artifact_with_disabled_template_omits_skeleton() {
 
     let outbound_prompt = fixture.last_prompt();
     assert!(
-        !outbound_prompt.contains("Synthesize strictly into this markdown skeleton preserving all headers:"),
+        !outbound_prompt
+            .contains("Synthesize strictly into this markdown skeleton preserving all headers:"),
         "Outbound prompt must NOT contain template skeleton directive when templates are disabled"
     );
     assert!(
@@ -338,15 +377,10 @@ async fn test_refine_artifact_snapshots_and_reversibility() {
         .expect("Create base note");
 
     let critique = "Incorporate IVFFlat recall vs latency tradeoffs and memory boundaries.";
-    let refined = handle_refine_artifact(
-        &engine,
-        base.id.clone(),
-        critique.to_string(),
-        None,
-        false,
-    )
-    .await
-    .expect("Refining artifact must succeed");
+    let refined =
+        handle_refine_artifact(&engine, base.id.clone(), critique.to_string(), None, false)
+            .await
+            .expect("Refining artifact must succeed");
 
     assert!(refined.contains(critique));
 

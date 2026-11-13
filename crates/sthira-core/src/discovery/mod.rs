@@ -86,7 +86,10 @@ pub async fn embed_and_store_artifact(
     }
     drop(reader);
 
-    let vectors = engine.model().embed(std::slice::from_ref(&art.content_md)).await?;
+    let vectors = engine
+        .model()
+        .embed(std::slice::from_ref(&art.content_md))
+        .await?;
     let embedding = vectors
         .into_iter()
         .next()
@@ -309,7 +312,8 @@ pub async fn run_discovery(
 
         // Check for contradiction vs scope difference
         let cand_art = engine.get_artifact(&cand.artifact_id)?;
-        let analysis = analyze_contradiction(engine, &query_art.content_md, &cand_art.content_md).await?;
+        let analysis =
+            analyze_contradiction(engine, &query_art.content_md, &cand_art.content_md).await?;
 
         let kind = if analysis.is_true_contradiction && !analysis.scope_difference {
             "contradiction"
@@ -363,13 +367,12 @@ pub async fn analyze_contradiction(
         .generate_json(&schema_val, system_prompt, &user_prompt)
         .await?;
 
-    let analysis: ContradictionAnalysis = serde_json::from_str(&json_resp).unwrap_or(
-        ContradictionAnalysis {
+    let analysis: ContradictionAnalysis =
+        serde_json::from_str(&json_resp).unwrap_or(ContradictionAnalysis {
             is_true_contradiction: false,
             scope_difference: false,
             explanation: "No contradiction detected".to_string(),
-        },
-    );
+        });
 
     Ok(analysis)
 }
@@ -414,10 +417,7 @@ pub fn undismiss_proposal(engine: &Engine, proposal_id: &str) -> Result<(), Core
     Ok(())
 }
 
-pub fn apply_discovery_link(
-    engine: &Engine,
-    proposal_id: &str,
-) -> Result<String, CoreError> {
+pub fn apply_discovery_link(engine: &Engine, proposal_id: &str) -> Result<String, CoreError> {
     let now_ms = engine.clock().now_ms();
     let writer = engine.db().writer();
 

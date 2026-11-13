@@ -3,8 +3,7 @@ use rusqlite::params;
 use std::sync::Arc;
 use std::time::Duration;
 use sthira_core::{
-    Actor, ArtifactType, Authorship, CanvasItemKind, Engine, EventType, Materiality,
-    IDLE_GAP_MS,
+    Actor, ArtifactType, Authorship, CanvasItemKind, Engine, EventType, Materiality, IDLE_GAP_MS,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
@@ -377,9 +376,7 @@ fn test_1_4_changeset_reversibility_and_append_only_audit() {
     assert!(!revert_cs_id.is_empty());
 
     // Assert art_1.content_hash matches pre-change state
-    let reverted_art = engine
-        .get_artifact(&art_1.id)
-        .expect("get artifact failed");
+    let reverted_art = engine.get_artifact(&art_1.id).expect("get artifact failed");
     assert_eq!(reverted_art.content_hash, original_hash);
     assert_eq!(reverted_art.content_md, art_1.content_md);
 
@@ -409,10 +406,7 @@ fn test_1_4_changeset_reversibility_and_append_only_audit() {
 
     // Assert raw UPDATE / DELETE on session_events fails via trigger
     let writer = engine.db().writer();
-    let update_res = writer.execute(
-        "UPDATE session_events SET actor = 'ai' WHERE seq = 1;",
-        [],
-    );
+    let update_res = writer.execute("UPDATE session_events SET actor = 'ai' WHERE seq = 1;", []);
     assert!(
         update_res.is_err(),
         "Raw UPDATE on session_events must be aborted by trigger"
@@ -619,12 +613,7 @@ fn test_1_6_vault_reconcile_matrix() {
 
     // Edit in DB
     engine
-        .update_artifact(
-            &art_id,
-            "DB branch concurrent edit.",
-            Actor::User,
-            None,
-        )
+        .update_artifact(&art_id, "DB branch concurrent edit.", Actor::User, None)
         .expect("concurrent db update failed");
 
     let res_c = engine.reconcile_vault().expect("reconcile c failed");
@@ -637,11 +626,15 @@ fn test_1_6_vault_reconcile_matrix() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(".conflict-") {
             conflict_file_found = true;
-            let conflict_text = std::fs::read_to_string(entry.path()).expect("read conflict failed");
+            let conflict_text =
+                std::fs::read_to_string(entry.path()).expect("read conflict failed");
             assert!(conflict_text.contains("Disk branch concurrent edit."));
         }
     }
-    assert!(conflict_file_found, "Conflict backup file must be created on concurrent edits");
+    assert!(
+        conflict_file_found,
+        "Conflict backup file must be created on concurrent edits"
+    );
 
     // (d) File rename with preserved frontmatter ID -> updates file_path without creating duplicate
     clock.advance(Duration::from_secs(10));
@@ -710,7 +703,10 @@ fn test_1_6_vault_reconcile_matrix() {
             |r| r.get(0),
         )
         .expect("query meta in db failed");
-    assert_eq!(meta_in_db, 0, ".sthira_meta files must never be ingested into artifacts");
+    assert_eq!(
+        meta_in_db, 0,
+        ".sthira_meta files must never be ingested into artifacts"
+    );
 }
 
 #[test]

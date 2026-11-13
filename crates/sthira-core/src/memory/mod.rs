@@ -79,12 +79,14 @@ pub fn compute_basis_fingerprint(db: &Db, project_id: &str) -> Result<String, Co
         "SELECT a.id, a.content_hash, a.is_unfinished_draft
          FROM project_artifacts pa
          JOIN artifacts a ON pa.artifact_id = a.id
-         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL
+         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL
          ORDER BY a.id ASC;",
     )?;
 
     let artifacts: Vec<(String, String, i64)> = stmt
-        .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map(params![project_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     drop(stmt);
@@ -94,12 +96,15 @@ pub fn compute_basis_fingerprint(db: &Db, project_id: &str) -> Result<String, Co
         "SELECT n.id, n.updated_at, n.lifecycle, n.review_state
          FROM project_artifacts pa
          JOIN epistemic_nodes n ON pa.artifact_id = n.artifact_id
-         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL
+         JOIN artifacts a ON a.id = n.artifact_id
+         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL
          ORDER BY n.id ASC;",
     )?;
 
     let nodes: Vec<(String, i64, String, String)> = stmt
-        .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![project_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     drop(stmt);
@@ -142,7 +147,8 @@ pub fn ungrounded_tokens(prose: &str, cited_quotes: &[&str]) -> Vec<String> {
         }
 
         let is_digit_sequence = clean.chars().any(|c| c.is_ascii_digit());
-        let is_capitalized = clean.chars().next().is_some_and(|c| c.is_uppercase()) && clean.len() > 1;
+        let is_capitalized =
+            clean.chars().next().is_some_and(|c| c.is_uppercase()) && clean.len() > 1;
 
         if is_digit_sequence || is_capitalized {
             let lower_clean = clean.to_lowercase();
@@ -177,7 +183,7 @@ impl Engine {
         let now_ms = self.clock().now_ms();
 
         let last_substantive: i64 = reader.query_row(
-            "SELECT last_substantive_at FROM projects WHERE id = ?1;",
+            "SELECT last_substantive_at FROM projects WHERE id = ?1 AND deleted_at IS NULL;",
             params![project_id],
             |r| r.get(0),
         )?;
@@ -193,7 +199,7 @@ impl Engine {
             "SELECT EXISTS(
                 SELECT 1 FROM project_artifacts pa
                 JOIN artifacts a ON pa.artifact_id = a.id
-                WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.is_unfinished_draft = 1
+                WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL AND a.is_unfinished_draft = 1
             );",
             params![project_id],
             |r| r.get(0),
@@ -265,7 +271,7 @@ impl Engine {
             "SELECT a.id, a.type, a.authorship, a.title, a.content_md, a.is_unfinished_draft
              FROM project_artifacts pa
              JOIN artifacts a ON pa.artifact_id = a.id
-             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL;",
+             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL;",
         )?;
 
         let attached_artifacts: Vec<Artifact> = art_stmt
@@ -318,7 +324,8 @@ impl Engine {
             "SELECT n.id, n.artifact_id, n.node_type, n.origin, n.statement, n.quote, n.first_seen_at
              FROM project_artifacts pa
              JOIN epistemic_nodes n ON pa.artifact_id = n.artifact_id
-             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND n.lifecycle = 'open';",
+             JOIN artifacts a ON a.id = n.artifact_id
+             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL AND n.lifecycle = 'open';",
         )?;
 
         let active_nodes: Vec<ActiveNodeRecord> = node_stmt
@@ -380,14 +387,22 @@ impl Engine {
             let d2 = &decisions[1];
             if d1.quote != d2.quote {
                 conflicting_decisions.push(BriefClaim {
-                    text: format!("Day {}: {}", d1.seen_at / (24 * 60 * 60 * 1000), d1.quote.as_deref().unwrap_or("")),
+                    text: format!(
+                        "Day {}: {}",
+                        d1.seen_at / (24 * 60 * 60 * 1000),
+                        d1.quote.as_deref().unwrap_or("")
+                    ),
                     origin: EpistemicOrigin::UserRecorded,
                     rendering: ClaimRendering::DeterministicTemplate,
                     evidence_node_ids: vec![d1.node_id.clone()],
                     artifact_ids: vec![d1.artifact_id.clone()],
                 });
                 conflicting_decisions.push(BriefClaim {
-                    text: format!("Day {}: {}", d2.seen_at / (24 * 60 * 60 * 1000), d2.quote.as_deref().unwrap_or("")),
+                    text: format!(
+                        "Day {}: {}",
+                        d2.seen_at / (24 * 60 * 60 * 1000),
+                        d2.quote.as_deref().unwrap_or("")
+                    ),
                     origin: EpistemicOrigin::UserRecorded,
                     rendering: ClaimRendering::DeterministicTemplate,
                     evidence_node_ids: vec![d2.node_id.clone()],
@@ -432,7 +447,9 @@ impl Engine {
 
         let mut artifact_scores: HashMap<String, f64> = HashMap::new();
         let events: Vec<(Option<String>, String, String)> = evt_stmt
-            .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .query_map(params![project_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
         drop(evt_stmt);
@@ -455,9 +472,15 @@ impl Engine {
         let (primary_art_id, continuation_point) = if let Some(draft) = unfinished_draft {
             (
                 Some(draft.id.clone()),
-                Some(format!("Unfinished draft in {}: resume mid-sentence thought", draft.title.as_deref().unwrap_or("note"))),
+                Some(format!(
+                    "Unfinished draft in {}: resume mid-sentence thought",
+                    draft.title.as_deref().unwrap_or("note")
+                )),
             )
-        } else if let Some((best_aid, _)) = artifact_scores.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()) {
+        } else if let Some((best_aid, _)) = artifact_scores
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        {
             let art_title = attached_artifacts
                 .iter()
                 .find(|a| &a.id == best_aid)
@@ -477,8 +500,14 @@ impl Engine {
         };
 
         // Sparse evidence fallback copy
-        let sources_count = attached_artifacts.iter().filter(|a| a.artifact_type == ArtifactType::Source).count();
-        let notes_count = attached_artifacts.iter().filter(|a| a.artifact_type == ArtifactType::Note).count();
+        let sources_count = attached_artifacts
+            .iter()
+            .filter(|a| a.artifact_type == ArtifactType::Source)
+            .count();
+        let notes_count = attached_artifacts
+            .iter()
+            .filter(|a| a.artifact_type == ArtifactType::Note)
+            .count();
 
         if sources_count > 0 && notes_count == 0 {
             let topic = &project.name;
@@ -495,7 +524,10 @@ impl Engine {
             });
         } else if sources_count == 0 && notes_count == 0 {
             recent_progress.push(BriefClaim {
-                text: format!("Purpose defined: {}. No notes or sources attached yet.", purpose_text),
+                text: format!(
+                    "Purpose defined: {}. No notes or sources attached yet.",
+                    purpose_text
+                ),
                 origin: EpistemicOrigin::UserRecorded,
                 rendering: ClaimRendering::DeterministicTemplate,
                 evidence_node_ids: Vec::new(),
@@ -566,11 +598,7 @@ impl Engine {
         Ok(brief)
     }
 
-    pub fn decide_proposal(
-        &self,
-        proposal_id: &str,
-        decision: &str,
-    ) -> Result<(), CoreError> {
+    pub fn decide_proposal(&self, proposal_id: &str, decision: &str) -> Result<(), CoreError> {
         let now_ms = self.clock().now_ms();
         let writer = self.db().writer();
 
@@ -635,7 +663,7 @@ impl Engine {
             "SELECT p.id, p.name, p.last_substantive_at, pp.purpose
              FROM projects p
              LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
-             WHERE p.status = 'active'
+             WHERE p.status = 'active' AND p.deleted_at IS NULL
              ORDER BY p.last_substantive_at DESC;",
         )?;
 
@@ -645,7 +673,9 @@ impl Engine {
                     project_id: r.get(0)?,
                     name: r.get(1)?,
                     last_substantive_at: r.get(2)?,
-                    purpose: r.get::<_, Option<String>>(3)?.unwrap_or_else(|| r.get(1).unwrap()),
+                    purpose: r
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| r.get(1).unwrap()),
                     continuation_point: None,
                 })
             })?
@@ -653,12 +683,17 @@ impl Engine {
             .collect();
         drop(proj_stmt);
 
-        // Loose captures: artifacts not attached to any project
+        // Loose captures: artifacts not attached to any active project
         let mut loose_stmt = reader.prepare(
             "SELECT id, type, authorship, title, content_md, source_url, content_hash, version, file_path, last_synced_hash, is_unfinished_draft, deleted_at, created_at, updated_at, derived_from_artifact_id, derivation_type
              FROM artifacts
              WHERE deleted_at IS NULL
-               AND id NOT IN (SELECT artifact_id FROM project_artifacts WHERE detached_at IS NULL)
+               AND id NOT IN (
+                   SELECT pa.artifact_id
+                   FROM project_artifacts pa
+                   JOIN projects p ON p.id = pa.project_id
+                   WHERE pa.detached_at IS NULL AND p.deleted_at IS NULL
+               )
              ORDER BY created_at DESC;",
         )?;
 
@@ -726,18 +761,29 @@ impl Engine {
         let mirror_rel_path = ".sthira_meta/memory_mirrors/global_working_memory.md";
         let now_ms = self.clock().now_ms();
 
-        let mut mirror_md = String::from("# Sthira Global Working Memory\n\n## Active Project Threads\n");
+        let mut mirror_md =
+            String::from("# Sthira Global Working Memory\n\n## Active Project Threads\n");
         for t in &state.threads {
-            mirror_md.push_str(&format!("- **{}** (ID: {}): {}\n", t.name, t.project_id, t.purpose));
+            mirror_md.push_str(&format!(
+                "- **{}** (ID: {}): {}\n",
+                t.name, t.project_id, t.purpose
+            ));
         }
-        mirror_md.push_str(&format!("\n## Loose Captures ({})\n", state.loose_captures.len()));
+        mirror_md.push_str(&format!(
+            "\n## Loose Captures ({})\n",
+            state.loose_captures.len()
+        ));
         for c in &state.loose_captures {
             let title = c.title.as_deref().unwrap_or("Untitled capture");
             mirror_md.push_str(&format!("- **{}** (ID: {})\n", title, c.id));
         }
-        mirror_md.push_str(&format!("\n- Pending Proposals: {}\n", state.pending_proposals_count));
+        mirror_md.push_str(&format!(
+            "\n- Pending Proposals: {}\n",
+            state.pending_proposals_count
+        ));
 
-        let _ = mirror::export_global_memory_mirror(self.vault_dir(), &basis_fingerprint, &mirror_md);
+        let _ =
+            mirror::export_global_memory_mirror(self.vault_dir(), &basis_fingerprint, &mirror_md);
 
         let writer = self.db().writer();
         let _ = writer.execute(

@@ -200,4 +200,3 @@ pub fn delete_topic(conn: &Connection, topic_id: &str) -> Result<(), CoreError> 
     }
     Ok(())
 }
-

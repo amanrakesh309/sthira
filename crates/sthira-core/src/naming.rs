@@ -61,11 +61,7 @@ pub async fn suggest_with_policy(
     let user_prompt = serde_json::json!({"document": excerpt}).to_string();
     let gen_fut = tokio::time::timeout(
         policy.generation_budget,
-        model.generate_json(
-            &schema_val,
-            NAMING_PROMPT,
-            &user_prompt,
-        ),
+        model.generate_json(&schema_val, NAMING_PROMPT, &user_prompt),
     );
     let raw = match tokio::time::timeout(policy.workflow_deadline, gen_fut).await {
         Ok(Ok(Ok(raw_json))) => raw_json,
@@ -134,9 +130,10 @@ impl crate::Engine {
         }
         updated.content_md = crate::vault::normalize_content(&updated.content_md);
         updated.content_hash = crate::vault::compute_content_hash(&updated.content_md);
+        updated.last_synced_hash = Some(updated.content_hash.clone());
         updated.version += 1;
         updated.updated_at = self.clock().now_ms();
-        tx.execute("UPDATE artifacts SET title=?1,content_md=?2,content_hash=?3,version=?4,updated_at=?5 WHERE id=?6",params![updated.title,updated.content_md,updated.content_hash,updated.version,updated.updated_at,artifact_id]).map_err(|e|e.to_string())?;
+        tx.execute("UPDATE artifacts SET title=?1,content_md=?2,content_hash=?3,last_synced_hash=?3,version=?4,updated_at=?5 WHERE id=?6 AND deleted_at IS NULL",params![updated.title,updated.content_md,updated.content_hash,updated.version,updated.updated_at,artifact_id]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO artifact_revisions (id,artifact_id,version,content_md,content_hash,actor,created_at) VALUES (?1,?2,?3,?4,?5,'user',?6)",params![uuid::Uuid::new_v4().to_string(),artifact_id,updated.version,updated.content_md,updated.content_hash,updated.updated_at]).map_err(|e|e.to_string())?;
         self.log_event_tx(
             &tx,

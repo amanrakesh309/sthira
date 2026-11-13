@@ -160,8 +160,8 @@ pub fn clean_smart_title(raw: &str) -> String {
     if words.is_empty() {
         return String::new();
     }
-    if words.len() > 7 {
-        words.into_iter().take(6).collect::<Vec<&str>>().join(" ")
+    if words.len() > 8 {
+        words.into_iter().take(8).collect::<Vec<&str>>().join(" ")
     } else {
         words.join(" ")
     }
@@ -186,13 +186,13 @@ pub fn fallback_title_from_query(query: &str) -> String {
         .iter()
         .copied()
         .filter(|w| !STOP_WORDS.contains(&w.to_lowercase().as_str()))
-        .take(5)
+        .take(8)
         .collect();
 
     let chosen: Vec<&str> = if !key_words.is_empty() {
         key_words
     } else {
-        words.into_iter().take(5).collect()
+        words.into_iter().take(8).collect()
     };
 
     if chosen.is_empty() {
@@ -347,6 +347,35 @@ pub async fn execute_multi_query_research_with_capability(
     .await
 }
 
+fn format_partial_search_warning(
+    search_errors: &[crate::search::SearchError],
+    total_queries: usize,
+) -> String {
+    use crate::search::SearchErrorKind;
+    let mut seen_reasons = Vec::new();
+    for err in search_errors {
+        let label = match &err.kind {
+            SearchErrorKind::ChallengeDetected => "anti-bot challenge".to_string(),
+            SearchErrorKind::RateLimited => "rate-limited".to_string(),
+            SearchErrorKind::AuthenticationOrConfig => "authentication/config error".to_string(),
+            SearchErrorKind::Timeout => "timeout".to_string(),
+            SearchErrorKind::ConnectionFailed => "connection failed".to_string(),
+            SearchErrorKind::ProviderHttp(code) => format!("HTTP {code}"),
+            SearchErrorKind::MalformedOrUnrecognizedResponse => "unrecognized response".to_string(),
+            SearchErrorKind::ProviderDisabledOrUnknown => "provider disabled/unknown".to_string(),
+        };
+        if !seen_reasons.contains(&label) {
+            seen_reasons.push(label);
+        }
+    }
+    let failed = search_errors.len();
+    let noun = if failed == 1 { "query" } else { "queries" };
+    format!(
+        "Partial web search coverage: {failed} of {total_queries} search {noun} failed ({}); synthesized from remaining retrieved sources.",
+        seen_reasons.join(", ")
+    )
+}
+
 pub async fn execute_multi_query_research_with_template(
     engine: &Engine,
     inquiry: &str,
@@ -384,26 +413,49 @@ pub async fn execute_multi_query_research_with_template(
     // 2. Query search provider across all queries and deduplicate
     let mut all_results: Vec<SearchResultItem> = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
+    let mut search_errors = Vec::new();
+    let mut queries_attempted = 0usize;
 
     for q in &queries {
-        if let Ok(items) = search_provider.search(q, 3).await {
-            for item in items {
-                if !item.url.is_empty() && seen_urls.insert(item.url.clone()) {
-                    all_results.push(item);
+        queries_attempted += 1;
+        match search_provider.search(q, 3).await {
+            Ok(items) => {
+                for item in items {
+                    if !item.url.is_empty() && seen_urls.insert(item.url.clone()) {
+                        all_results.push(item);
+                    }
                 }
+            }
+            Err(e) => {
+                search_errors.push(e);
             }
         }
     }
 
     // Fallback if multi-query yielded zero: search directly with the raw inquiry
     if all_results.is_empty() {
-        if let Ok(items) = search_provider.search(inquiry, 4).await {
-            for item in items {
-                if !item.url.is_empty() && seen_urls.insert(item.url.clone()) {
-                    all_results.push(item);
+        queries_attempted += 1;
+        match search_provider.search(inquiry, 4).await {
+            Ok(items) => {
+                for item in items {
+                    if !item.url.is_empty() && seen_urls.insert(item.url.clone()) {
+                        all_results.push(item);
+                    }
                 }
             }
+            Err(e) => {
+                search_errors.push(e);
+            }
         }
+    }
+
+    if all_results.is_empty() {
+        if let Some(first_err) = search_errors.into_iter().next() {
+            return Err(CoreError::ExternalSearch(first_err));
+        }
+        return Err(CoreError::NotFound(
+            "Web search returned no results across all queries.".into(),
+        ));
     }
 
     // 3. Scrape top source URLs
@@ -414,28 +466,41 @@ pub async fn execute_multi_query_research_with_template(
         let res = scraper::scrape_and_clean_url(&item.url, Some(engine.db()), now_ms).await;
         match res {
             Ok(doc) => {
-                if !doc.content_md.trim().is_empty() {
+                let trimmed = doc.content_md.trim();
+                if trimmed.len() >= 40 && !scraper::is_blocked_cached_document(&doc.title, trimmed)
+                {
                     documents.push(doc);
-                }
-            }
-            Err(err) => {
-                // If scraping fails, synthesize minimal document from the search snippet
-                if !item.snippet.trim().is_empty() {
-                    documents.push(ScrapedWebDocument {
-                        url: item.url.clone(),
-                        title: item.title.clone(),
-                        content_md: format!("# {}\n\n{}", item.title, item.snippet),
-                        published_date: None,
-                    });
                 } else {
                     eprintln!(
-                        "[execute_multi_query_research] Scrape warning for {}: {}",
-                        item.url, err
+                        "[execute_multi_query_research] Page {} had insufficient or challenge content (len={})",
+                        item.url,
+                        trimmed.len()
                     );
                 }
             }
+            Err(err) => {
+                eprintln!(
+                    "[execute_multi_query_research] Scrape warning for {}: {}",
+                    item.url, err
+                );
+            }
         }
     }
+
+    if documents.is_empty() {
+        return Err(CoreError::NotFound(
+            "Web search returned no usable sources (all fetched pages were unreachable, empty, or blocked).".into(),
+        ));
+    }
+
+    let partial_warning = if !search_errors.is_empty() {
+        Some(format_partial_search_warning(
+            &search_errors,
+            queries_attempted,
+        ))
+    } else {
+        None
+    };
 
     // 4. Ground findings using VerifiedQuote::verify() against scraped text
     let mut findings = Vec::new();
@@ -537,6 +602,9 @@ pub async fn execute_multi_query_research_with_template(
             if documents.len() == 1 { "" } else { "s" }
         ),
     );
+    if let Some(ref warn) = partial_warning {
+        emit(&mut stages, "partial_search_failure", warn.clone());
+    }
     emit(
         &mut stages,
         "synthesizing",
@@ -574,11 +642,15 @@ pub async fn execute_multi_query_research_with_template(
     let mut md = format!("# {}\n\n", title);
     md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
     md.push_str(&format!(
-        "> **Evidence basis:** {} live web source{} · retrieved {}\n\n",
+        "> **Evidence basis:** {} live web source{} · retrieved {}\n",
         documents.len(),
         if documents.len() == 1 { "" } else { "s" },
         today
     ));
+    if let Some(ref warn) = partial_warning {
+        md.push_str(&format!("> **Partial coverage warning:** {warn}\n"));
+    }
+    md.push('\n');
 
     if !synthesis.synthesis.trim().is_empty() {
         md.push_str("## Synthesis\n");
@@ -640,9 +712,13 @@ pub async fn execute_multi_query_research_with_template(
         }
     }
 
+    let done_message = match &partial_warning {
+        Some(warn) => format!("Research complete with partial search coverage ({warn})"),
+        None => "Research complete.".to_string(),
+    };
     stages.push(ResearchStage {
         stage: "done".to_string(),
-        message: "Research complete.".to_string(),
+        message: done_message,
     });
 
     let search_status = if documents.is_empty() {
@@ -859,6 +935,17 @@ pub fn search_local_vault(
     inquiry: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, String)>, CoreError> {
+    search_local_vault_excluding(engine, inquiry, limit, None)
+}
+
+/// Searches the local vault for artifacts matching the inquiry while excluding an optional
+/// artifact ID (such as an active draft page being populated by research).
+pub fn search_local_vault_excluding(
+    engine: &Engine,
+    inquiry: &str,
+    limit: usize,
+    exclude_artifact_id: Option<&str>,
+) -> Result<Vec<(String, String, String)>, CoreError> {
     let keywords = inquiry_keywords(inquiry);
     if keywords.is_empty() {
         return Ok(Vec::new());
@@ -878,11 +965,20 @@ pub fn search_local_vault(
         bindings.push(format!("%{k}%"));
     }
 
+    let exclude_clause = if let Some(excluded) = exclude_artifact_id {
+        let param_idx = bindings.len() + 1;
+        bindings.push(excluded.to_string());
+        format!(" AND id <> ?{param_idx}")
+    } else {
+        String::new()
+    };
+
     let sql = format!(
         "SELECT id, COALESCE(title, 'Untitled'), content_md
          FROM artifacts
-         WHERE deleted_at IS NULL AND type = 'note' AND ({})
+         WHERE deleted_at IS NULL AND type = 'note'{} AND ({})
          LIMIT 64;",
+        exclude_clause,
         where_clauses.join(" OR ")
     );
 
@@ -898,6 +994,9 @@ pub fn search_local_vault(
     let mut scored: Vec<(usize, (String, String, String))> = Vec::new();
     for row in rows {
         let (id, title, content) = row?;
+        if exclude_artifact_id == Some(id.as_str()) {
+            continue;
+        }
         let score = calculate_relevance_score(inquiry, &title, &content);
         if score > 0 {
             scored.push((score, (id, title, content)));
@@ -913,10 +1012,11 @@ async fn execute_local_vault_research(
     engine: &Engine,
     inquiry: &str,
     limit_docs: usize,
+    exclude_artifact_id: Option<&str>,
     stages: &mut Vec<ResearchStage>,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
-    let hits = search_local_vault(engine, inquiry, limit_docs)?;
+    let hits = search_local_vault_excluding(engine, inquiry, limit_docs, exclude_artifact_id)?;
     let matching_vault_artifacts: Vec<String> = hits.iter().map(|(id, _, _)| id.clone()).collect();
 
     stages.push(ResearchStage {
@@ -1137,6 +1237,17 @@ pub async fn execute_research_with_capability(
     .await
 }
 
+pub struct ResearchRunOptions<'a> {
+    pub mode: WebSearchMode,
+    pub search_provider: Option<&'a dyn SearchProvider>,
+    pub provider_label: &'a str,
+    pub limit_docs: usize,
+    pub capability: Option<WebSearchCapability>,
+    pub template_id: Option<&'a str>,
+    pub exclude_artifact_id: Option<&'a str>,
+    pub on_stage: Option<&'a (dyn Fn(ResearchStage) + Send + Sync)>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_research_with_template(
     engine: &Engine,
@@ -1149,6 +1260,37 @@ pub async fn execute_research_with_template(
     template_id: Option<&str>,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
 ) -> Result<WebResearchResult, CoreError> {
+    execute_research_with_options(
+        engine,
+        inquiry,
+        ResearchRunOptions {
+            mode,
+            search_provider,
+            provider_label,
+            limit_docs,
+            capability,
+            template_id,
+            exclude_artifact_id: None,
+            on_stage,
+        },
+    )
+    .await
+}
+
+pub async fn execute_research_with_options(
+    engine: &Engine,
+    inquiry: &str,
+    options: ResearchRunOptions<'_>,
+) -> Result<WebResearchResult, CoreError> {
+    let mode = options.mode;
+    let search_provider = options.search_provider;
+    let provider_label = options.provider_label;
+    let limit_docs = options.limit_docs;
+    let capability = options.capability;
+    let template_id = options.template_id;
+    let exclude_artifact_id = options.exclude_artifact_id;
+    let on_stage = options.on_stage;
+
     let mut stages: Vec<ResearchStage> = Vec::new();
 
     let resolved_cap = capability.unwrap_or_else(|| {
@@ -1177,9 +1319,15 @@ pub async fn execute_research_with_template(
             cb(notice.clone());
         }
         stages.push(notice);
-        let mut res =
-            execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
-                .await?;
+        let mut res = execute_local_vault_research(
+            engine,
+            inquiry,
+            limit_docs,
+            exclude_artifact_id,
+            &mut stages,
+            on_stage,
+        )
+        .await?;
         res.search_status = "unsupported_model".to_string();
         return Ok(res);
     }
@@ -1189,7 +1337,7 @@ pub async fn execute_research_with_template(
         WebSearchMode::AlwaysSearch => true,
         WebSearchMode::Auto => {
             // Escalate to the web when the vault has thin coverage.
-            let coverage = search_local_vault(engine, inquiry, 8)
+            let coverage = search_local_vault_excluding(engine, inquiry, 8, exclude_artifact_id)
                 .map(|v| v.len())
                 .unwrap_or(0);
             coverage < 2
@@ -1208,9 +1356,15 @@ pub async fn execute_research_with_template(
             }
             stages.push(notice);
         }
-        let mut res =
-            execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
-                .await?;
+        let mut res = execute_local_vault_research(
+            engine,
+            inquiry,
+            limit_docs,
+            exclude_artifact_id,
+            &mut stages,
+            on_stage,
+        )
+        .await?;
         if mode != WebSearchMode::LocalVaultOnly {
             res.search_status = "web_search_failed".to_string();
         }
@@ -1218,8 +1372,15 @@ pub async fn execute_research_with_template(
     };
 
     if !should_search_web {
-        return execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
-            .await;
+        return execute_local_vault_research(
+            engine,
+            inquiry,
+            limit_docs,
+            exclude_artifact_id,
+            &mut stages,
+            on_stage,
+        )
+        .await;
     }
 
     // Wrap the caller's callback so the live "searching" banner names the concrete
@@ -1271,36 +1432,134 @@ pub async fn execute_research_with_template(
         }
         Err(CoreError::Model(error)) => Err(CoreError::Model(error)),
         Err(CoreError::Json(error)) => Err(CoreError::Json(error)),
-        _ => {
+        Err(CoreError::Request(error)) => Err(CoreError::Request(error)),
+        Err(err) => {
             // Web search provider failed, returned 0 results, or was unreachable.
+            let warn_msg = match &err {
+                CoreError::ExternalSearch(se) => match se.kind {
+                    crate::search::SearchErrorKind::ChallengeDetected => format!(
+                        "⚠️ Web search blocked by anti-bot challenge on {}; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::RateLimited => format!(
+                        "⚠️ Web search rate-limited by {}; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::AuthenticationOrConfig => format!(
+                        "⚠️ Web search configuration error for {}; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::Timeout => format!(
+                        "⚠️ Web search request to {} timed out; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::ConnectionFailed => format!(
+                        "⚠️ Failed to connect to {}; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::MalformedOrUnrecognizedResponse => format!(
+                        "⚠️ Web search returned unrecognized response from {}; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::ProviderDisabledOrUnknown => format!(
+                        "⚠️ Search provider {} is disabled or unknown; synthesized using local context.",
+                        provider_label
+                    ),
+                    crate::search::SearchErrorKind::ProviderHttp(code) => format!(
+                        "⚠️ Web search returned HTTP error {code} from {}; synthesized using local context.",
+                        provider_label
+                    ),
+                },
+                CoreError::NotFound(msg) if msg.contains("no usable sources") => {
+                    "⚠️ Web search found candidate results, but returned no usable sources (all fetched pages were unreachable, empty, or blocked); synthesized using local context."
+                        .to_string()
+                }
+                CoreError::NotFound(_) => {
+                    "⚠️ Web search returned no results; synthesized using local context."
+                        .to_string()
+                }
+                _ => format!(
+                    "⚠️ Web search failed on {}; synthesized using local context.",
+                    provider_label
+                ),
+            };
+
             let warn_stage = ResearchStage {
                 stage: "searching".to_string(),
-                message: "⚠️ Web search returned no results; synthesized using local context."
-                    .to_string(),
+                message: warn_msg.clone(),
             };
             if let Some(cb) = on_stage {
                 cb(warn_stage.clone());
             }
             stages.push(warn_stage);
 
-            let mut vault_res =
-                execute_local_vault_research(engine, inquiry, limit_docs, &mut stages, on_stage)
-                    .await?;
+            let mut vault_res = execute_local_vault_research(
+                engine,
+                inquiry,
+                limit_docs,
+                exclude_artifact_id,
+                &mut stages,
+                on_stage,
+            )
+            .await?;
             vault_res.search_status = "web_search_failed".to_string();
             vault_res.external_sources_count = 0;
             vault_res.mode_used = WebSearchMode::LocalVaultOnly;
 
             let smart_title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
-            vault_res.title = smart_title.clone();
+            vault_res.title = smart_title;
 
             vault_res.synthesized_markdown = vault_res.synthesized_markdown.replacen(
-                "> **Evidence basis:** local vault only", "> **Evidence basis:** ⚠️ Web search returned no results; synthesized using local context", 1);
+                "> **Evidence basis:** local vault only",
+                &format!("> **Evidence basis:** {}", warn_msg),
+                1,
+            );
 
             if let Some(last) = vault_res.stages.last_mut() {
                 if last.stage == "done" {
-                    last.message =
-                        "⚠️ Web search returned no results; synthesized using local context."
-                            .to_string();
+                    last.message = warn_msg;
+                }
+            }
+
+            Ok(vault_res)
+        }
+        Ok(_) => {
+            let warn_msg =
+                "⚠️ Web search returned no results; synthesized using local context.".to_string();
+            let warn_stage = ResearchStage {
+                stage: "searching".to_string(),
+                message: warn_msg.clone(),
+            };
+            if let Some(cb) = on_stage {
+                cb(warn_stage.clone());
+            }
+            stages.push(warn_stage);
+
+            let mut vault_res = execute_local_vault_research(
+                engine,
+                inquiry,
+                limit_docs,
+                exclude_artifact_id,
+                &mut stages,
+                on_stage,
+            )
+            .await?;
+            vault_res.search_status = "web_search_failed".to_string();
+            vault_res.external_sources_count = 0;
+            vault_res.mode_used = WebSearchMode::LocalVaultOnly;
+
+            let smart_title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
+            vault_res.title = smart_title;
+
+            vault_res.synthesized_markdown = vault_res.synthesized_markdown.replacen(
+                "> **Evidence basis:** local vault only",
+                &format!("> **Evidence basis:** {}", warn_msg),
+                1,
+            );
+
+            if let Some(last) = vault_res.stages.last_mut() {
+                if last.stage == "done" {
+                    last.message = warn_msg;
                 }
             }
 
@@ -1332,6 +1591,15 @@ pub struct DerivationOutput {
     pub content_md: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefineArtifactOutcome {
+    pub artifact_id: String,
+    pub content_md: String,
+    pub content_hash: String,
+    pub version: i64,
+    pub change_set_id: String,
+}
+
 impl Engine {
     pub async fn refine_artifact(
         &self,
@@ -1341,6 +1609,23 @@ impl Engine {
         enable_web_search: bool,
     ) -> Result<String, String> {
         self.refine_artifact_with_policy(
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            crate::llm::lifecycle::RequestPolicy::standard(),
+        )
+        .await
+    }
+
+    pub async fn refine_artifact_outcome(
+        &self,
+        artifact_id: &str,
+        critique_prompt: &str,
+        model_override: Option<&str>,
+        enable_web_search: bool,
+    ) -> Result<RefineArtifactOutcome, String> {
+        self.refine_artifact_with_policy_outcome(
             artifact_id,
             critique_prompt,
             model_override,
@@ -1369,6 +1654,25 @@ impl Engine {
         .await
     }
 
+    pub async fn refine_artifact_with_policy_outcome(
+        &self,
+        artifact_id: &str,
+        critique_prompt: &str,
+        model_override: Option<&str>,
+        enable_web_search: bool,
+        policy: crate::llm::lifecycle::RequestPolicy,
+    ) -> Result<RefineArtifactOutcome, String> {
+        self.refine_artifact_with_policy_and_cancellation_outcome(
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            policy,
+            None,
+        )
+        .await
+    }
+
     pub async fn refine_artifact_with_policy_and_cancellation(
         &self,
         artifact_id: &str,
@@ -1379,6 +1683,27 @@ impl Engine {
         cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
     ) -> Result<String, String> {
         refine_artifact_full(
+            self,
+            artifact_id,
+            critique_prompt,
+            model_override,
+            enable_web_search,
+            policy,
+            cancel_token,
+        )
+        .await
+    }
+
+    pub async fn refine_artifact_with_policy_and_cancellation_outcome(
+        &self,
+        artifact_id: &str,
+        critique_prompt: &str,
+        model_override: Option<&str>,
+        enable_web_search: bool,
+        policy: crate::llm::lifecycle::RequestPolicy,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+    ) -> Result<RefineArtifactOutcome, String> {
+        refine_artifact_full_outcome(
             self,
             artifact_id,
             critique_prompt,
@@ -1483,6 +1808,28 @@ pub async fn refine_artifact_full(
     policy: crate::llm::lifecycle::RequestPolicy,
     cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
 ) -> Result<String, String> {
+    refine_artifact_full_outcome(
+        engine,
+        artifact_id,
+        critique_prompt,
+        model_override,
+        enable_web_search,
+        policy,
+        cancel_token,
+    )
+    .await
+    .map(|outcome| outcome.content_md)
+}
+
+pub async fn refine_artifact_full_outcome(
+    engine: &Engine,
+    artifact_id: &str,
+    critique_prompt: &str,
+    model_override: Option<&str>,
+    enable_web_search: bool,
+    policy: crate::llm::lifecycle::RequestPolicy,
+    cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+) -> Result<RefineArtifactOutcome, String> {
     let art = engine
         .get_artifact(artifact_id)
         .map_err(|e| e.to_string())?;
@@ -1493,20 +1840,21 @@ pub async fn refine_artifact_full(
         if let Ok(reader) = engine.db().reader() {
             if let Ok(Some(entry)) = crate::db::search_repo::get_default_search_provider(&reader) {
                 if entry.is_enabled {
-                    let provider = crate::search::build_search_provider(&entry);
-                    if let Ok(results) = provider.search(critique_prompt.trim(), 3).await {
-                        if !results.is_empty() {
-                            additional_evidence.push_str("\n\n<ADDITIONAL_WEB_EVIDENCE>\n");
-                            for (idx, item) in results.iter().enumerate() {
-                                additional_evidence.push_str(&format!(
-                                    "[Source {}] {} ({}): {}\n",
-                                    idx + 1,
-                                    item.title,
-                                    item.url,
-                                    item.snippet
-                                ));
+                    if let Ok(provider) = crate::search::build_search_provider(&entry) {
+                        if let Ok(results) = provider.search(critique_prompt.trim(), 3).await {
+                            if !results.is_empty() {
+                                additional_evidence.push_str("\n\n<ADDITIONAL_WEB_EVIDENCE>\n");
+                                for (idx, item) in results.iter().enumerate() {
+                                    additional_evidence.push_str(&format!(
+                                        "[Source {}] {} ({}): {}\n",
+                                        idx + 1,
+                                        item.title,
+                                        item.url,
+                                        item.snippet
+                                    ));
+                                }
+                                additional_evidence.push_str("</ADDITIONAL_WEB_EVIDENCE>\n");
                             }
-                            additional_evidence.push_str("</ADDITIONAL_WEB_EVIDENCE>\n");
                         }
                     }
                 }
@@ -1553,9 +1901,7 @@ pub async fn refine_artifact_full(
         .generate_json(&schema_val, &system_prompt, &user_prompt);
     let format_error = |err: crate::CoreError| -> String {
         match err {
-            crate::CoreError::Request(kind) => {
-                kind.user_message("Refinement", "Original document")
-            }
+            crate::CoreError::Request(kind) => kind.user_message("Refinement", "Original document"),
             other => format!("Model generation failed: {other}"),
         }
     };
@@ -1618,6 +1964,8 @@ pub async fn refine_artifact_full(
         }
     }
 
+    let normalized_refined = crate::vault::normalize_content(&refined_text);
+    let refined_hash = crate::vault::compute_content_hash(&normalized_refined);
     let summary = format!("Refined: {}", art.title.as_deref().unwrap_or("Untitled"));
     let inverse_payload = serde_json::json!({
         "operations": [
@@ -1625,7 +1973,9 @@ pub async fn refine_artifact_full(
                 "type": "restore_artifact",
                 "artifact_id": art.id,
                 "content_md": art.content_md,
-                "content_hash": art.content_hash
+                "content_hash": art.content_hash,
+                "refined_content_md": normalized_refined,
+                "refined_content_hash": refined_hash
             }
         ]
     });
@@ -1646,9 +1996,15 @@ pub async fn refine_artifact_full(
     engine.emit_event(CoreEvent::ArtifactChanged {
         id: artifact_id.to_string(),
     });
-    engine.emit_event(CoreEvent::ChangeSetApplied { id: cs_id });
+    engine.emit_event(CoreEvent::ChangeSetApplied { id: cs_id.clone() });
 
-    Ok(updated_art.content_md)
+    Ok(RefineArtifactOutcome {
+        artifact_id: updated_art.id,
+        content_md: updated_art.content_md,
+        content_hash: updated_art.content_hash,
+        version: updated_art.version,
+        change_set_id: cs_id,
+    })
 }
 
 pub async fn derive_artifact(
@@ -1711,9 +2067,14 @@ pub async fn derive_artifact_full(
     // - If source note is shared across multiple projects or standalone, remain standalone.
     let inherited_target_project = if explicit_target_project.is_none() {
         if let Ok(reader) = engine.db().reader() {
-            let stmt = reader.prepare(
-                "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL;"
-            ).ok();
+            let stmt = reader
+                .prepare(
+                    "SELECT pa.project_id
+                 FROM project_artifacts pa
+                 JOIN projects p ON p.id = pa.project_id
+                 WHERE pa.artifact_id = ?1 AND pa.detached_at IS NULL AND p.deleted_at IS NULL;",
+                )
+                .ok();
             if let Some(mut stmt) = stmt {
                 let pids: Vec<String> = stmt
                     .query_map(rusqlite::params![source_artifact_id], |r| r.get(0))
@@ -1825,7 +2186,10 @@ pub async fn derive_artifact_full(
 
     let raw_json = if let Some(token) = cancel_token {
         if token.is_cancelled() {
-            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+            return Err(
+                "Derivation was cancelled. Workspace and source document are unchanged."
+                    .to_string(),
+            );
         }
         tokio::select! {
             res = tokio::time::timeout(policy.workflow_deadline, gen_fut) => {
@@ -1859,7 +2223,10 @@ pub async fn derive_artifact_full(
 
     if let Some(token) = cancel_token {
         if token.is_cancelled() {
-            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+            return Err(
+                "Derivation was cancelled. Workspace and source document are unchanged."
+                    .to_string(),
+            );
         }
     }
 
@@ -1884,7 +2251,10 @@ pub async fn derive_artifact_full(
 
     if let Some(token) = cancel_token {
         if token.is_cancelled() {
-            return Err("Derivation was cancelled. Workspace and source document are unchanged.".to_string());
+            return Err(
+                "Derivation was cancelled. Workspace and source document are unchanged."
+                    .to_string(),
+            );
         }
     }
 

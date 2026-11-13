@@ -10,7 +10,12 @@ use sthira_core::{Actor, ArtifactType, Authorship, Engine, EventType, Materialit
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
 
-fn setup_test_engine() -> (Engine, Arc<FakeClock>, Arc<DeterministicFakeModel>, tempfile::TempDir) {
+fn setup_test_engine() -> (
+    Engine,
+    Arc<FakeClock>,
+    Arc<DeterministicFakeModel>,
+    tempfile::TempDir,
+) {
     let dir = tempdir().expect("Failed to create tempdir");
     let db_path = dir.path().join("sthira.db");
     let vault_dir = dir.path().join(".sthira_vault").join("artifacts");
@@ -22,7 +27,10 @@ fn setup_test_engine() -> (Engine, Arc<FakeClock>, Arc<DeterministicFakeModel>, 
 }
 
 fn assert_no_guilt_language(text: &str) {
-    let guilt_re = Regex::new(r"(?i)\b(you haven't|haven't you|overdue|behind schedule|you didn't|slacking|streak)\b").unwrap();
+    let guilt_re = Regex::new(
+        r"(?i)\b(you haven't|haven't you|overdue|behind schedule|you didn't|slacking|streak)\b",
+    )
+    .unwrap();
     assert!(
         !guilt_re.is_match(text),
         "Guilt or pressure language detected in user-facing copy: '{}'",
@@ -53,18 +61,21 @@ async fn test_4_1_scenario_a_gold_standard_cold_return() {
         .expect("attach failed");
 
     // Extract node
-    let writer = engine.db().writer();
-    writer.execute(
-        "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
-         VALUES ('node_30b', ?1, 'decision', 'user_recorded', 'Dropped 30B+ models', 'We decided to drop 30B+ models due to memory limits.', 0, 52, 'qh_30b', 'bh1', 'run1', 'm1', 1000, 1000);",
-        params![note.id],
-    ).expect("insert node failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
+             VALUES ('node_30b', ?1, 'decision', 'user_recorded', 'Dropped 30B+ models', 'We decided to drop 30B+ models due to memory limits.', 0, 52, 'qh_30b', 'bh1', 'run1', 'm1', 1000, 1000);",
+            params![note.id],
+        ).expect("insert node failed");
+    }
 
     // Advance clock by 72 hours (Cold Return)
     clock.advance(Duration::from_secs(72 * 3600));
 
-    let hint = engine.get_resume_pane_hint(&proj.id).expect("get hint failed");
+    let hint = engine
+        .get_resume_pane_hint(&proj.id)
+        .expect("get hint failed");
     assert_eq!(
         hint,
         ResumePaneHint::Show {
@@ -72,7 +83,10 @@ async fn test_4_1_scenario_a_gold_standard_cold_return() {
         }
     );
 
-    let brief = engine.get_resume_brief(&proj.id, 1).await.expect("get brief failed");
+    let brief = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("get brief failed");
 
     // Assert word cap <= 75 words
     let words = visible_words(&brief);
@@ -96,7 +110,10 @@ async fn test_4_1_scenario_a_gold_standard_cold_return() {
         .join("memory_mirrors")
         .join("projects")
         .join(format!("{}.md", proj.id));
-    assert!(mirror_file.exists(), "Memory mirror markdown file must exist");
+    assert!(
+        mirror_file.exists(),
+        "Memory mirror markdown file must exist"
+    );
     let mirror_content = std::fs::read_to_string(&mirror_file).expect("read mirror failed");
     assert!(mirror_content.contains("<!-- STHIRA_DERIVED_MEMORY: DO_NOT_INGEST"));
     assert_no_guilt_language(&mirror_content);
@@ -187,7 +204,10 @@ async fn test_4_2_scenario_b_view_and_touch_edit_trap() {
         )
         .expect("minor update event failed");
 
-    let brief = engine.get_resume_brief(&proj.id, 1).await.expect("brief failed");
+    let brief = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("brief failed");
 
     // Primary continuation must remain art_07 (where deep substantive work occurred)
     assert_eq!(
@@ -232,7 +252,10 @@ async fn test_4_3_scenario_c_sparse_evidence_no_guilt() {
         .attach_artifact(&proj_a.id, &s2.id, "user_explicit", None)
         .expect("attach failed");
 
-    let brief_a = engine.get_resume_brief(&proj_a.id, 1).await.expect("brief failed");
+    let brief_a = engine
+        .get_resume_brief(&proj_a.id, 1)
+        .await
+        .expect("brief failed");
     assert_eq!(brief_a.recent_progress.len(), 1);
     let copy = &brief_a.recent_progress[0].text;
 
@@ -251,7 +274,10 @@ async fn test_4_3_scenario_c_sparse_evidence_no_guilt() {
     let proj_b = engine
         .create_project("Empty Purpose Project", None)
         .expect("create proj failed");
-    let brief_b = engine.get_resume_brief(&proj_b.id, 1).await.expect("brief failed");
+    let brief_b = engine
+        .get_resume_brief(&proj_b.id, 1)
+        .await
+        .expect("brief failed");
     for claim in &brief_b.recent_progress {
         assert_no_guilt_language(&claim.text);
     }
@@ -279,28 +305,39 @@ async fn test_4_4_scenario_d_metamorphic_inference_flip() {
         .expect("attach failed");
 
     // Add unreviewed AI hypothesis for Option A
-    let writer = engine.db().writer();
-    writer.execute(
-        "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
-         VALUES ('hyp_a', ?1, 'hypothesis', 'ai_inferred', 'Leaning toward Architecture A', 'Architecture A shows promising throughput.', 0, 43, 'qh_a', 'bh1', 'run1', 'm1', 100, 100);",
-        params![note.id],
-    ).expect("insert node failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
+             VALUES ('hyp_a', ?1, 'hypothesis', 'ai_inferred', 'Leaning toward Architecture A', 'Architecture A shows promising throughput.', 0, 43, 'qh_a', 'bh1', 'run1', 'm1', 100, 100);",
+            params![note.id],
+        ).expect("insert node failed");
+    }
 
-    let brief_1 = engine.get_resume_brief(&proj.id, 1).await.expect("brief failed");
+    let brief_1 = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("brief failed");
     assert_eq!(brief_1.recent_progress.len(), 1);
-    assert_eq!(brief_1.recent_progress[0].origin, EpistemicOrigin::AiInferred);
+    assert_eq!(
+        brief_1.recent_progress[0].origin,
+        EpistemicOrigin::AiInferred
+    );
     assert!(brief_1.recent_progress[0].text.contains("Architecture A"));
 
     // Mutate to Architecture B
-    let writer = engine.db().writer();
-    writer.execute(
-        "UPDATE epistemic_nodes SET statement = 'Leaning toward Architecture B', quote = 'Architecture B shows promising throughput.', quote_hash = 'qh_b', updated_at = 200 WHERE id = 'hyp_a';",
-        [],
-    ).expect("update node failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "UPDATE epistemic_nodes SET statement = 'Leaning toward Architecture B', quote = 'Architecture B shows promising throughput.', quote_hash = 'qh_b', updated_at = 200 WHERE id = 'hyp_a';",
+            [],
+        ).expect("update node failed");
+    }
 
-    let brief_2 = engine.get_resume_brief(&proj.id, 1).await.expect("brief failed");
+    let brief_2 = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("brief failed");
     assert!(brief_2.recent_progress[0].text.contains("Architecture B"));
 }
 
@@ -325,13 +362,14 @@ async fn test_4_5_scenario_e_conflicting_decisions_and_supersession() {
         .attach_artifact(&proj.id, &note_1.id, "user_explicit", None)
         .expect("attach failed");
 
-    let writer = engine.db().writer();
-    writer.execute(
-        "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
-         VALUES ('dec_1', ?1, 'decision', 'user_recorded', 'Decision: SQLite single node', 'We decided to use single-node SQLite for storage.', 0, 48, 'qh1', 'bh1', 'r1', 'm1', 2 * 86400 * 1000, 2 * 86400 * 1000);",
-        params![note_1.id],
-    ).expect("insert dec 1 failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
+             VALUES ('dec_1', ?1, 'decision', 'user_recorded', 'Decision: SQLite single node', 'We decided to use single-node SQLite for storage.', 0, 48, 'qh1', 'bh1', 'r1', 'm1', 2 * 86400 * 1000, 2 * 86400 * 1000);",
+            params![note_1.id],
+        ).expect("insert dec 1 failed");
+    }
 
     clock.advance(Duration::from_secs(2 * 86400)); // Day 4
 
@@ -348,17 +386,25 @@ async fn test_4_5_scenario_e_conflicting_decisions_and_supersession() {
         .attach_artifact(&proj.id, &note_2.id, "user_explicit", None)
         .expect("attach failed");
 
-    let writer = engine.db().writer();
-    writer.execute(
-        "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
-         VALUES ('dec_2', ?1, 'decision', 'user_recorded', 'Decision: distributed Raft', 'We decided to switch to distributed Raft storage.', 0, 48, 'qh2', 'bh2', 'r2', 'm1', 4 * 86400 * 1000, 4 * 86400 * 1000);",
-        params![note_2.id],
-    ).expect("insert dec 2 failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
+             VALUES ('dec_2', ?1, 'decision', 'user_recorded', 'Decision: distributed Raft', 'We decided to switch to distributed Raft storage.', 0, 48, 'qh2', 'bh2', 'r2', 'm1', 4 * 86400 * 1000, 4 * 86400 * 1000);",
+            params![note_2.id],
+        ).expect("insert dec 2 failed");
+    }
 
     // Initial brief: both conflicting decisions appear
-    let brief = engine.get_resume_brief(&proj.id, 1).await.expect("brief failed");
-    assert_eq!(brief.conflicting_decisions.len(), 2, "Both decisions must appear while conflicting");
+    let brief = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("brief failed");
+    assert_eq!(
+        brief.conflicting_decisions.len(),
+        2,
+        "Both decisions must appear while conflicting"
+    );
 
     // Verify ai_proposal was created
     let reader = engine.db().reader().expect("reader failed");
@@ -371,9 +417,14 @@ async fn test_4_5_scenario_e_conflicting_decisions_and_supersession() {
         .expect("query proposal failed");
 
     // Accept proposal to supersede decision 1 with decision 2
-    engine.decide_proposal(&prop_id, "accepted").expect("accept proposal failed");
+    engine
+        .decide_proposal(&prop_id, "accepted")
+        .expect("accept proposal failed");
 
-    let brief_after = engine.get_resume_brief(&proj.id, 1).await.expect("brief after failed");
+    let brief_after = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("brief after failed");
     assert_eq!(
         brief_after.conflicting_decisions.len(),
         0,
@@ -403,21 +454,28 @@ async fn test_4_6_scenario_f_fingerprint_cache_hit_and_disk_invalidation() {
         .attach_artifact(&proj.id, &note.id, "user_explicit", None)
         .expect("attach failed");
 
-    let writer = engine.db().writer();
-    writer.execute(
-        "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
-         VALUES ('dec_cache', ?1, 'decision', 'user_recorded', 'Decision: local embeddings', 'We decided to use local embeddings for indexing.', 0, 48, 'qh_c', 'bh1', 'r1', 'm1', 100, 100);",
-        params![note.id],
-    ).expect("insert failed");
-    drop(writer);
+    {
+        let writer = engine.db().writer();
+        writer.execute(
+            "INSERT INTO epistemic_nodes (id, artifact_id, node_type, origin, statement, quote, quote_start, quote_end, quote_hash, basis_content_hash, extraction_run_id, model_id, first_seen_at, updated_at)
+             VALUES ('dec_cache', ?1, 'decision', 'user_recorded', 'Decision: local embeddings', 'We decided to use local embeddings for indexing.', 0, 48, 'qh_c', 'bh1', 'r1', 'm1', 100, 100);",
+            params![note.id],
+        ).expect("insert failed");
+    }
 
     let fp1 = compute_basis_fingerprint(engine.db(), &proj.id).expect("fp1 failed");
-    let brief1 = engine.get_resume_brief(&proj.id, 1).await.expect("b1 failed");
+    let brief1 = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("b1 failed");
 
     // Second call: fingerprint matches, cached in derived_briefs
     let fp2 = compute_basis_fingerprint(engine.db(), &proj.id).expect("fp2 failed");
     assert_eq!(fp1, fp2);
-    let brief2 = engine.get_resume_brief(&proj.id, 1).await.expect("b2 failed");
+    let brief2 = engine
+        .get_resume_brief(&proj.id, 1)
+        .await
+        .expect("b2 failed");
     assert_eq!(brief1.purpose, brief2.purpose);
 
     // Edit artifact on disk: delete decision sentence
@@ -442,9 +500,7 @@ fn test_4_7_scenario_g_poisoned_citation_guard() {
     let prose_safe = "We benchmarked on the local cluster and observed steady latency.";
     let prose_poisoned = "We deployed 32GB memory with ModelX on Version 4.";
 
-    let cited_quotes = [
-        "Testing on the local cluster showed steady latency across runs.",
-    ];
+    let cited_quotes = ["Testing on the local cluster showed steady latency across runs."];
 
     let ungrounded_safe = ungrounded_tokens(prose_safe, &cited_quotes);
     assert!(ungrounded_safe.is_empty(), "Grounded prose must pass");
@@ -463,9 +519,13 @@ async fn test_4_8_scenario_h_home_state_ordering() {
     let (engine, clock, _model, _dir) = setup_test_engine();
 
     // Create 2 projects
-    let p1 = engine.create_project("Project Older", None).expect("p1 failed");
+    let p1 = engine
+        .create_project("Project Older", None)
+        .expect("p1 failed");
     clock.advance(Duration::from_secs(60));
-    let p2 = engine.create_project("Project Newer", None).expect("p2 failed");
+    let p2 = engine
+        .create_project("Project Newer", None)
+        .expect("p2 failed");
 
     // Create loose capture (not attached to any project)
     let _loose = engine

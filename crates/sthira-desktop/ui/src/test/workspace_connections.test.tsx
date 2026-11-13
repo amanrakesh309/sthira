@@ -162,4 +162,23 @@ describe('Workspace connections', () => {
     expect(await screen.findByRole('button', { name: 'Preview Working notes' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Insert link to Working notes' })).not.toBeInTheDocument();
   });
+
+  it('syncs ConnectionsPanel heading immediately when the parent title changes (F-B5-009)', async () => {
+    const initial = panelProps();
+    const { rerender } = render(<ConnectionsPanel {...initial} />);
+    await screen.findByRole('button', { name: 'Preview A decision' });
+    expect(screen.getByRole('heading', { level: 2, name: 'Working notes' })).toBeInTheDocument();
+
+    rerender(<ConnectionsPanel {...initial} title="Renamed Architecture Spec" />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Renamed Architecture Spec' })).toBeInTheDocument();
+  });
+
+  it('exposes isolated role=alert text without retry buttons in ConnectionsPanel errors (F-B5-014)', async () => {
+    vi.mocked(connections.getWorkspaceConnections).mockRejectedValueOnce(new Error('vault offline'));
+    render(<ConnectionsPanel {...panelProps()} />);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t load this reference. It may have been removed, or the vault may be unavailable.');
+    expect(alert.querySelector('button')).toBeNull();
+    expect(within(screen.getByRole('complementary', { name: 'Connections' })).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
 });

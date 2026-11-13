@@ -61,15 +61,11 @@ fn get_note_re() -> &'static Regex {
 }
 
 fn get_resume_re() -> &'static Regex {
-    RESUME_PREFIX_RE.get_or_init(|| {
-        Regex::new(r"(?i)^(continue|resume|open)\s+(.+)$").unwrap()
-    })
+    RESUME_PREFIX_RE.get_or_init(|| Regex::new(r"(?i)^(continue|resume|open)\s+(.+)$").unwrap())
 }
 
 fn get_url_re() -> &'static Regex {
-    URL_RE.get_or_init(|| {
-        Regex::new(r"https?://[^\s]+").unwrap()
-    })
+    URL_RE.get_or_init(|| Regex::new(r"https?://[^\s]+").unwrap())
 }
 
 pub fn classify_fast_path(raw: &str, conn: &rusqlite::Connection) -> Option<RouterPlan> {
@@ -91,7 +87,8 @@ pub fn classify_fast_path(raw: &str, conn: &rusqlite::Connection) -> Option<Rout
     if trimmed.starts_with("http://")
         || trimmed.starts_with("https://")
         || trimmed.starts_with("www.")
-        || (trimmed.starts_with("Source: http") || (trimmed.contains('\n') && get_url_re().is_match(trimmed)))
+        || (trimmed.starts_with("Source: http")
+            || (trimmed.contains('\n') && get_url_re().is_match(trimmed)))
     {
         let url_match = get_url_re().find(trimmed).map(|m| m.as_str().to_string());
         return Some(RouterPlan {
@@ -140,7 +137,9 @@ pub fn classify_fast_path(raw: &str, conn: &rusqlite::Connection) -> Option<Rout
             .unwrap_or(proj_query);
 
         let mut stmt = conn
-            .prepare("SELECT id, name FROM projects WHERE status = 'active';")
+            .prepare(
+                "SELECT id, name FROM projects WHERE status = 'active' AND deleted_at IS NULL;",
+            )
             .ok()?;
 
         let projects: Vec<(String, String)> = stmt
@@ -260,11 +259,12 @@ impl Engine {
             .generate_json(&schema_val, system_prompt, &user_prompt)
             .await?;
 
-        let parsed: LlmRouterResponse = serde_json::from_str(&json_resp).unwrap_or(LlmRouterResponse {
-            intent: IntentType::AmbiguousClarify,
-            title: None,
-            confidence: 0.5,
-        });
+        let parsed: LlmRouterResponse =
+            serde_json::from_str(&json_resp).unwrap_or(LlmRouterResponse {
+                intent: IntentType::AmbiguousClarify,
+                title: None,
+                confidence: 0.5,
+            });
 
         Ok(RouterPlan {
             intent_type: parsed.intent,

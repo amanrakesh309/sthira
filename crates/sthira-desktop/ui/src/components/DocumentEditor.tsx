@@ -13,6 +13,7 @@ import { RichDocumentRenderer } from './RichDocumentRenderer';
 import { InternalReference } from '../editor/internalReferences';
 import { parseEntityHref } from '../api/connections';
 import { plainPageMarkdown } from '../editor/plainPageMarkdown';
+import { SLASH_QUERY_PATTERN } from '../editor/slashQuery';
 import type { EntityRef, ObjectType } from '../types/sthira';
 import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
 
@@ -31,6 +32,7 @@ interface Props {
   onBlur: () => void;
   onOpenEntity: (entity: EntityRef) => void;
   onSlash: (query: string | null, position: { top: number; left: number }) => void;
+  slashOpen?: boolean;
   objectTypes: ObjectType[];
   onRecordDecision?: (text: string) => void;
   disabled?: boolean;
@@ -65,14 +67,16 @@ const RawInlineHtml = Node.create({
 
 function removeSlash(editor: Editor) {
   const { $from, from } = editor.state.selection;
-  const match = $from.parent.textBetween(0, $from.parentOffset).match(/(?:^|\s)(\/[\w-]*)$/);
-  if (match) editor.commands.deleteRange({ from: from - match[1].length, to: from });
+  const match = $from.parent.textBetween(0, $from.parentOffset).match(SLASH_QUERY_PATTERN);
+  if (match) editor.commands.deleteRange({ from: from - match[1].length - 1, to: from });
 }
 
 export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function DocumentEditor(props, ref) {
   const latest = useRef(props); latest.current = props;
   const emitted = useRef(props.content);
   const titlePrefix = useRef('');
+  const prevSlashOpenRef = useRef(!!props.slashOpen);
+  const dismissedSlashPosRef = useRef<number | null>(null);
   const splitTitle = (content: string) => {
     const first = content.match(/^# ([^\n]+)\n*/);
     if (first && first[1].trim() === latest.current.title.trim()) {
@@ -81,21 +85,55 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
     }
     titlePrefix.current = ''; return content;
   };
-  const notifySlash = (editor: Editor) => {
+  const notifySlash = (editor: Editor, source: 'update' | 'selection') => {
     const { $from, from, empty } = editor.state.selection;
-    const match = empty && !$from.parent.type.spec.code && $from.parent.textBetween(0, $from.parentOffset).match(/(?:^|\s)\/([\w-]*)$/);
+    const match = empty && !$from.parent.type.spec.code && $from.parent.textBetween(0, $from.parentOffset).match(SLASH_QUERY_PATTERN);
+    if (!match) {
+      if (source === 'update' && dismissedSlashPosRef.current !== null) {
+        const docSize = editor.state.doc.content.size;
+        const pos = dismissedSlashPosRef.current;
+        if (pos >= docSize || editor.state.doc.textBetween(pos, Math.min(pos + 1, docSize)) !== '/') {
+          dismissedSlashPosRef.current = null;
+        }
+      }
+      latest.current.onSlash(null, { top: 120, left: 24 });
+      return;
+    }
+    const slashPos = from - match[1].length - 1;
+    if (dismissedSlashPosRef.current !== null) {
+      if (source === 'update' && slashPos !== dismissedSlashPosRef.current) {
+        dismissedSlashPosRef.current = null;
+      } else if (slashPos === dismissedSlashPosRef.current) {
+        latest.current.onSlash(null, { top: 120, left: 24 });
+        return;
+      }
+    }
     const body = editor.view.dom.closest('.focus-editor-body')?.getBoundingClientRect();
     let position = { top: 120, left: 24 };
-    if (match && body) {
+    if (body) {
       const caret = editor.view.coordsAtPos(from);
       position = { top: caret.bottom - body.top + 8, left: Math.max(0, caret.left - body.left) };
     }
-    latest.current.onSlash(match ? match[1] : null, position);
+    latest.current.onSlash(match[1], position);
   };
   const editor = useEditor({
     immediatelyRender: true,
     extensions: [
-      StarterKit.configure({ codeBlock: false, blockquote: false, link: { openOnClick: false, protocols: ['sthira'] }, trailingNode: false }),
+      StarterKit.configure({
+        codeBlock: false,
+        blockquote: false,
+        link: {
+          openOnClick: false,
+          protocols: ['sthira'],
+          HTMLAttributes: {
+            target: '_blank',
+            rel: 'noopener noreferrer nofollow',
+            class: 'document-inline-link',
+            tabindex: '0',
+          },
+        },
+        trailingNode: false,
+      }),
       Markdown, InternalReference, TableKit, TaskList, TaskItem.configure({ nested: true }), Image, RawHtml, RawInlineHtml,
       Blockquote.extend({
         addNodeView() {
@@ -153,15 +191,32 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
       } },
       handleKeyDown: (view, event) => {
         if (event.isComposing) return false;
-        if(['Enter',' '].includes(event.key)) {
-          const anchor=(event.target as HTMLElement).closest('a[data-workspace-reference]');
-          const entity=parseEntityHref(anchor?.getAttribute('href')||undefined);
-          if(entity){event.preventDefault();latest.current.onOpenEntity(entity);return true;}
+        if (['Enter', ' '].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+          const anchor = (event.target as HTMLElement)?.closest?.('a');
+          if (anchor && anchor !== view.dom && !anchor.closest('pre')) {
+            const href = anchor.getAttribute('href') || undefined;
+            const entity = parseEntityHref(href);
+            if (entity) {
+              event.preventDefault();
+              latest.current.onOpenEntity(entity);
+              return true;
+            }
+            if (href?.startsWith('sthira:')) {
+              event.preventDefault();
+              return true;
+            }
+            if (href && /^(https?:|mailto:)/i.test(href)) {
+              event.preventDefault();
+              window.open(href, '_blank', 'noopener,noreferrer');
+              return true;
+            }
+          }
         }
-        // The slash popover owns these keys while it is open.
-        const { $from, empty } = view.state.selection;
-        const slash = empty && !$from.parent.type.spec.code && /(?:^|\s)\/[\w-]*$/.test($from.parent.textBetween(0, $from.parentOffset));
-        if (slash && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) { event.preventDefault(); return true; }
+        // The slash popover owns these keys only while it is actively open.
+        if (latest.current.slashOpen && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) {
+          event.preventDefault();
+          return true;
+        }
         return false;
       },
     },
@@ -169,15 +224,25 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
       const markdown = titlePrefix.current + active.getMarkdown();
       emitted.current = markdown;
       latest.current.onChange(markdown);
-      notifySlash(active);
+      notifySlash(active, 'update');
     },
-    onSelectionUpdate: ({ editor: active }) => notifySlash(active),
+    onSelectionUpdate: ({ editor: active }) => notifySlash(active, 'selection'),
     onBlur: () => latest.current.onBlur(),
   });
+
+  if (prevSlashOpenRef.current && !props.slashOpen && editor && !editor.isDestroyed) {
+    const { $from, from, empty } = editor.state.selection;
+    const match = empty && !$from.parent.type.spec.code && $from.parent.textBetween(0, $from.parentOffset).match(SLASH_QUERY_PATTERN);
+    if (match) {
+      dismissedSlashPosRef.current = from - match[1].length - 1;
+    }
+  }
+  prevSlashOpenRef.current = !!props.slashOpen;
 
   useEffect(() => {
     if (!editor || props.content === emitted.current) return;
     emitted.current = props.content;
+    dismissedSlashPosRef.current = null;
     editor.commands.setContent(splitTitle(plainPageMarkdown(props.content)), { contentType: 'markdown', emitUpdate: false });
   }, [editor, props.content, props.title]);
   useEffect(() => { editor?.setEditable(!props.disabled, false); }, [editor, props.disabled]);
@@ -216,6 +281,7 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
         case 'code': chain.toggleCodeBlock().run(); break;
         case 'table': chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); break;
         case 'slash': {
+          dismissedSlashPosRef.current = null;
           if (editor.state.selection.$from.parent.type.spec.code) editor.chain().focus().exitCode().run();
           const { $from } = editor.state.selection;
           const before = $from.parent.textBetween(0, $from.parentOffset);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, X, Folder, FileText, ArrowRight } from 'lucide-react';
 import { searchAll } from '../api/ipc';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import type { SearchResultItem } from '../types/sthira';
 
 interface SearchModalProps {
@@ -24,18 +25,29 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const openerRef = useRef<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const navigatedRef = useRef(false);
+  const wasOpenRef = useRef(false);
 
-  // Capture opener element on open, focus input, and reset search state
+  if (isOpen && !wasOpenRef.current && typeof document !== 'undefined') {
+    navigatedRef.current = false;
+    if (openerElement) {
+      openerRef.current = openerElement;
+    } else {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body && !active.closest('[role="dialog"]')) {
+        openerRef.current = active;
+      } else {
+        openerRef.current = null;
+      }
+    }
+  }
+  wasOpenRef.current = isOpen;
+
+  // Sync explicit opener prop changes and reset search state on open
   useEffect(() => {
     if (isOpen) {
-      if (openerElement) {
-        openerRef.current = openerElement;
-      } else {
-        const active = document.activeElement as HTMLElement | null;
-        if (active && active !== document.body && !active.closest('[role="dialog"]')) {
-          openerRef.current = active;
-        }
-      }
+      if (openerElement) openerRef.current = openerElement;
       setQuery('');
       setResults([]);
       setSelectedIndex(-1);
@@ -44,15 +56,27 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   }, [isOpen, openerElement]);
 
   const handleClose = useCallback(() => {
-    const targetToFocus = openerRef.current;
     onClose();
-    if (targetToFocus && typeof targetToFocus.focus === 'function') {
-      // Use queueMicrotask / setTimeout to restore focus once modal unmounts
-      setTimeout(() => {
-        targetToFocus.focus();
-      }, 0);
-    }
   }, [onClose]);
+
+  useDialogFocus(isOpen, dialogRef, handleClose, {
+    initialFocus: inputRef,
+    restoreFocusTarget: openerRef,
+    shouldRestoreFocus: () => !navigatedRef.current,
+  });
+
+  const openSelectedItem = useCallback(
+    (item: SearchResultItem) => {
+      navigatedRef.current = true;
+      if (item.kind === 'project') {
+        onOpenProject(item.id);
+      } else {
+        onOpenArtifact(item.id);
+      }
+      handleClose();
+    },
+    [onOpenProject, onOpenArtifact, handleClose]
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -102,31 +126,12 @@ export const SearchModal: React.FC<SearchModalProps> = ({
       } else if (e.key === 'Enter') {
         if (selectedIndex >= 0 && selectedIndex < results.length) {
           e.preventDefault();
-          const item = results[selectedIndex];
-          if (item.kind === 'project') {
-            onOpenProject(item.id);
-          } else {
-            onOpenArtifact(item.id);
-          }
-          handleClose();
+          openSelectedItem(results[selectedIndex]);
         }
       }
     },
-    [handleClose, results, selectedIndex, onOpenProject, onOpenArtifact]
+    [handleClose, results, selectedIndex, openSelectedItem]
   );
-
-  // Global escape listener in case focus leaves the input
-  useEffect(() => {
-    if (!isOpen) return;
-    const globalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handleClose();
-      }
-    };
-    window.addEventListener('keydown', globalKeyDown);
-    return () => window.removeEventListener('keydown', globalKeyDown);
-  }, [isOpen, handleClose]);
 
   if (!isOpen) return null;
 
@@ -139,9 +144,11 @@ export const SearchModal: React.FC<SearchModalProps> = ({
       role="presentation"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Search workspace"
+        data-testid="search-workspace-dialog"
         className="w-full max-w-xl bg-[var(--sthira-surface-raised)] border border-[var(--sthira-border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col text-[var(--sthira-text)]"
       >
         {/* Search Input Row */}
@@ -220,14 +227,25 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 tabIndex={0}
                 aria-label={`Open ${item.title}`}
                 onMouseEnter={() => setSelectedIndex(index)}
-                onClick={() => {
-                  if (item.kind === 'project') {
-                    onOpenProject(item.id);
-                  } else {
-                    onOpenArtifact(item.id);
+                onFocus={() => setSelectedIndex(index)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openSelectedItem(item);
+                  } else if (e.key === 'ArrowDown' && results.length > 0) {
+                    e.preventDefault();
+                    const next = (index + 1) % results.length;
+                    setSelectedIndex(next);
+                    document.getElementById(`search-item-${results[next].id}`)?.focus();
+                  } else if (e.key === 'ArrowUp' && results.length > 0) {
+                    e.preventDefault();
+                    const prev = (index - 1 + results.length) % results.length;
+                    setSelectedIndex(prev);
+                    document.getElementById(`search-item-${results[prev].id}`)?.focus();
                   }
-                  handleClose();
                 }}
+                onClick={() => openSelectedItem(item)}
                 className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between group ${
                   isSelected
                     ? 'bg-[var(--sthira-surface-muted)] border-[var(--sthira-primary)] shadow-2xs'

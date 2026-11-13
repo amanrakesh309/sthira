@@ -56,6 +56,35 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const mountedRef = useRef(true);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (noticeTimerRef.current) { clearTimeout(noticeTimerRef.current); noticeTimerRef.current = null; }
+      if (errorTimerRef.current) { clearTimeout(errorTimerRef.current); errorTimerRef.current = null; }
+    };
+  }, []);
+  const showTimedNotice = (text: string, duration = 3000) => {
+    if (!mountedRef.current) return;
+    setNotice(text);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => {
+      noticeTimerRef.current = null;
+      if (mountedRef.current) setNotice(null);
+    }, duration);
+  };
+  const showTimedErrorNotice = (text: string, duration = 4000) => {
+    if (!mountedRef.current) return;
+    setErrorNotice(text);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => {
+      errorTimerRef.current = null;
+      if (mountedRef.current) setErrorNotice(null);
+    }, duration);
+  };
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -82,6 +111,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const [testResultsMap, setTestResultsMap] = useState<Record<string, WebSearchResultItem[]>>({});
   const [isTestingMap, setIsTestingMap] = useState<Record<string, boolean>>({});
   const [testErrorMap, setTestErrorMap] = useState<Record<string, string | null>>({});
+  const testRequestSeqRef = useRef<Record<string, number>>({});
 
   useEffect(() => { if (isOpen && initialTab) setActiveTab(initialTab); }, [initialTab, isOpen]);
 
@@ -125,12 +155,10 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
         is_enabled: !provider.is_enabled,
       };
       await saveSearchProvider(updated);
-      setNotice(`${provider.display_name} ${updated.is_enabled ? 'enabled' : 'disabled'}.`);
+      showTimedNotice(`${provider.display_name} ${updated.is_enabled ? 'enabled' : 'disabled'}.`, 3000);
       await fetchSearchProvidersList();
-      setTimeout(() => setNotice(null), 3000);
     } catch (err: any) {
-      setErrorNotice(`Failed to update provider status: ${err?.message || err}`);
-      setTimeout(() => setErrorNotice(null), 4000);
+      showTimedErrorNotice(`Failed to update provider status: ${err?.message || err}`, 4000);
     }
   };
 
@@ -142,12 +170,10 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
         is_default: true,
       };
       await saveSearchProvider(updated);
-      setNotice(`${provider.display_name} set as primary web search provider.`);
+      showTimedNotice(`${provider.display_name} set as primary web search provider.`, 3000);
       await fetchSearchProvidersList();
-      setTimeout(() => setNotice(null), 3000);
     } catch (err: any) {
-      setErrorNotice(`Failed to set default search provider: ${err?.message || err}`);
-      setTimeout(() => setErrorNotice(null), 4000);
+      showTimedErrorNotice(`Failed to set default search provider: ${err?.message || err}`, 4000);
     }
   };
 
@@ -161,31 +187,48 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
         api_key: apiKeyVal !== undefined ? (apiKeyVal.trim() === '' ? null : apiKeyVal.trim()) : provider.api_key,
       };
       await saveSearchProvider(updated);
-      setNotice(`Updated settings for ${provider.display_name}.`);
+      showTimedNotice(`Updated settings for ${provider.display_name}.`, 3000);
       await fetchSearchProvidersList();
-      setTimeout(() => setNotice(null), 3000);
     } catch (err: any) {
-      setErrorNotice(`Failed to save provider settings: ${err?.message || err}`);
-      setTimeout(() => setErrorNotice(null), 4000);
+      showTimedErrorNotice(`Failed to save provider settings: ${err?.message || err}`, 4000);
     }
   };
 
   const handleRunSearchTest = async (provider: SearchProviderEntry) => {
+    const nextSeq = (testRequestSeqRef.current[provider.id] || 0) + 1;
+    testRequestSeqRef.current[provider.id] = nextSeq;
+
     const query = testQueryMap[provider.id]?.trim() || 'rust async traits';
     try {
       setIsTestingMap((prev) => ({ ...prev, [provider.id]: true }));
       setTestErrorMap((prev) => ({ ...prev, [provider.id]: null }));
       const results = await testSearchProvider(provider.id, query);
+      if (testRequestSeqRef.current[provider.id] !== nextSeq) {
+        return;
+      }
       setTestResultsMap((prev) => ({ ...prev, [provider.id]: results }));
-      setNotice(`Test search completed: received ${results.length} results from ${provider.display_name}. This checks search only; model generation was not tested.`);
-      setTimeout(() => setNotice(null), 3000);
+      if (results.length > 0) {
+        showTimedNotice(
+          `Test search completed: received ${results.length} results from ${provider.display_name}. This checks search only; model generation was not tested.`,
+          3000,
+        );
+      } else {
+        showTimedNotice(
+          `Test search returned 0 results from ${provider.display_name}. This checks search only; model generation was not tested.`,
+          3000,
+        );
+      }
     } catch (err: any) {
+      if (testRequestSeqRef.current[provider.id] !== nextSeq) {
+        return;
+      }
       const msg = typeof err === 'string' ? err : err?.message || 'Search request failed';
       setTestErrorMap((prev) => ({ ...prev, [provider.id]: msg }));
-      setErrorNotice(`Test search error (${provider.display_name}): ${msg}`);
-      setTimeout(() => setErrorNotice(null), 5000);
+      showTimedErrorNotice(`Test search error (${provider.display_name}): ${msg}`, 5000);
     } finally {
-      setIsTestingMap((prev) => ({ ...prev, [provider.id]: false }));
+      if (testRequestSeqRef.current[provider.id] === nextSeq) {
+        setIsTestingMap((prev) => ({ ...prev, [provider.id]: false }));
+      }
     }
   };
 
@@ -193,6 +236,12 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     if (isOpen) {
       fetchCatalog();
       fetchSearchProvidersList();
+    } else {
+      // Invalidate any in-flight test searches when modal is closed
+      Object.keys(testRequestSeqRef.current).forEach((k) => {
+        testRequestSeqRef.current[k] += 1;
+      });
+      setIsTestingMap({});
     }
   }, [isOpen]);
 

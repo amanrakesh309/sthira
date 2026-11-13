@@ -37,7 +37,8 @@ fn main() {
     let model: Arc<dyn sthira_core::ModelProvider> = Arc::new(TieredModelProvider::from_env());
 
     let engine = Arc::new(
-        Engine::open(&db_path, &vault_path, clock, model).expect("Failed to initialize Sthira Engine"),
+        Engine::open(&db_path, &vault_path, clock, model)
+            .expect("Failed to initialize Sthira Engine"),
     );
 
     // Strip duplicate models on startup

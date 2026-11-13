@@ -46,8 +46,36 @@ describe('Single-page rich document editor', () => {
     act(() => { editor.commands.setTextSelection(7); ref.current?.insertLink('Source', '#/sthira/artifact/source'); });
     expect(editor.getJSON().content).toHaveLength(1);
     expect(editor.getMarkdown()).toContain('Plain [Source](#/sthira/artifact/source)text');
-    await user.click(screen.getByRole('link', { name: 'Source' }));
+    const link = screen.getByRole('link', { name: 'Source' });
+    expect(link).toHaveAttribute('tabindex', '0');
+    await user.click(link);
     expect(p.onOpenEntity).toHaveBeenCalledWith({ kind: 'artifact', id: 'source' });
+  });
+
+  it('gives internal and external inline links tabindex=0 and activates them via Enter and Space without affecting code blocks', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const p = props('# Test\n\n[Internal note](#/sthira/artifact/doc-9) and [External docs](https://example.com/docs) and [Email](mailto:team@example.com)\n\n```\nhttps://example.com/in-code\n```');
+    render(<DocumentEditor {...p} />);
+    const internal = screen.getByRole('link', { name: 'Internal note' });
+    const external = screen.getByRole('link', { name: 'External docs' });
+    const email = screen.getByRole('link', { name: 'Email' });
+    expect(internal).toHaveAttribute('tabindex', '0');
+    expect(external).toHaveAttribute('tabindex', '0');
+    expect(email).toHaveAttribute('tabindex', '0');
+
+    fireEvent.keyDown(internal, { key: 'Enter' });
+    expect(p.onOpenEntity).toHaveBeenLastCalledWith({ kind: 'artifact', id: 'doc-9' });
+    fireEvent.keyDown(internal, { key: ' ' });
+    expect(p.onOpenEntity).toHaveBeenCalledTimes(2);
+
+    fireEvent.keyDown(external, { key: 'Enter' });
+    expect(openSpy).toHaveBeenLastCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer');
+    fireEvent.keyDown(email, { key: ' ' });
+    expect(openSpy).toHaveBeenLastCalledWith('mailto:team@example.com', '_blank', 'noopener,noreferrer');
+
+    const codeBlock = screen.getByText('https://example.com/in-code');
+    expect(codeBlock.closest('a')).toBeNull();
+    openSpy.mockRestore();
   });
 
   it('retains embedded object directives, unknown code fences and raw HTML during surrounding edits', async () => {

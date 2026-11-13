@@ -128,5 +128,19 @@ it('does not silently replace a removed model with the catalog default', async (
   await waitFor(()=>expect(screen.getByRole('combobox')).toBeEnabled());
   expect(screen.getByRole('combobox')).toHaveValue('removed-model');
   expect(screen.getByText('This model is unavailable. Choose an enabled model to continue.')).toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'Send message'})).toBeDisabled();
+  const sendBtn = screen.getByRole('button',{name:'Send message'});
+  expect(sendBtn).toBeDisabled();
+  expect(sendBtn.className).toContain('sthira-button-primary');
+});
+
+it('exposes DocumentChatPanel error alert text outside Reload conversation button (F-B5-014)', async () => {
+  const user = userEvent.setup();
+  vi.mocked(discussDocument).mockRejectedValueOnce(new Error('Provider returned HTTP 402'));
+  render(<DocumentChatPanel {...props()} />);
+  await user.type(screen.getByRole('textbox'), 'Hello');
+  await user.click(screen.getByRole('button', { name: 'Send message' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Provider returned HTTP 402');
+  expect(alert.querySelector('button')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Reload conversation' })).toBeInTheDocument();
 });

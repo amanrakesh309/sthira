@@ -12,7 +12,9 @@ pub enum EpistemicOrigin {
     AiInferred,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
     #[serde(alias = "question", alias = "Question", alias = "QUESTION")]
@@ -23,7 +25,11 @@ pub enum NodeType {
     Finding,
     #[serde(alias = "hypothesis", alias = "Hypothesis", alias = "HYPOTHESIS")]
     Hypothesis,
-    #[serde(alias = "rejected_approach", alias = "RejectedApproach", alias = "REJECTED_APPROACH")]
+    #[serde(
+        alias = "rejected_approach",
+        alias = "RejectedApproach",
+        alias = "REJECTED_APPROACH"
+    )]
     RejectedApproach,
 }
 
@@ -99,7 +105,10 @@ pub fn is_mid_sentence(body: &str) -> bool {
 
     // Check terminal characters
     let last_char = trimmed.chars().last().unwrap();
-    if matches!(last_char, '.' | '?' | '!' | '`' | '#' | '>' | '-' | '*' | ':' | '}') {
+    if matches!(
+        last_char,
+        '.' | '?' | '!' | '`' | '#' | '>' | '-' | '*' | ':' | '}'
+    ) {
         return false;
     }
 
@@ -115,9 +124,7 @@ const HEDGE_WORDS: &[&str] = &[
     "maybe", "might", "could", "perhaps", "probably", "possibly", "tbd",
 ];
 
-const HEDGE_PHRASES: &[&str] = &[
-    "what if", "should we", "thinking about", "not sure",
-];
+const HEDGE_PHRASES: &[&str] = &["what if", "should we", "thinking about", "not sure"];
 
 pub fn is_hedged(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -141,7 +148,11 @@ pub fn is_hedged(text: &str) -> bool {
 }
 
 impl VerifiedQuote {
-    pub fn verify(artifact_body: &str, basis_hash: &str, claimed: &str) -> Result<Self, QuoteError> {
+    pub fn verify(
+        artifact_body: &str,
+        basis_hash: &str,
+        claimed: &str,
+    ) -> Result<Self, QuoteError> {
         let norm_claimed = normalize_quote_text(claimed);
         if norm_claimed.len() < 12 {
             return Err(QuoteError::TooShort);
@@ -253,7 +264,8 @@ impl VerifiedQuote {
                 };
 
                 // Condition (b): >= 80% token overlap + critical numeric/negation verbatim preservation
-                let match_b = matches_token_overlap_and_critical_tokens(&cand_words, &claimed_words);
+                let match_b =
+                    matches_token_overlap_and_critical_tokens(&cand_words, &claimed_words);
 
                 if match_a || match_b {
                     matching_candidates.push(cand);
@@ -269,12 +281,8 @@ impl VerifiedQuote {
                 }
 
                 // Snap start and end to the exact verbatim span in artifact_body
-                let (snap_start, snap_end) = find_anchor_subspan(
-                    artifact_body,
-                    winner.start,
-                    winner.end,
-                    &claimed_words,
-                );
+                let (snap_start, snap_end) =
+                    find_anchor_subspan(artifact_body, winner.start, winner.end, &claimed_words);
 
                 let verbatim_span = &artifact_body[snap_start..snap_end];
                 let mut hasher = Sha256::new();
@@ -334,7 +342,11 @@ fn collect_candidate_sentences<'a>(
             for (idx, ch) in line_slice.char_indices() {
                 if matches!(ch, '.' | '?' | '!') {
                     let next_char = line_slice[idx + ch.len_utf8()..].chars().next();
-                    let prev_is_digit = idx > 0 && line_slice[..idx].chars().last().is_some_and(|c| c.is_ascii_digit());
+                    let prev_is_digit = idx > 0
+                        && line_slice[..idx]
+                            .chars()
+                            .last()
+                            .is_some_and(|c| c.is_ascii_digit());
                     let next_is_digit = next_char.is_some_and(|c| c.is_ascii_digit());
                     if prev_is_digit && next_is_digit {
                         continue;
@@ -352,7 +364,9 @@ fn collect_candidate_sentences<'a>(
                             });
                         }
                         let mut rem_start = sent_end;
-                        while rem_start < trimmed_end && artifact_body.as_bytes()[rem_start].is_ascii_whitespace() {
+                        while rem_start < trimmed_end
+                            && artifact_body.as_bytes()[rem_start].is_ascii_whitespace()
+                        {
                             rem_start += 1;
                         }
                         sent_start = rem_start;
@@ -412,7 +426,8 @@ fn matches_ordered_subsequence(haystack: &[String], needle: &[String]) -> bool {
 }
 
 const NEGATION_TOKENS: &[&str] = &[
-    "not", "no", "never", "neither", "nor", "none", "without", "cannot", "n't", "dont", "cant", "wont",
+    "not", "no", "never", "neither", "nor", "none", "without", "cannot", "n't", "dont", "cant",
+    "wont",
 ];
 
 fn is_numeric_or_version_token(token: &str) -> bool {
@@ -433,7 +448,10 @@ fn matches_token_overlap_and_critical_tokens(
     }
 
     let cand_set: std::collections::HashSet<&String> = candidate_words.iter().collect();
-    let overlap_count = claimed_words.iter().filter(|w| cand_set.contains(w)).count();
+    let overlap_count = claimed_words
+        .iter()
+        .filter(|w| cand_set.contains(w))
+        .count();
     let overlap_ratio = overlap_count as f64 / claimed_words.len() as f64;
     if overlap_ratio < 0.80 {
         return false;
@@ -512,10 +530,17 @@ mod tests {
     fn test_exact_quote_match() {
         let body = "Decision: We are locking the target tier to 14B Q4_K_M models.";
         let hash = "hash1";
-        let res = VerifiedQuote::verify(body, hash, "We are locking the target tier to 14B Q4_K_M models.");
+        let res = VerifiedQuote::verify(
+            body,
+            hash,
+            "We are locking the target tier to 14B Q4_K_M models.",
+        );
         assert!(res.is_ok());
         let vq = res.unwrap();
-        assert_eq!(vq.text, "We are locking the target tier to 14B Q4_K_M models.");
+        assert_eq!(
+            vq.text,
+            "We are locking the target tier to 14B Q4_K_M models."
+        );
     }
 
     #[test]

@@ -14,12 +14,10 @@ static INIT_VEC: Once = Once::new();
 
 #[allow(clippy::missing_transmute_annotations)]
 pub fn ensure_sqlite_vec_registered() {
-    INIT_VEC.call_once(|| {
-        unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
+    INIT_VEC.call_once(|| unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )));
     });
 }
 
@@ -38,7 +36,8 @@ impl r2d2::ManageConnection for SqliteManager {
         let conn = if self.read_only {
             let conn = Connection::open_with_flags(
                 &self.path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
             conn.execute_batch("PRAGMA query_only = ON;")?;
             conn
@@ -98,7 +97,9 @@ impl Db {
         let reader_pool = r2d2::Pool::builder()
             .max_size(16)
             .build(manager)
-            .map_err(|e| CoreError::InvariantViolation(format!("Failed to build reader pool: {e}")))?;
+            .map_err(|e| {
+                CoreError::InvariantViolation(format!("Failed to build reader pool: {e}"))
+            })?;
 
         Ok(Self {
             path,

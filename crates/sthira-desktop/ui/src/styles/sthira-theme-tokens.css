@@ -81,6 +81,13 @@ html.dark, html[data-theme="dark"] {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .sthira-button-primary:hover:not(:disabled) { background: var(--sthira-primary-hover); }
+.sthira-button-primary:disabled {
+  background: var(--sthira-surface-muted);
+  color: var(--sthira-text-muted);
+  border-color: var(--sthira-border);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .sthira-button-secondary {
   background: var(--sthira-surface); color: var(--sthira-text);
   border: 1px solid var(--sthira-border-strong); border-radius: var(--sthira-radius-sm);
@@ -90,6 +97,23 @@ html.dark, html[data-theme="dark"] {
 }
 .sthira-button-secondary:hover:not(:disabled) {
   background: var(--sthira-surface-muted);
+}
+.sthira-button-secondary:disabled {
+  background: var(--sthira-surface-muted);
+  color: var(--sthira-text-muted);
+  border-color: var(--sthira-border);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sthira-shell select,
+[role="dialog"] select {
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text);
+}
+.sthira-shell select option,
+[role="dialog"] select option {
+  background-color: var(--sthira-surface);
+  color: var(--sthira-text);
 }
 .sthira-button-primary:focus-visible, .sthira-button-secondary:focus-visible,
 .sthira-shell :is(button, a, input, select, textarea, [tabindex]):focus-visible {

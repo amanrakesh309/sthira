@@ -50,8 +50,12 @@ pub async fn cmd_discuss_document(
     model_id: Option<String>,
     propose_edit: bool,
 ) -> Result<Conversation, String> {
-    let remembered = state.engine.document_conversation(&artifact_id, None, "")?.and_then(|chat| chat.model_id);
-    let model_id = crate::workflow_settings::workflow_model(&state.engine, "chat", model_id.or(remembered))?;
+    let remembered = state
+        .engine
+        .document_conversation(&artifact_id, None, "")?
+        .and_then(|chat| chat.model_id);
+    let model_id =
+        crate::workflow_settings::workflow_model(&state.engine, "chat", model_id.or(remembered))?;
     state
         .engine
         .discuss_document(&artifact_id, &text, model_id.as_deref(), propose_edit)

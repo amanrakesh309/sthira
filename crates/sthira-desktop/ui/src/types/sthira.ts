@@ -61,6 +61,22 @@ export interface Artifact {
   derivation_type?: string | null;
 }
 
+export interface SaveArtifactOutcome {
+  artifact: Artifact;
+  mirror_synced: boolean;
+  mirror_sync_error?: string | null;
+  unchanged: boolean;
+  repaired_mirror_only: boolean;
+}
+
+export interface RefineArtifactOutcome {
+  artifact_id: string;
+  content_md: string;
+  content_hash: string;
+  version: number;
+  change_set_id: string;
+}
+
 export interface HomeStateView {
   projects: ProjectCardView[];
   recent_items: RecentItemView[];
@@ -93,6 +109,7 @@ export interface ArtifactContext {
   epistemic_nodes: EpistemicNodeView[];
   pending_proposals: ProposalView[];
   project_id?: string | null;
+  project_ids?: string[];
   is_unfinished_draft: boolean;
   derived_from_title?: string | null;
 }

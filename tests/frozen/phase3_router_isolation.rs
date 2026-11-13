@@ -42,8 +42,8 @@ async fn test_3_1_60_row_frozen_benchmark() {
     assert!(!proj_embed.id.is_empty());
 
     let fixture_content = include_str!("../../fixtures/golden/router_benchmark_60.json");
-    let benchmark: Vec<serde_json::Value> = serde_json::from_str(&fixture_content)
-        .expect("Failed to parse router_benchmark_60.json");
+    let benchmark: Vec<serde_json::Value> =
+        serde_json::from_str(fixture_content).expect("Failed to parse router_benchmark_60.json");
 
     assert_eq!(benchmark.len(), 60, "Must contain exactly 60 test inputs");
 
@@ -86,19 +86,22 @@ async fn test_3_2_zero_write_guarantee_on_non_mutating_intents() {
     let (engine, _clock, _dir) = setup_test_engine(false);
 
     let fixture_content = include_str!("../../fixtures/golden/router_benchmark_60.json");
-    let benchmark: Vec<serde_json::Value> = serde_json::from_str(&fixture_content)
-        .expect("Failed to parse router_benchmark_60.json");
+    let benchmark: Vec<serde_json::Value> =
+        serde_json::from_str(fixture_content).expect("Failed to parse router_benchmark_60.json");
 
     let reader = engine.db().reader().expect("reader failed");
 
     let count_artifacts = |r: &rusqlite::Connection| -> i64 {
-        r.query_row("SELECT COUNT(*) FROM artifacts;", [], |row| row.get(0)).unwrap()
+        r.query_row("SELECT COUNT(*) FROM artifacts;", [], |row| row.get(0))
+            .unwrap()
     };
     let count_projects = |r: &rusqlite::Connection| -> i64 {
-        r.query_row("SELECT COUNT(*) FROM projects;", [], |row| row.get(0)).unwrap()
+        r.query_row("SELECT COUNT(*) FROM projects;", [], |row| row.get(0))
+            .unwrap()
     };
     let count_events = |r: &rusqlite::Connection| -> i64 {
-        r.query_row("SELECT COUNT(*) FROM session_events;", [], |row| row.get(0)).unwrap()
+        r.query_row("SELECT COUNT(*) FROM session_events;", [], |row| row.get(0))
+            .unwrap()
     };
 
     let art_before = count_artifacts(&reader);
@@ -111,7 +114,9 @@ async fn test_3_2_zero_write_guarantee_on_non_mutating_intents() {
         let plan = engine.route_input(input).await.expect("route_input failed");
 
         // Verify mutates_immediately flag
-        if plan.intent_type == IntentType::CaptureNote || plan.intent_type == IntentType::CaptureSource {
+        if plan.intent_type == IntentType::CaptureNote
+            || plan.intent_type == IntentType::CaptureSource
+        {
             assert!(plan.mutates_immediately());
         } else {
             assert!(!plan.mutates_immediately());
@@ -138,7 +143,10 @@ async fn test_3_2_zero_write_guarantee_on_non_mutating_intents() {
     );
 
     let confirmed_res = engine.apply_plan(&research_plan, Approval::Confirmed);
-    assert!(confirmed_res.is_ok(), "Must succeed with confirmed approval");
+    assert!(
+        confirmed_res.is_ok(),
+        "Must succeed with confirmed approval"
+    );
 }
 
 #[tokio::test]

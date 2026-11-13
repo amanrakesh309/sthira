@@ -37,26 +37,21 @@ pub fn resolve_search_provider(
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
 
     if let Some(id) = override_id {
-        let providers = crate::db::search_repo::list_search_providers(&reader)
-            .map_err(|e| e.to_string())?;
+        let providers =
+            crate::db::search_repo::list_search_providers(&reader).map_err(|e| e.to_string())?;
         if let Some(found) = providers.into_iter().find(|p| p.id == id) {
+            if !found.is_enabled {
+                return Err(format!("Search provider '{id}' is disabled"));
+            }
             return Ok(found);
+        } else {
+            return Err(format!("Search provider '{id}' not found"));
         }
     }
 
-    Ok(
-        crate::db::search_repo::get_default_search_provider(&reader)
-            .map_err(|e| e.to_string())?
-            .unwrap_or_else(|| SearchProviderEntry {
-                id: "duckduckgo".to_string(),
-                display_name: "DuckDuckGo".to_string(),
-                provider_type: "duckduckgo_scraper".to_string(),
-                endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
-                api_key: None,
-                is_enabled: true,
-                is_default: true,
-            }),
-    )
+    crate::db::search_repo::get_default_search_provider(&reader)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No enabled search provider is configured".to_string())
 }
 
 /// Builds the **anti-duplication boundary**: the headline findings and source
@@ -137,7 +132,7 @@ async fn run_research(
     let provider: &dyn SearchProvider = match injected_provider {
         Some(p) => p,
         None => {
-            owned_provider = build_search_provider(&provider_entry);
+            owned_provider = build_search_provider(&provider_entry).map_err(|e| e.to_string())?;
             owned_provider.as_ref()
         }
     };
@@ -195,7 +190,6 @@ async fn run_research(
     Ok((artifact.id, sources_scraped))
 }
 
-
 // ---------------------------------------------------------------------------
 // Plan branch
 // ---------------------------------------------------------------------------
@@ -224,7 +218,7 @@ fn gather_project_context(
 
     let project_name: Option<String> = reader
         .query_row(
-            "SELECT name FROM projects WHERE id = ?1;",
+            "SELECT name FROM projects WHERE id = ?1 AND deleted_at IS NULL;",
             rusqlite::params![pid],
             |r| r.get(0),
         )
@@ -232,7 +226,10 @@ fn gather_project_context(
 
     let artifact_count: i64 = reader
         .query_row(
-            "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL;",
+            "SELECT COUNT(*)
+             FROM project_artifacts pa
+             JOIN artifacts a ON a.id = pa.artifact_id
+             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL;",
             rusqlite::params![pid],
             |r| r.get(0),
         )
@@ -245,7 +242,8 @@ fn gather_project_context(
                 "SELECT n.node_type, n.statement
                  FROM epistemic_nodes n
                  JOIN project_artifacts pa ON pa.artifact_id = n.artifact_id
-                 WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND n.lifecycle = 'open'
+                 JOIN artifacts a ON a.id = n.artifact_id
+                 WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL AND n.lifecycle = 'open'
                  ORDER BY n.first_seen_at DESC
                  LIMIT 12;",
             )
@@ -280,7 +278,6 @@ fn gather_project_context(
         artifact_count,
     })
 }
-
 
 async fn run_plan_review(
     engine: &Engine,
@@ -374,7 +371,10 @@ async fn run_plan_review(
 
     match review {
         Some(r) => {
-            md.push_str(&format!("## Progress Assessment\n{}\n\n", r.progress_summary));
+            md.push_str(&format!(
+                "## Progress Assessment\n{}\n\n",
+                r.progress_summary
+            ));
             md.push_str("## Completed Milestones\n");
             if r.completed_milestones.is_empty() {
                 md.push_str("- (none reported)\n");
@@ -448,7 +448,6 @@ async fn run_plan_review(
     Ok((artifact.id, ctx.artifact_count as usize))
 }
 
-
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
@@ -521,4 +520,3 @@ pub fn list_due_topics(engine: &Engine, now_ms: i64) -> Result<Vec<ScheduledTopi
     let active = repo::list_active_topics(&reader).map_err(|e| e.to_string())?;
     Ok(active.into_iter().filter(|t| t.is_due(now_ms)).collect())
 }
-

@@ -979,24 +979,16 @@ export const ObjectTypeManagerModal: React.FC<ObjectTypeManagerModalProps> = ({
                 <div className="object-type-manager-footer">
                   <div className="flex items-center gap-2 min-w-0">
                     {errorMessage && (
-                      <span
-                        data-testid="object-type-error"
-                        role="alert"
-                        className="inline-flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400"
-                      >
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span className="truncate">{errorMessage}</span>
-                      </span>
+                      <div className="inline-flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400">
+                        <AlertCircle aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
+                        <span data-testid="object-type-error" role="alert" className="truncate">{errorMessage}</span>
+                      </div>
                     )}
                     {savedFlash && !errorMessage && (
-                      <span
-                        data-testid="object-type-saved"
-                        role="status"
-                        className="inline-flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        {savedFlash}
-                      </span>
+                      <div className="inline-flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                        <Check aria-hidden="true" className="w-3.5 h-3.5" />
+                        <span data-testid="object-type-saved" role="status">{savedFlash}</span>
+                      </div>
                     )}
                   </div>
 

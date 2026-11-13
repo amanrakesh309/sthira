@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
 use sthira_core::Engine;
+use tauri::{AppHandle, Emitter};
 
 pub fn spawn_event_bridge(app_handle: AppHandle, engine: Arc<Engine>) {
     tauri::async_runtime::spawn(async move {

@@ -1,15 +1,15 @@
-use tauri::State;
-use serde::{Deserialize, Serialize};
+use crate::state::AppState;
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use sthira_core::{
-    Actor, Artifact, ArtifactType, Authorship, CanvasItemKind, EventType, Materiality,
-    Engine, ResumeBrief, ResumePaneHint,
-    ObjectInstance, ObjectItem, ObjectTemplate, ObjectType,
     history::ProjectHistory,
     router::{Approval, RouterPlan},
-    OperationalMode, ProgressiveStreamChunk,
+    Actor, Artifact, ArtifactType, Authorship, CanvasItemKind, Engine, EventType, Materiality,
+    ObjectInstance, ObjectItem, ObjectTemplate, ObjectType, OperationalMode,
+    ProgressiveStreamChunk, RefineArtifactOutcome, ResumeBrief, ResumePaneHint,
+    SaveArtifactOutcome, SaveArtifactRequest,
 };
-use crate::state::AppState;
+use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyOutcome {
@@ -167,6 +167,8 @@ pub struct ArtifactContext {
     pub epistemic_nodes: Vec<EpistemicNodeView>,
     pub pending_proposals: Vec<ProposalView>,
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_ids: Vec<String>,
     pub is_unfinished_draft: bool,
     #[serde(default)]
     pub derived_from_title: Option<String>,
@@ -254,6 +256,32 @@ pub struct CanvasOpsResponse {
 // Pure Handlers (Directly testable without webview)
 // ---------------------------------------------------------------------------
 
+fn resolve_active_project_id(engine: &Engine, project_id: Option<String>) -> Option<String> {
+    project_id.and_then(|pid| {
+        let trimmed = pid.trim().to_string();
+        if trimmed.is_empty() || trimmed == "default_project" {
+            None
+        } else {
+            let exists: bool = if let Ok(reader) = engine.db().reader() {
+                reader
+                    .query_row(
+                        "SELECT 1 FROM projects WHERE id = ?1 AND deleted_at IS NULL;",
+                        rusqlite::params![trimmed],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if exists {
+                Some(trimmed)
+            } else {
+                None
+            }
+        }
+    })
+}
+
 pub async fn handle_route_input(engine: &Engine, raw: String) -> Result<RouterPlan, String> {
     engine.route_input(&raw).await.map_err(|e| e.to_string())
 }
@@ -291,7 +319,9 @@ pub fn handle_get_home_state(engine: &Engine) -> Result<HomeStateView, String> {
     for thread in home.threads {
         let count_i64: i64 = reader
             .query_row(
-                "SELECT COUNT(*) FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL;",
+                "SELECT COUNT(*) FROM project_artifacts pa
+                 JOIN artifacts a ON a.id = pa.artifact_id
+                 WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL;",
                 params![thread.project_id],
                 |r| r.get(0),
             )
@@ -308,8 +338,16 @@ pub fn handle_get_home_state(engine: &Engine) -> Result<HomeStateView, String> {
             purpose: thread.purpose,
             last_substantive_at: thread.last_substantive_at,
             item_count: count,
-            category: if is_research { "Research".to_string() } else { "Project".to_string() },
-            icon_type: if is_research { "brain".to_string() } else { "code".to_string() },
+            category: if is_research {
+                "Research".to_string()
+            } else {
+                "Project".to_string()
+            },
+            icon_type: if is_research {
+                "brain".to_string()
+            } else {
+                "code".to_string()
+            },
         });
     }
 
@@ -319,9 +357,21 @@ pub fn handle_get_home_state(engine: &Engine) -> Result<HomeStateView, String> {
     // 1. Most recently updated artifact
     let recent_art: Option<(String, String, Option<String>, i64)> = reader
         .query_row(
-            "SELECT a.id, a.title, pa.project_id, a.updated_at
+            "SELECT a.id, COALESCE(NULLIF(trim(a.title), ''), 'Untitled Note'),
+                    CASE WHEN (
+                        SELECT COUNT(*) FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                    ) = 1
+                    THEN (
+                        SELECT pa.project_id FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                        LIMIT 1
+                    )
+                    ELSE NULL END,
+                    a.updated_at
              FROM artifacts a
-             LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
              WHERE a.deleted_at IS NULL
              ORDER BY a.updated_at DESC LIMIT 1;",
             [],
@@ -345,7 +395,11 @@ pub fn handle_get_home_state(engine: &Engine) -> Result<HomeStateView, String> {
     // 2. Most recent canvas
     let recent_canvas: Option<(String, String, Option<String>, i64)> = reader
         .query_row(
-            "SELECT id, name, project_id, created_at FROM canvases ORDER BY created_at DESC LIMIT 1;",
+            "SELECT c.id, c.name, c.project_id, c.created_at
+             FROM canvases c
+             LEFT JOIN projects p ON p.id = c.project_id
+             WHERE c.project_id IS NULL OR p.deleted_at IS NULL
+             ORDER BY c.created_at DESC LIMIT 1;",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
@@ -380,6 +434,7 @@ pub fn handle_get_workspace_tree(engine: &Engine) -> Result<WorkspaceTree, Strin
             "SELECT p.id, p.name, COALESCE(pp.purpose, ''), p.last_substantive_at
              FROM projects p
              LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
+             WHERE p.deleted_at IS NULL
              ORDER BY p.last_substantive_at DESC, p.name ASC;",
         )
         .map_err(|e| e.to_string())?;
@@ -462,7 +517,10 @@ pub fn handle_get_workspace_tree(engine: &Engine) -> Result<WorkspaceTree, Strin
              FROM artifacts a
              WHERE a.deleted_at IS NULL
                AND a.id NOT IN (
-                   SELECT artifact_id FROM project_artifacts WHERE detached_at IS NULL
+                   SELECT pa.artifact_id
+                   FROM project_artifacts pa
+                   JOIN projects p ON p.id = pa.project_id
+                   WHERE pa.detached_at IS NULL AND p.deleted_at IS NULL
                )
              ORDER BY a.updated_at DESC, a.title ASC;",
         )
@@ -516,38 +574,19 @@ pub fn handle_create_page(
 ) -> Result<Artifact, String> {
     let t = title.unwrap_or_else(|| "Untitled Note".to_string());
     let initial_content = format!("# {}\n\n", t);
-    let art = engine
-        .create_artifact(ArtifactType::Note, Authorship::User, Some(&t), &initial_content, None)
+    let valid_project_id = resolve_active_project_id(engine, project_id);
+
+    let outcome = engine
+        .create_and_save_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some(&t),
+            &initial_content,
+            None,
+            valid_project_id.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
-
-    let valid_project_id = project_id.and_then(|pid| {
-        let trimmed = pid.trim().to_string();
-        if trimmed.is_empty() || trimmed == "default_project" {
-            None
-        } else {
-            let exists: bool = if let Ok(reader) = engine.db().reader() {
-                reader
-                    .query_row(
-                        "SELECT 1 FROM projects WHERE id = ?1;",
-                        rusqlite::params![trimmed],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false)
-            } else {
-                false
-            };
-            if exists {
-                Some(trimmed)
-            } else {
-                None
-            }
-        }
-    });
-
-    if let Some(ref pid) = valid_project_id {
-        let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
-    }
-    Ok(art)
+    Ok(outcome.artifact)
 }
 
 pub async fn handle_get_resume_brief(
@@ -580,17 +619,32 @@ pub fn handle_get_artifact_context(
     engine: &Engine,
     artifact_id: String,
 ) -> Result<ArtifactContext, String> {
-    let art = engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    let art = engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
 
-    // Project ID
-    let project_id: Option<String> = reader
-        .query_row(
-            "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL LIMIT 1;",
-            params![artifact_id],
-            |r| r.get(0),
-        )
-        .ok();
+    // Active parent projects (`project_id` is populated only when unambiguous single parent)
+    let project_ids: Vec<String> = {
+        let mut proj_stmt = reader
+            .prepare(
+                "SELECT pa.project_id
+                 FROM project_artifacts pa
+                 JOIN projects p ON p.id = pa.project_id
+                 WHERE pa.artifact_id = ?1 AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                 ORDER BY p.last_substantive_at DESC, pa.project_id ASC;",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = proj_stmt
+            .query_map(params![artifact_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let project_id = if project_ids.len() == 1 {
+        Some(project_ids[0].clone())
+    } else {
+        None
+    };
 
     // Epistemic nodes
     let mut node_stmt = reader
@@ -638,8 +692,16 @@ pub fn handle_get_artifact_context(
             let evidence_str: String = r.get(2)?;
             let payload_str: String = r.get(3)?;
             let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or_default();
-            let src = payload.get("source_artifact_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let dst = payload.get("target_artifact_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let src = payload
+                .get("source_artifact_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let dst = payload
+                .get("target_artifact_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             Ok(ProposalView {
                 id,
@@ -654,18 +716,21 @@ pub fn handle_get_artifact_context(
         .filter_map(|r| r.ok())
         .collect();
 
-    let derived_from_title: Option<String> = if let Some(ref parent_id) = art.derived_from_artifact_id {
-        reader
-            .query_row(
-                "SELECT title FROM artifacts WHERE id = ?1;",
-                params![parent_id],
-                |r| r.get(0),
-            )
-            .ok()
-            .flatten()
-            .or_else(|| Some("Untitled Note".to_string()))
-    } else {
-        None
+    let derived_from_title: Option<String> = match art.derived_from_artifact_id.as_deref() {
+        Some(parent_id) => match reader.query_row(
+            "SELECT title FROM artifacts WHERE id = ?1 AND deleted_at IS NULL;",
+            params![parent_id],
+            |r| r.get::<_, Option<String>>(0),
+        ) {
+            Ok(opt_title) => Some(
+                opt_title
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "Untitled Note".to_string()),
+            ),
+            Err(_) => None,
+        },
+        None => None,
     };
 
     Ok(ArtifactContext {
@@ -674,6 +739,7 @@ pub fn handle_get_artifact_context(
         epistemic_nodes: nodes,
         pending_proposals: proposals,
         project_id,
+        project_ids,
         derived_from_title,
     })
 }
@@ -684,7 +750,7 @@ pub fn handle_save_artifact(
     content_md: String,
     title: Option<String>,
     project_id: Option<String>,
-) -> Result<Artifact, String> {
+) -> Result<SaveArtifactOutcome, String> {
     let explicit_title = title.and_then(|t| {
         let trimmed = t.trim().to_string();
         if trimmed.is_empty() {
@@ -728,58 +794,34 @@ pub fn handle_save_artifact(
         }
     }
 
-    // Validate that project_id actually exists in projects table to prevent foreign key violations
-    let valid_project_id = project_id.and_then(|pid| {
-        let trimmed = pid.trim().to_string();
-        if trimmed.is_empty() || trimmed == "default_project" {
-            None
-        } else {
-            let exists: bool = if let Ok(reader) = engine.db().reader() {
-                reader
-                    .query_row(
-                        "SELECT 1 FROM projects WHERE id = ?1;",
-                        rusqlite::params![trimmed],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false)
-            } else {
-                false
-            };
-            if exists {
-                Some(trimmed)
-            } else {
-                None
-            }
-        }
-    });
+    // Validate that project_id actually exists in active projects to prevent foreign key violations
+    let valid_project_id = resolve_active_project_id(engine, project_id);
 
     if artifact_id.is_empty() {
-        let art = engine
-            .create_artifact(ArtifactType::Note, Authorship::User, Some(&final_title), &final_content, None)
-            .map_err(|e| e.to_string())?;
-        if let Some(ref pid) = valid_project_id {
-            let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
-        }
-        Ok(art)
+        engine
+            .create_and_save_artifact(
+                ArtifactType::Note,
+                Authorship::User,
+                Some(&final_title),
+                &final_content,
+                None,
+                valid_project_id.as_deref(),
+            )
+            .map_err(|e| e.to_string())
     } else {
-        {
-            let writer = engine.db().writer();
-            let _ = writer.execute(
-                "UPDATE artifacts SET title = ?1 WHERE id = ?2;",
-                rusqlite::params![final_title, artifact_id],
-            );
-        }
-        let updated = engine
-            .update_artifact(&artifact_id, &final_content, Actor::User, valid_project_id.as_deref())
-            .map_err(|e| e.to_string())?;
-
-        if let Some(ref fp) = updated.file_path {
-            let full_path = engine.vault_dir().join(fp);
-            let rendered = sthira_core::vault::render_file_with_frontmatter(&updated);
-            let _ = std::fs::write(&full_path, rendered);
-        }
-
-        Ok(updated)
+        engine
+            .save_artifact(
+                &artifact_id,
+                SaveArtifactRequest {
+                    content_md: &final_content,
+                    title: Some(&final_title),
+                    actor: Actor::User,
+                    context_project_id: valid_project_id.as_deref(),
+                    authorship: None,
+                    is_unfinished_draft: None,
+                },
+            )
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -817,10 +859,7 @@ pub fn handle_decide_proposal(
     }
 }
 
-pub fn handle_revert_change_set(
-    engine: &Engine,
-    change_set_id: String,
-) -> Result<String, String> {
+pub fn handle_revert_change_set(engine: &Engine, change_set_id: String) -> Result<String, String> {
     engine
         .revert_change_set(&change_set_id)
         .map_err(|e| e.to_string())
@@ -843,25 +882,36 @@ pub fn handle_canvas_ops(
     req: CanvasOpsRequest,
 ) -> Result<CanvasOpsResponse, String> {
     match req {
-        CanvasOpsRequest::GetCanvas { canvas_id, project_id } => {
+        CanvasOpsRequest::GetCanvas {
+            canvas_id,
+            project_id,
+        } => {
             let reader = engine.db().reader().map_err(|e| e.to_string())?;
             let cid = if let Some(id) = canvas_id {
                 id
             } else if let Some(ref pid) = project_id {
                 reader
                     .query_row(
-                        "SELECT id FROM canvases WHERE project_id = ?1 ORDER BY created_at DESC LIMIT 1;",
+                        "SELECT c.id FROM canvases c
+                         JOIN projects p ON p.id = c.project_id
+                         WHERE c.project_id = ?1 AND p.deleted_at IS NULL
+                         ORDER BY c.created_at DESC LIMIT 1;",
                         params![pid],
                         |r| r.get(0),
                     )
                     .unwrap_or_else(|_| {
                         drop(reader);
-                        engine.create_canvas(project_id.as_deref(), "Workspace Canvas").unwrap()
+                        engine
+                            .create_canvas(project_id.as_deref(), "Workspace Canvas")
+                            .unwrap()
                     })
             } else {
                 reader
                     .query_row(
-                        "SELECT id FROM canvases ORDER BY created_at DESC LIMIT 1;",
+                        "SELECT c.id FROM canvases c
+                         LEFT JOIN projects p ON p.id = c.project_id
+                         WHERE c.project_id IS NULL OR p.deleted_at IS NULL
+                         ORDER BY c.created_at DESC LIMIT 1;",
                         [],
                         |r| r.get(0),
                     )
@@ -874,7 +924,10 @@ pub fn handle_canvas_ops(
             let reader = engine.db().reader().map_err(|e| e.to_string())?;
             let (name, pid): (String, Option<String>) = reader
                 .query_row(
-                    "SELECT name, project_id FROM canvases WHERE id = ?1;",
+                    "SELECT c.name, c.project_id
+                     FROM canvases c
+                     LEFT JOIN projects p ON p.id = c.project_id
+                     WHERE c.id = ?1 AND (c.project_id IS NULL OR p.deleted_at IS NULL);",
                     params![cid],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -885,7 +938,7 @@ pub fn handle_canvas_ops(
                     "SELECT ci.item_id, ci.item_kind, ci.artifact_id, a.title, SUBSTR(a.content_md, 1, 100), ci.x, ci.y, ci.w, ci.h, ci.z
                      FROM canvas_items ci
                      LEFT JOIN artifacts a ON ci.artifact_id = a.id
-                     WHERE ci.canvas_id = ?1;",
+                     WHERE ci.canvas_id = ?1 AND (ci.artifact_id IS NULL OR a.deleted_at IS NULL);",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -911,10 +964,12 @@ pub fn handle_canvas_ops(
             // Semantic links
             let mut link_stmt = reader
                 .prepare(
-                    "SELECT source_artifact_id, target_artifact_id, relationship_type, origin
-                     FROM artifact_links
-                     WHERE source_artifact_id IN (SELECT artifact_id FROM canvas_items WHERE canvas_id = ?1 AND artifact_id IS NOT NULL)
-                        OR target_artifact_id IN (SELECT artifact_id FROM canvas_items WHERE canvas_id = ?1 AND artifact_id IS NOT NULL);",
+                    "SELECT al.source_artifact_id, al.target_artifact_id, al.relationship_type, al.origin
+                     FROM artifact_links al
+                     JOIN artifacts sa ON sa.id = al.source_artifact_id AND sa.deleted_at IS NULL
+                     JOIN artifacts ta ON ta.id = al.target_artifact_id AND ta.deleted_at IS NULL
+                     WHERE al.source_artifact_id IN (SELECT artifact_id FROM canvas_items WHERE canvas_id = ?1 AND artifact_id IS NOT NULL)
+                        OR al.target_artifact_id IN (SELECT artifact_id FROM canvas_items WHERE canvas_id = ?1 AND artifact_id IS NOT NULL);",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -943,7 +998,12 @@ pub fn handle_canvas_ops(
                 success: true,
             })
         }
-        CanvasOpsRequest::MoveItem { canvas_id, item_id, x, y } => {
+        CanvasOpsRequest::MoveItem {
+            canvas_id,
+            item_id,
+            x,
+            y,
+        } => {
             engine
                 .move_canvas_item(&canvas_id, &item_id, x, y)
                 .map_err(|e| e.to_string())?;
@@ -953,7 +1013,15 @@ pub fn handle_canvas_ops(
                 success: true,
             })
         }
-        CanvasOpsRequest::AddItem { canvas_id, item_kind, artifact_id, x, y, w, h } => {
+        CanvasOpsRequest::AddItem {
+            canvas_id,
+            item_kind,
+            artifact_id,
+            x,
+            y,
+            w,
+            h,
+        } => {
             let item_id = uuid::Uuid::new_v4().to_string();
             let kind = match item_kind.as_str() {
                 "artifact" => CanvasItemKind::Artifact,
@@ -961,7 +1029,17 @@ pub fn handle_canvas_ops(
                 _ => CanvasItemKind::Text,
             };
             engine
-                .add_canvas_item(&canvas_id, &item_id, kind, artifact_id.as_deref(), x, y, w, h, 0)
+                .add_canvas_item(
+                    &canvas_id,
+                    &item_id,
+                    kind,
+                    artifact_id.as_deref(),
+                    x,
+                    y,
+                    w,
+                    h,
+                    0,
+                )
                 .map_err(|e| e.to_string())?;
             Ok(CanvasOpsResponse {
                 canvas: None,
@@ -969,16 +1047,16 @@ pub fn handle_canvas_ops(
                 success: true,
             })
         }
-        CanvasOpsRequest::BatchUpdatePositions { canvas_id, positions } => {
+        CanvasOpsRequest::BatchUpdatePositions {
+            canvas_id,
+            positions,
+        } => {
             let now_ms = engine.clock().now_ms();
 
             // Capture original positions for the inverse payload (before any changes)
             let mut inverse_ops: Vec<serde_json::Value> = Vec::new();
             {
-                let reader = engine
-                    .db()
-                    .reader()
-                    .map_err(|e| e.to_string())?;
+                let reader = engine.db().reader().map_err(|e| e.to_string())?;
                 for pos in &positions {
                     let orig: Option<(f64, f64)> = reader
                         .query_row(
@@ -1024,7 +1102,8 @@ pub fn handle_canvas_ops(
                 }
 
                 let rev_id = uuid::Uuid::new_v4().to_string();
-                let layout_json = serde_json::to_string(&positions).unwrap_or_else(|_| "[]".to_string());
+                let layout_json =
+                    serde_json::to_string(&positions).unwrap_or_else(|_| "[]".to_string());
                 let _ = writer.execute(
                     "INSERT INTO canvas_layout_revisions (id, canvas_id, layout, actor, change_set_id, created_at)
                      VALUES (?1, ?2, ?3, 'user', ?4, ?5);",
@@ -1039,7 +1118,11 @@ pub fn handle_canvas_ops(
                 success: true,
             })
         }
-        CanvasOpsRequest::CreateLink { source_artifact_id, target_artifact_id, relationship_type } => {
+        CanvasOpsRequest::CreateLink {
+            source_artifact_id,
+            target_artifact_id,
+            relationship_type,
+        } => {
             let writer = engine.db().writer();
             let now_ms = engine.clock().now_ms();
             writer
@@ -1148,7 +1231,7 @@ pub fn cmd_save_artifact(
     title: Option<String>,
     project_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Artifact, String> {
+) -> Result<SaveArtifactOutcome, String> {
     handle_save_artifact(&state.engine, artifact_id, content_md, title, project_id)
 }
 
@@ -1231,32 +1314,107 @@ pub fn cmd_create_guided_project(
     initial_content: String,
     state: State<'_, AppState>,
 ) -> Result<GuidedProjectResult, String> {
-    handle_create_guided_project(
-        &state.engine,
-        name,
-        purpose,
-        initial_title,
-        initial_content,
-    )
+    handle_create_guided_project(&state.engine, name, purpose, initial_title, initial_content)
 }
 
 pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
-    let writer = engine.db().writer();
-    let _ = writer.execute_batch(
-        "DELETE FROM canvas_layout_revisions;
-         DELETE FROM canvas_items;
-         DELETE FROM canvases;
-         DELETE FROM workspace_links;
-         DELETE FROM artifact_links;
-         DELETE FROM ai_proposals;
-         DELETE FROM epistemic_nodes;
-         DELETE FROM derived_briefs;
-         DELETE FROM session_events;
-         DELETE FROM project_artifacts;
-         DELETE FROM project_purposes;
-         DELETE FROM artifacts;
-         DELETE FROM projects;"
-    );
+    let now_ms = engine.clock().now_ms();
+    let files_to_remove: Vec<std::path::PathBuf> = {
+        let mut writer = engine.db().writer();
+        writer
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| e.to_string())?;
+        let tx = writer.transaction().map_err(|e| e.to_string())?;
+
+        let files: Vec<std::path::PathBuf> = {
+            let mut stmt = tx
+                .prepare("SELECT file_path FROM artifacts WHERE file_path IS NOT NULL;")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|r| r.ok())
+                .map(|fp| engine.vault_dir().join(fp))
+                .collect()
+        };
+
+        tx.execute("DELETE FROM canvas_layout_revisions;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM canvas_items;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM canvases;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM workspace_links;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM artifact_links;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM project_artifacts;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM project_purposes;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM derived_briefs;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM resume_brief_cache;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM document_conversation_turns;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM document_conversations;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM scheduled_topic_runs;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM scheduled_topics;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM object_instances;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM chunks;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM artifact_embeddings;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM web_research_cache;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE epistemic_nodes SET resolved_by_node_id = NULL, superseded_by_node_id = NULL;",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM epistemic_nodes;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE ai_proposals SET state = 'dismissed', decided_at = ?1 WHERE state = 'pending';",
+            params![now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM ai_proposals WHERE id NOT IN (SELECT proposal_id FROM change_sets WHERE proposal_id IS NOT NULL);",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        // Tombstone projects and artifacts while preserving append-only session_events,
+        // artifact_revisions, and change_sets under PRAGMA foreign_keys = ON.
+        tx.execute(
+            "UPDATE projects SET deleted_at = COALESCE(deleted_at, ?1), origin_artifact_id = NULL, is_pinned = 0;",
+            params![now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE artifacts
+             SET deleted_at = COALESCE(deleted_at, ?1),
+                 file_path = NULL,
+                 last_synced_hash = NULL,
+                 is_pinned = 0,
+                 derived_from_artifact_id = NULL;",
+            params![now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Engine::rotate_vault_instance_id_tx(&tx).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        files
+    };
+
+    for path in files_to_remove {
+        let _ = std::fs::remove_file(path);
+    }
     Ok(())
 }
 
@@ -1285,13 +1443,21 @@ pub struct SearchResultItem {
 
 pub fn handle_search_all(engine: &Engine, query: String) -> Result<Vec<SearchResultItem>, String> {
     if let Some(matches) = crate::connections::lookup_reference_query(engine, &query) {
-        return Ok(matches.into_iter().map(|entity| SearchResultItem {
-            id: entity.id,
-            title: entity.title,
-            kind: if entity.kind == crate::connections::EntityKind::Project { "project" } else { "document" }.into(),
-            excerpt: "Saved workspace reference".into(),
-            project_id: entity.project_id,
-        }).collect());
+        return Ok(matches
+            .into_iter()
+            .map(|entity| SearchResultItem {
+                id: entity.id,
+                title: entity.title,
+                kind: if entity.kind == crate::connections::EntityKind::Project {
+                    "project"
+                } else {
+                    "document"
+                }
+                .into(),
+                excerpt: "Saved workspace reference".into(),
+                project_id: entity.project_id,
+            })
+            .collect());
     }
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query.trim());
@@ -1302,43 +1468,64 @@ pub fn handle_search_all(engine: &Engine, query: String) -> Result<Vec<SearchRes
     }
 
     // Search projects
-    let mut proj_stmt = reader.prepare(
-        "SELECT p.id, p.name, pp.purpose FROM projects p
+    let mut proj_stmt = reader
+        .prepare(
+            "SELECT p.id, p.name, pp.purpose FROM projects p
          LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
-         WHERE p.status = 'active' AND (p.name LIKE ?1 OR pp.purpose LIKE ?1) LIMIT 10;",
-    ).map_err(|e| e.to_string())?;
+         WHERE p.deleted_at IS NULL AND p.status = 'active' AND (p.name LIKE ?1 OR pp.purpose LIKE ?1) LIMIT 10;",
+        )
+        .map_err(|e| e.to_string())?;
 
-    let projs = proj_stmt.query_map(params![pattern], |r| {
-        Ok(SearchResultItem {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            kind: "project".to_string(),
-            excerpt: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            project_id: None,
+    let projs = proj_stmt
+        .query_map(params![pattern], |r| {
+            Ok(SearchResultItem {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                kind: "project".to_string(),
+                excerpt: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                project_id: None,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     for p in projs.filter_map(|r| r.ok()) {
         results.push(p);
     }
 
     // Search artifacts
-    let mut art_stmt = reader.prepare(
-        "SELECT a.id, a.title, SUBSTR(a.content_md, 1, 120), pa.project_id
+    let mut art_stmt = reader
+        .prepare(
+            "SELECT a.id, a.title, SUBSTR(a.content_md, 1, 120),
+                    CASE WHEN (
+                        SELECT COUNT(*) FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                    ) = 1
+                    THEN (
+                        SELECT pa.project_id FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                        LIMIT 1
+                    )
+                    ELSE NULL END
          FROM artifacts a
-         LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
          WHERE a.deleted_at IS NULL AND (a.title LIKE ?1 OR a.content_md LIKE ?1) LIMIT 15;",
-    ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
 
-    let arts = art_stmt.query_map(params![pattern], |r| {
-        Ok(SearchResultItem {
-            id: r.get(0)?,
-            title: r.get::<_, Option<String>>(1)?.unwrap_or_else(|| "Untitled Note".to_string()),
-            kind: "document".to_string(),
-            excerpt: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            project_id: r.get(3)?,
+    let arts = art_stmt
+        .query_map(params![pattern], |r| {
+            Ok(SearchResultItem {
+                id: r.get(0)?,
+                title: r
+                    .get::<_, Option<String>>(1)?
+                    .unwrap_or_else(|| "Untitled Note".to_string()),
+                kind: "document".to_string(),
+                excerpt: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                project_id: r.get(3)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     for a in arts.filter_map(|r| r.ok()) {
         results.push(a);
@@ -1348,7 +1535,10 @@ pub fn handle_search_all(engine: &Engine, query: String) -> Result<Vec<SearchRes
 }
 
 #[tauri::command]
-pub fn cmd_search_all(query: String, state: State<'_, AppState>) -> Result<Vec<SearchResultItem>, String> {
+pub fn cmd_search_all(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchResultItem>, String> {
     handle_search_all(&state.engine, query)
 }
 
@@ -1390,9 +1580,19 @@ pub async fn handle_synthesize_and_create_research(
     // Resolve model provider based on selected model or system default
     let (provider, _model_name) = {
         let reader = engine.db().reader().ok();
-        match reader.as_ref().and_then(|r| sthira_core::llm::dispatcher::resolve_model_provider(r, model_id.as_deref(), engine.model()).ok()) {
+        match reader.as_ref().and_then(|r| {
+            sthira_core::llm::dispatcher::resolve_model_provider(
+                r,
+                model_id.as_deref(),
+                engine.model(),
+            )
+            .ok()
+        }) {
             Some(resolved) => (resolved.provider, resolved.display_name),
-            None => (std::sync::Arc::clone(engine.model()), "Default Model".to_string()),
+            None => (
+                std::sync::Arc::clone(engine.model()),
+                "Default Model".to_string(),
+            ),
         }
     };
 
@@ -1402,14 +1602,20 @@ pub async fn handle_synthesize_and_create_research(
     {
         Ok(json_str) => serde_json::from_str(&json_str).ok(),
         Err(e) => {
-            eprintln!("[handle_synthesize_and_create_research] LLM generation fallback: {}", e);
+            eprintln!(
+                "[handle_synthesize_and_create_research] LLM generation fallback: {}",
+                e
+            );
             None
         }
     };
 
     let (title, purpose, doc_title, content_md) = if let Some(syn) = synthesis_res {
         let question_title = prompt.trim().to_string();
-        let mut md = format!("# {}\n\n## Purpose & Research Scope\n{}\n\n", question_title, syn.purpose);
+        let mut md = format!(
+            "# {}\n\n## Purpose & Research Scope\n{}\n\n",
+            question_title, syn.purpose
+        );
         for sec in syn.sections {
             md.push_str(&format!("## {}\n{}\n\n", sec.heading, sec.content));
         }
@@ -1469,10 +1675,7 @@ pub async fn handle_synthesize_and_create_research(
     })
 }
 
-pub async fn handle_answer_question(
-    engine: &Engine,
-    question: String,
-) -> Result<String, String> {
+pub async fn handle_answer_question(engine: &Engine, question: String) -> Result<String, String> {
     let schema = schemars::schema_for!(AnswerResponseSchema);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
     let system_prompt = "You are a concise, factual AI assistant. Answer the user's question directly and concisely in 2 to 3 sentences.";
@@ -1519,7 +1722,9 @@ pub async fn cmd_answer_question(
 use sthira_core::{
     db::providers_repo,
     engines::router_engine::RouteOutcome,
-    llm::autodiscover::{discover_local_ollama_models, discover_provider_models, sync_discovered_models},
+    llm::autodiscover::{
+        discover_local_ollama_models, discover_provider_models, sync_discovered_models,
+    },
     llm::models::WebSearchCapability,
     models::router::{PlanProposedAction, ProviderEntry, ProviderModelEntry},
 };
@@ -1541,7 +1746,8 @@ pub struct ModelView {
 
 pub fn handle_list_available_models(engine: &Engine) -> Result<Vec<ModelView>, String> {
     let reader = engine.db().reader().map_err(|e| e.to_string())?;
-    let providers = providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
+    let providers =
+        providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
     let mut views = Vec::new();
     for p in providers {
         if p.is_enabled {
@@ -1660,9 +1866,11 @@ pub async fn handle_fetch_provider_models(
 ) -> Result<Vec<ProviderModelEntry>, String> {
     let (prov_type, base_url, key_to_use) = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
-        let catalog = providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
+        let catalog =
+            providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
         let prov = catalog.into_iter().find(|p| p.id == provider_id);
-        let stored_key = providers_repo::get_provider_api_key(&reader, &provider_id).map_err(|e| e.to_string())?;
+        let stored_key = providers_repo::get_provider_api_key(&reader, &provider_id)
+            .map_err(|e| e.to_string())?;
 
         let p_type = prov
             .as_ref()
@@ -1677,9 +1885,10 @@ pub async fn handle_fetch_provider_models(
         (p_type, url, key)
     };
 
-    let models = discover_provider_models(&provider_id, &prov_type, &base_url, key_to_use.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let models =
+        discover_provider_models(&provider_id, &prov_type, &base_url, key_to_use.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
 
     {
         let writer = engine.db().writer();
@@ -1711,12 +1920,21 @@ pub async fn handle_discover_provider_models(
     // exact saved endpoint and protocol, never for a different address being edited.
     let stored_key = if api_key.is_none() {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
-        let catalog = providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
-        if catalog.iter().any(|provider| provider.id == provider_id
-            && provider.base_url == endpoint && provider.provider_type == provider_type) {
-            providers_repo::get_provider_api_key(&reader, &provider_id).map_err(|e| e.to_string())?
-        } else { None }
-    } else { None };
+        let catalog =
+            providers_repo::list_providers_with_models(&reader).map_err(|e| e.to_string())?;
+        if catalog.iter().any(|provider| {
+            provider.id == provider_id
+                && provider.base_url == endpoint
+                && provider.provider_type == provider_type
+        }) {
+            providers_repo::get_provider_api_key(&reader, &provider_id)
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let key = api_key.or(stored_key);
     discover_provider_models(&provider_id, &provider_type, &endpoint, key.as_deref())
         .await
@@ -1731,7 +1949,8 @@ pub async fn cmd_discover_provider_models(
     api_key: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ProviderModelEntry>, String> {
-    handle_discover_provider_models(&state.engine, provider_id, provider_type, endpoint, api_key).await
+    handle_discover_provider_models(&state.engine, provider_id, provider_type, endpoint, api_key)
+        .await
 }
 
 pub fn handle_upsert_model(engine: &Engine, model: ProviderModelEntry) -> Result<(), String> {
@@ -1741,7 +1960,10 @@ pub fn handle_upsert_model(engine: &Engine, model: ProviderModelEntry) -> Result
 }
 
 #[tauri::command]
-pub fn cmd_upsert_model(model: ProviderModelEntry, state: State<'_, AppState>) -> Result<(), String> {
+pub fn cmd_upsert_model(
+    model: ProviderModelEntry,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     handle_upsert_model(&state.engine, model)
 }
 
@@ -1775,11 +1997,7 @@ pub fn cmd_set_default_model(model_id: String, state: State<'_, AppState>) -> Re
     handle_set_default_model(&state.engine, model_id)
 }
 
-pub fn handle_toggle_model(
-    engine: &Engine,
-    model_id: String,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn handle_toggle_model(engine: &Engine, model_id: String, enabled: bool) -> Result<(), String> {
     let writer = engine.db().writer();
     providers_repo::toggle_model(&writer, &model_id, enabled).map_err(|e| e.to_string())
 }
@@ -1803,9 +2021,19 @@ pub async fn handle_route_input_steered(
     let model_id = if let Some(mode) = mode {
         match mode {
             OperationalMode::Capture => model_id,
-            _ => crate::workflow_settings::workflow_model(engine, match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" }, model_id)?,
+            _ => crate::workflow_settings::workflow_model(
+                engine,
+                match mode {
+                    OperationalMode::Research => "research",
+                    OperationalMode::Plan => "plan",
+                    _ => "draft",
+                },
+                model_id,
+            )?,
         }
-    } else { model_id };
+    } else {
+        model_id
+    };
     engine
         .route_input_steered_with_template(&raw, mode, model_id.as_deref(), template_id.as_deref())
         .await
@@ -1855,7 +2083,8 @@ pub fn cmd_list_object_types(state: State<'_, AppState>) -> Result<Vec<ObjectTyp
 pub fn handle_create_object_type(engine: &Engine, type_def: ObjectType) -> Result<String, String> {
     let writer = engine.db().writer();
     let id = type_def.id.clone();
-    sthira_core::db::objects_repo::upsert_object_type(&writer, &type_def).map_err(|e| e.to_string())?;
+    sthira_core::db::objects_repo::upsert_object_type(&writer, &type_def)
+        .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
@@ -1924,11 +2153,20 @@ pub fn handle_create_typed_object(
 ) -> Result<ObjectItem, String> {
     let initial_content = format!("# {}\n\n", title);
     let art = engine
-        .create_artifact(ArtifactType::Note, Authorship::User, Some(&title), &initial_content, None)
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some(&title),
+            &initial_content,
+            None,
+        )
         .map_err(|e| e.to_string())?;
 
-    if let Some(ref pid) = project_id {
-        let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
+    let valid_project_id = resolve_active_project_id(engine, project_id);
+    if let Some(ref pid) = valid_project_id {
+        engine
+            .attach_artifact(pid, &art.id, "user_explicit", None)
+            .map_err(|e| e.to_string())?;
     }
 
     let now_ms = engine.clock().now_ms();
@@ -1951,7 +2189,7 @@ pub fn handle_create_typed_object(
         content_md: initial_content,
         object_type_id,
         properties,
-        project_id,
+        project_id: valid_project_id,
         updated_at: now_ms,
     })
 }
@@ -2006,10 +2244,7 @@ pub fn handle_delete_object_type(engine: &Engine, type_id: String) -> Result<(),
 }
 
 #[tauri::command]
-pub fn cmd_delete_object_type(
-    type_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub fn cmd_delete_object_type(type_id: String, state: State<'_, AppState>) -> Result<(), String> {
     handle_delete_object_type(&state.engine, type_id)
 }
 
@@ -2147,8 +2382,11 @@ pub fn handle_instantiate_object_from_template(
         )
         .map_err(|e| e.to_string())?;
 
-    if let Some(ref pid) = project_id {
-        let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
+    let valid_project_id = resolve_active_project_id(engine, project_id);
+    if let Some(ref pid) = valid_project_id {
+        engine
+            .attach_artifact(pid, &art.id, "user_explicit", None)
+            .map_err(|e| e.to_string())?;
     }
 
     let now_ms = engine.clock().now_ms();
@@ -2206,7 +2444,7 @@ pub fn handle_inspect_project_deletion(
 
     let project_name: String = reader
         .query_row(
-            "SELECT name FROM projects WHERE id = ?1;",
+            "SELECT name FROM projects WHERE id = ?1 AND deleted_at IS NULL;",
             params![project_id],
             |r| r.get(0),
         )
@@ -2215,8 +2453,12 @@ pub fn handle_inspect_project_deletion(
     let mut stmt = reader
         .prepare(
             "SELECT a.id, COALESCE(a.title, 'Untitled Note'), a.type, a.updated_at,
-                    (SELECT COUNT(*) FROM project_artifacts pa2 
-                     WHERE pa2.artifact_id = a.id AND pa2.project_id <> ?1 AND pa2.detached_at IS NULL) AS other_count
+                    (SELECT COUNT(*) FROM project_artifacts pa2
+                     JOIN projects p2 ON p2.id = pa2.project_id
+                     WHERE pa2.artifact_id = a.id
+                       AND pa2.project_id <> ?1
+                       AND pa2.detached_at IS NULL
+                       AND p2.deleted_at IS NULL) AS other_count
              FROM artifacts a
              JOIN project_artifacts pa ON a.id = pa.artifact_id
              WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL
@@ -2271,105 +2513,248 @@ pub fn cmd_inspect_project_deletion(
     handle_inspect_project_deletion(&state.engine, project_id)
 }
 
+fn tombstone_artifact_tx(
+    tx: &rusqlite::Connection,
+    artifact_id: &str,
+    now_ms: i64,
+    vault_dir: &std::path::Path,
+    files_to_remove: &mut Vec<std::path::PathBuf>,
+) -> Result<(), String> {
+    let existing: Option<(Option<String>, Option<i64>)> = match tx.query_row(
+        "SELECT file_path, deleted_at FROM artifacts WHERE id = ?1;",
+        params![artifact_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ) {
+        Ok(row) => Some(row),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    if let Some((Some(fp), None)) = existing {
+        files_to_remove.push(vault_dir.join(fp));
+    }
+
+    tx.execute(
+        "DELETE FROM project_artifacts WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM artifact_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM workspace_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM object_instances WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE epistemic_nodes
+         SET resolved_by_node_id = NULL
+         WHERE resolved_by_node_id IN (SELECT id FROM epistemic_nodes WHERE artifact_id = ?1);",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE epistemic_nodes
+         SET superseded_by_node_id = NULL
+         WHERE superseded_by_node_id IN (SELECT id FROM epistemic_nodes WHERE artifact_id = ?1);",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM epistemic_nodes WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM canvas_items WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM chunks WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM artifact_embeddings WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM document_conversation_turns WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM document_conversations WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM scheduled_topic_runs WHERE artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE projects SET origin_artifact_id = NULL WHERE origin_artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE artifacts SET derived_from_artifact_id = NULL WHERE derived_from_artifact_id = ?1;",
+        params![artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    let pattern = format!("%{}%", artifact_id);
+    tx.execute(
+        "UPDATE ai_proposals SET state = 'dismissed', decided_at = ?1 WHERE state = 'pending' AND payload LIKE ?2;",
+        params![now_ms, pattern],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE artifacts
+         SET deleted_at = COALESCE(deleted_at, ?1),
+             file_path = NULL,
+             last_synced_hash = NULL,
+             is_pinned = 0
+         WHERE id = ?2;",
+        params![now_ms, artifact_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 pub fn handle_delete_project(
     engine: &Engine,
     project_id: String,
     cascade_exclusive: bool,
 ) -> Result<(), String> {
-    let impact = handle_inspect_project_deletion(engine, project_id.clone())?;
+    let now_ms = engine.clock().now_ms();
+    let files_to_remove: Vec<std::path::PathBuf> = {
+        let mut writer = engine.db().writer();
+        writer
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| e.to_string())?;
+        let tx = writer.transaction().map_err(|e| e.to_string())?;
 
-    let writer = engine.db().writer();
-    let _ = writer.execute_batch("PRAGMA foreign_keys = OFF;");
+        let active: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND deleted_at IS NULL);",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !active {
+            return Err(format!("Project {project_id} not found"));
+        }
 
-    if cascade_exclusive {
-        for art in impact.exclusive_artifacts {
-            let _ = writer.execute(
-                "DELETE FROM project_artifacts WHERE artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM artifact_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM artifact_revisions WHERE artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM object_instances WHERE artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM epistemic_nodes WHERE artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM canvas_items WHERE artifact_id = ?1;",
-                params![art.id],
-            );
+        let mut files = Vec::new();
+        if cascade_exclusive {
+            let exclusive_ids: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT a.id
+                         FROM artifacts a
+                         JOIN project_artifacts pa ON a.id = pa.artifact_id
+                         WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL
+                           AND NOT EXISTS (
+                               SELECT 1 FROM project_artifacts pa2
+                               JOIN projects p2 ON p2.id = pa2.project_id
+                               WHERE pa2.artifact_id = a.id
+                                 AND pa2.project_id <> ?1
+                                 AND pa2.detached_at IS NULL
+                                 AND p2.deleted_at IS NULL
+                           );",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(params![project_id], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+            };
 
-            let file_path: Option<String> = writer
-                .query_row(
-                    "SELECT file_path FROM artifacts WHERE id = ?1;",
-                    params![art.id],
-                    |r| r.get(0),
-                )
-                .ok();
-
-            let _ = writer.execute(
-                "DELETE FROM workspace_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
-                params![art.id],
-            );
-            let _ = writer.execute(
-                "DELETE FROM artifacts WHERE id = ?1;",
-                params![art.id],
-            );
-
-            if let Some(fp) = file_path {
-                let full = engine.vault_dir().join(fp);
-                let _ = std::fs::remove_file(full);
+            for art_id in exclusive_ids {
+                tombstone_artifact_tx(&tx, &art_id, now_ms, engine.vault_dir(), &mut files)?;
             }
         }
+
+        tx.execute(
+            "DELETE FROM project_artifacts WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM derived_briefs WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM resume_brief_cache WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM canvas_layout_revisions WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ?1);",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM canvas_items WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ?1);",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM canvases WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM project_purposes WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE epistemic_nodes SET context_project_id = NULL WHERE context_project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE scheduled_topics SET project_id = NULL WHERE project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM workspace_links WHERE source_project_id = ?1 OR target_project_id = ?1;",
+            params![project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE projects
+             SET deleted_at = COALESCE(deleted_at, ?1),
+                 origin_artifact_id = NULL,
+                 is_pinned = 0
+             WHERE id = ?2;",
+            params![now_ms, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+
+        tx.commit().map_err(|e| e.to_string())?;
+        files
+    };
+
+    for path in files_to_remove {
+        let _ = std::fs::remove_file(path);
     }
-
-    let _ = writer.execute(
-        "DELETE FROM project_artifacts WHERE project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM derived_briefs WHERE project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM canvas_items WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ?1);",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM canvases WHERE project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM project_purposes WHERE project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "UPDATE epistemic_nodes SET context_project_id = NULL WHERE context_project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "UPDATE events SET project_id = NULL WHERE project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM workspace_links WHERE source_project_id = ?1 OR target_project_id = ?1;",
-        params![project_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM projects WHERE id = ?1;",
-        params![project_id],
-    );
-
-    let _ = writer.execute_batch("PRAGMA foreign_keys = ON;");
 
     Ok(())
 }
@@ -2388,77 +2773,59 @@ pub fn handle_delete_artifact(
     artifact_id: String,
     from_project_id: Option<String>,
 ) -> Result<(), String> {
-    let writer = engine.db().writer();
-    let _ = writer.execute_batch("PRAGMA foreign_keys = OFF;");
+    let now_ms = engine.clock().now_ms();
+    let files_to_remove: Vec<std::path::PathBuf> = {
+        let mut writer = engine.db().writer();
+        writer
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| e.to_string())?;
+        let tx = writer.transaction().map_err(|e| e.to_string())?;
 
-    if let Some(ref pid) = from_project_id {
-        let other_count: i64 = writer
+        let active: bool = tx
             .query_row(
-                "SELECT COUNT(*) FROM project_artifacts 
-                 WHERE artifact_id = ?1 AND project_id <> ?2 AND detached_at IS NULL;",
-                params![artifact_id, pid],
+                "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id = ?1 AND deleted_at IS NULL);",
+                params![artifact_id],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
-
-        if other_count > 0 {
-            let _ = writer.execute(
-                "DELETE FROM project_artifacts WHERE project_id = ?1 AND artifact_id = ?2;",
-                params![pid, artifact_id],
-            );
-            let _ = writer.execute_batch("PRAGMA foreign_keys = ON;");
-            return Ok(());
+            .map_err(|e| e.to_string())?;
+        if !active {
+            return Err(format!("Artifact {artifact_id} not found"));
         }
+
+        if let Some(ref pid) = from_project_id {
+            let other_count: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM project_artifacts pa
+                     JOIN projects p ON p.id = pa.project_id
+                     WHERE pa.artifact_id = ?1
+                       AND pa.project_id <> ?2
+                       AND pa.detached_at IS NULL
+                       AND p.deleted_at IS NULL;",
+                    params![artifact_id, pid],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+
+            if other_count > 0 {
+                tx.execute(
+                    "DELETE FROM project_artifacts WHERE project_id = ?1 AND artifact_id = ?2;",
+                    params![pid, artifact_id],
+                )
+                .map_err(|e| e.to_string())?;
+                tx.commit().map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        }
+
+        let mut files = Vec::new();
+        tombstone_artifact_tx(&tx, &artifact_id, now_ms, engine.vault_dir(), &mut files)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        files
+    };
+
+    for path in files_to_remove {
+        let _ = std::fs::remove_file(path);
     }
-
-    let _ = writer.execute(
-        "DELETE FROM project_artifacts WHERE artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM artifact_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM artifact_revisions WHERE artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM object_instances WHERE artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM epistemic_nodes WHERE artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM canvas_items WHERE artifact_id = ?1;",
-        params![artifact_id],
-    );
-
-    let file_path: Option<String> = writer
-        .query_row(
-            "SELECT file_path FROM artifacts WHERE id = ?1;",
-            params![artifact_id],
-            |r| r.get(0),
-        )
-        .ok();
-
-    let _ = writer.execute(
-        "DELETE FROM workspace_links WHERE source_artifact_id = ?1 OR target_artifact_id = ?1;",
-        params![artifact_id],
-    );
-    let _ = writer.execute(
-        "DELETE FROM artifacts WHERE id = ?1;",
-        params![artifact_id],
-    );
-
-    if let Some(fp) = file_path {
-        let full = engine.vault_dir().join(fp);
-        let _ = std::fs::remove_file(full);
-    }
-
-    let _ = writer.execute_batch("PRAGMA foreign_keys = ON;");
 
     Ok(())
 }
@@ -2470,6 +2837,35 @@ pub fn cmd_delete_artifact(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     handle_delete_artifact(&state.engine, artifact_id, from_project_id)
+}
+
+pub fn handle_filter_existing_artifacts(
+    engine: &Engine,
+    artifact_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if artifact_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let reader = engine.db().reader().map_err(|e| e.to_string())?;
+    let mut existing = Vec::with_capacity(artifact_ids.len());
+    let mut stmt = reader
+        .prepare("SELECT 1 FROM artifacts WHERE id = ?1 AND deleted_at IS NULL;")
+        .map_err(|e| e.to_string())?;
+    for id in artifact_ids {
+        let trimmed = id.trim();
+        if !trimmed.is_empty() && stmt.exists(params![trimmed]).unwrap_or(false) {
+            existing.push(trimmed.to_string());
+        }
+    }
+    Ok(existing)
+}
+
+#[tauri::command]
+pub fn cmd_filter_existing_artifacts(
+    artifact_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    handle_filter_existing_artifacts(&state.engine, artifact_ids)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2515,8 +2911,11 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
     let mut proj_stmt = reader
         .prepare(
             "SELECT p.id, p.name,
-                    (SELECT COUNT(*) FROM project_artifacts pa WHERE pa.project_id = p.id AND pa.detached_at IS NULL)
+                    (SELECT COUNT(*) FROM project_artifacts pa
+                     JOIN artifacts a ON a.id = pa.artifact_id
+                     WHERE pa.project_id = p.id AND pa.detached_at IS NULL AND a.deleted_at IS NULL)
              FROM projects p
+             WHERE p.deleted_at IS NULL
              ORDER BY p.name ASC;",
         )
         .map_err(|e| e.to_string())?;
@@ -2549,7 +2948,18 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
         .prepare(
             "SELECT a.id, COALESCE(a.title, 'Untitled Note'), a.authorship, a.is_unfinished_draft,
                     oi.object_type_id, ot.display_name, ot.color, ot.icon,
-                    (SELECT pa.project_id FROM project_artifacts pa WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL LIMIT 1)
+                    CASE WHEN (
+                        SELECT COUNT(*) FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                    ) = 1
+                    THEN (
+                        SELECT pa.project_id FROM project_artifacts pa
+                        JOIN projects p ON p.id = pa.project_id
+                        WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p.deleted_at IS NULL
+                        LIMIT 1
+                    )
+                    ELSE NULL END
              FROM artifacts a
              LEFT JOIN object_instances oi ON a.id = oi.artifact_id
              LEFT JOIN object_types ot ON oi.object_type_id = ot.id
@@ -2606,9 +3016,11 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
 
     let mut mem_stmt = reader
         .prepare(
-            "SELECT project_id, artifact_id 
-             FROM project_artifacts 
-             WHERE detached_at IS NULL;",
+            "SELECT pa.project_id, pa.artifact_id
+             FROM project_artifacts pa
+             JOIN projects p ON p.id = pa.project_id
+             JOIN artifacts a ON a.id = pa.artifact_id
+             WHERE pa.detached_at IS NULL AND p.deleted_at IS NULL AND a.deleted_at IS NULL;",
         )
         .map_err(|e| e.to_string())?;
 
@@ -2630,13 +3042,17 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
 
     let mut link_stmt = reader
         .prepare(
-            "SELECT source_artifact_id, target_artifact_id, relationship_type 
-             FROM artifact_links
+            "SELECT al.source_artifact_id, al.target_artifact_id, al.relationship_type
+             FROM artifact_links al
+             JOIN artifacts sa ON sa.id = al.source_artifact_id AND sa.deleted_at IS NULL
+             JOIN artifacts ta ON ta.id = al.target_artifact_id AND ta.deleted_at IS NULL
              UNION ALL
-             SELECT COALESCE(source_artifact_id, source_project_id), COALESCE(target_artifact_id, target_project_id), 'references'
+             SELECT COALESCE(wl.source_artifact_id, wl.source_project_id), COALESCE(wl.target_artifact_id, wl.target_project_id), 'references'
              FROM workspace_links wl
              WHERE (wl.source_artifact_id IS NULL OR EXISTS (SELECT 1 FROM artifacts a WHERE a.id = wl.source_artifact_id AND a.deleted_at IS NULL))
                AND (wl.target_artifact_id IS NULL OR EXISTS (SELECT 1 FROM artifacts a WHERE a.id = wl.target_artifact_id AND a.deleted_at IS NULL))
+               AND (wl.source_project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id = wl.source_project_id AND p.deleted_at IS NULL))
+               AND (wl.target_project_id IS NULL OR EXISTS (SELECT 1 FROM projects p WHERE p.id = wl.target_project_id AND p.deleted_at IS NULL))
              UNION ALL
              SELECT a.id, a.derived_from_artifact_id, 'derived_from' FROM artifacts a
              JOIN artifacts parent ON parent.id = a.derived_from_artifact_id
@@ -2665,9 +3081,7 @@ pub fn handle_get_knowledge_graph(engine: &Engine) -> Result<KnowledgeGraphData,
 }
 
 #[tauri::command]
-pub fn cmd_get_knowledge_graph(
-    state: State<'_, AppState>,
-) -> Result<KnowledgeGraphData, String> {
+pub fn cmd_get_knowledge_graph(state: State<'_, AppState>) -> Result<KnowledgeGraphData, String> {
     handle_get_knowledge_graph(&state.engine)
 }
 
@@ -2683,7 +3097,9 @@ pub fn handle_duplicate_artifact(
     new_title: Option<String>,
     target_project_id: Option<String>,
 ) -> Result<String, String> {
-    let source = engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    let source = engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
     let source_title = source.title.as_deref().unwrap_or("Untitled Note");
     let title = new_title
         .map(|t| t.trim().to_string())
@@ -2703,21 +3119,37 @@ pub fn handle_duplicate_artifact(
         .map_err(|e| e.to_string())?;
 
     let project_to_attach = match target_project_id {
-        Some(pid) if !pid.trim().is_empty() => Some(pid),
+        Some(pid) if !pid.trim().is_empty() => Some(
+            resolve_active_project_id(engine, Some(pid))
+                .ok_or_else(|| "Target project is no longer available.".to_string())?,
+        ),
         _ => {
             let reader = engine.db().reader().map_err(|e| e.to_string())?;
-            reader
-                .query_row(
-                    "SELECT project_id FROM project_artifacts WHERE artifact_id = ?1 AND detached_at IS NULL LIMIT 1;",
-                    params![artifact_id],
-                    |r| r.get(0),
+            let mut stmt = reader
+                .prepare(
+                    "SELECT pa.project_id
+                     FROM project_artifacts pa
+                     JOIN projects p ON p.id = pa.project_id
+                     WHERE pa.artifact_id = ?1 AND pa.detached_at IS NULL AND p.deleted_at IS NULL;",
                 )
-                .ok()
+                .map_err(|e| e.to_string())?;
+            let parents: Vec<String> = stmt
+                .query_map(params![artifact_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            if parents.len() == 1 {
+                Some(parents.into_iter().next().unwrap())
+            } else {
+                None
+            }
         }
     };
 
     if let Some(pid) = project_to_attach {
-        let _ = engine.attach_artifact(&pid, &new_art.id, "user_explicit", None);
+        engine
+            .attach_artifact(&pid, &new_art.id, "user_explicit", None)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(new_art.id)
@@ -2738,6 +3170,10 @@ pub fn handle_add_artifact_to_project(
     artifact_id: String,
     project_id: String,
 ) -> Result<(), String> {
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
+    engine.get_project(&project_id).map_err(|e| e.to_string())?;
     engine
         .attach_artifact(&project_id, &artifact_id, "user_explicit", None)
         .map_err(|e| e.to_string())?;
@@ -2768,8 +3204,11 @@ pub fn handle_link_artifact_to_project(
     artifact_id: String,
     project_id: String,
 ) -> Result<(), String> {
-    // Fail loudly if the artifact does not exist rather than writing a dangling link.
-    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    // Fail loudly if the artifact or project does not exist or was deleted.
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
+    engine.get_project(&project_id).map_err(|e| e.to_string())?;
 
     let already_linked: bool = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
@@ -2811,7 +3250,12 @@ pub fn handle_move_artifact_to_project(
     from_project_id: Option<String>,
     to_project_id: String,
 ) -> Result<(), String> {
-    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
+    engine
+        .get_project(&to_project_id)
+        .map_err(|e| e.to_string())?;
 
     let from = from_project_id.filter(|p| !p.trim().is_empty());
     engine
@@ -2841,7 +3285,9 @@ pub fn handle_create_project_with_artifact(
     if name.is_empty() {
         return Err("Project name cannot be empty".to_string());
     }
-    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
 
     // `origin_artifact_id` records the note this project was born from (provenance).
     let project = engine
@@ -2880,7 +3326,9 @@ pub fn handle_convert_artifact_to_object(
     object_type_id: String,
     initial_properties: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
 
     let (obj_type, existing) = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
@@ -2994,7 +3442,7 @@ pub fn handle_duplicate_project(
         .query_row(
             "SELECT p.name, pp.purpose FROM projects p
              LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
-             WHERE p.id = ?1;",
+             WHERE p.id = ?1 AND p.deleted_at IS NULL;",
             params![project_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -3007,7 +3455,10 @@ pub fn handle_duplicate_project(
 
     let mut page_stmt = reader
         .prepare(
-            "SELECT artifact_id FROM project_artifacts WHERE project_id = ?1 AND detached_at IS NULL;",
+            "SELECT pa.artifact_id
+             FROM project_artifacts pa
+             JOIN artifacts a ON a.id = pa.artifact_id
+             WHERE pa.project_id = ?1 AND pa.detached_at IS NULL AND a.deleted_at IS NULL;",
         )
         .map_err(|e| e.to_string())?;
 
@@ -3044,13 +3495,20 @@ pub fn handle_rename_project(
     project_id: String,
     new_name: String,
 ) -> Result<(), String> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        return Err("Project name cannot be empty".to_string());
+    }
     let writer = engine.db().writer();
-    writer
+    let changed = writer
         .execute(
-            "UPDATE projects SET name = ?1, updated_at = unixepoch() WHERE id = ?2;",
-            params![new_name.trim(), project_id],
+            "UPDATE projects SET name = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
+            params![trimmed, project_id],
         )
         .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("This project is no longer available.".to_string());
+    }
     Ok(())
 }
 
@@ -3072,62 +3530,40 @@ pub fn handle_rename_artifact(
     if trimmed.is_empty() {
         return Err("Title cannot be empty".to_string());
     }
-    let now_ms = engine.clock().now_ms();
+    let existing = engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
 
-    // Check existing content and file_path
-    let existing: Option<(String, Option<String>)> = if let Ok(reader) = engine.db().reader() {
-        reader
-            .query_row(
-                "SELECT content_md, file_path FROM artifacts WHERE id = ?1;",
-                params![artifact_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .ok()
-    } else {
-        None
-    };
-
-    let mut new_content_opt = None;
-    if let Some((content_md, _)) = existing {
-        if let Some(first_line) = content_md.lines().next() {
-            if first_line.trim().starts_with("# ") {
-                let rest = if let Some(pos) = content_md.find('\n') {
-                    &content_md[pos..]
-                } else {
-                    ""
-                };
-                new_content_opt = Some(format!("# {}{}", trimmed, rest));
-            }
+    let mut new_content = existing.content_md.clone();
+    if let Some(first_line) = existing.content_md.lines().next() {
+        if first_line.trim().starts_with("# ") {
+            let rest = if let Some(pos) = existing.content_md.find('\n') {
+                &existing.content_md[pos..]
+            } else {
+                ""
+            };
+            new_content = format!("# {}{}", trimmed, rest);
         }
     }
 
-    {
-        let writer = engine.db().writer();
-        if let Some(ref new_c) = new_content_opt {
-            let normalized = sthira_core::vault::normalize_content(new_c);
-            let new_hash = sthira_core::vault::compute_content_hash(&normalized);
-            writer
-                .execute(
-                    "UPDATE artifacts SET title = ?1, content_md = ?2, content_hash = ?3, updated_at = ?4 WHERE id = ?5;",
-                    params![trimmed, normalized, new_hash, now_ms, artifact_id],
-                )
-                .map_err(|e| e.to_string())?;
-        } else {
-            writer
-                .execute(
-                    "UPDATE artifacts SET title = ?1, updated_at = ?2 WHERE id = ?3;",
-                    params![trimmed, now_ms, artifact_id],
-                )
-                .map_err(|e| e.to_string())?;
-        }
-    }
+    let outcome = engine
+        .save_artifact(
+            &artifact_id,
+            SaveArtifactRequest {
+                content_md: &new_content,
+                title: Some(trimmed),
+                actor: Actor::User,
+                context_project_id: None,
+                authorship: None,
+                is_unfinished_draft: None,
+            },
+        )
+        .map_err(|e| e.to_string())?;
 
-    if let Ok(art) = engine.get_artifact(&artifact_id) {
-        if let Some(ref fp) = art.file_path {
-            let full_path = engine.vault_dir().join(fp);
-            let rendered = sthira_core::vault::render_file_with_frontmatter(&art);
-            let _ = std::fs::write(&full_path, rendered);
-        }
+    if !outcome.mirror_synced {
+        return Err(outcome.mirror_sync_error.unwrap_or_else(|| {
+            "Renamed in workspace database, but failed to update vault mirror".to_string()
+        }));
     }
 
     Ok(())
@@ -3166,7 +3602,8 @@ pub fn handle_save_search_provider(
 ) -> Result<(), String> {
     let writer = engine.db().writer();
     let now_ms = engine.clock().now_ms();
-    sthira_core::db::search_repo::save_search_provider(&writer, &entry, now_ms).map_err(|e| e.to_string())
+    sthira_core::db::search_repo::save_search_provider(&writer, &entry, now_ms)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3192,6 +3629,15 @@ pub async fn handle_test_search_provider(
     let entry = match provider_entry {
         Some(e) => e,
         None => match provider_id.as_str() {
+            "duckduckgo" => sthira_core::search::SearchProviderEntry {
+                id: "duckduckgo".to_string(),
+                display_name: "DuckDuckGo".to_string(),
+                provider_type: "duckduckgo_scraper".to_string(),
+                endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
+                api_key: None,
+                is_enabled: true,
+                is_default: true,
+            },
             "searxng" => sthira_core::search::SearchProviderEntry {
                 id: "searxng".to_string(),
                 display_name: "SearXNG (Local)".to_string(),
@@ -3219,20 +3665,14 @@ pub async fn handle_test_search_provider(
                 is_enabled: true,
                 is_default: false,
             },
-            _ => sthira_core::search::SearchProviderEntry {
-                id: "duckduckgo".to_string(),
-                display_name: "DuckDuckGo".to_string(),
-                provider_type: "duckduckgo_scraper".to_string(),
-                endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
-                api_key: None,
-                is_enabled: true,
-                is_default: true,
-            },
+            unknown => {
+                return Err(format!("Unknown search provider ID '{unknown}'"));
+            }
         },
     };
 
-    let provider = sthira_core::search::build_search_provider(&entry);
-    provider.search(&query, 5).await
+    let provider = sthira_core::search::build_search_provider(&entry).map_err(|e| e.to_string())?;
+    provider.search(&query, 5).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3251,29 +3691,19 @@ pub fn handle_import_web_source_to_vault(
     content_md: String,
     project_id: Option<String>,
 ) -> Result<String, String> {
-    let art = engine
-        .create_artifact(
+    let valid_project_id = resolve_active_project_id(engine, project_id);
+    let outcome = engine
+        .create_and_save_artifact(
             sthira_core::ArtifactType::Source,
             sthira_core::Authorship::External,
             Some(&title),
             &content_md,
             Some(&url),
+            valid_project_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
 
-    if let Some(ref pid) = project_id {
-        if pid != "default_project" && !pid.is_empty() {
-            let _ = engine.attach_artifact(pid, &art.id, "user_explicit", None);
-        }
-    }
-
-    if let Some(ref fp) = art.file_path {
-        let full_path = engine.vault_dir().join(fp);
-        let rendered = sthira_core::vault::render_file_with_frontmatter(&art);
-        let _ = std::fs::write(&full_path, rendered);
-    }
-
-    Ok(art.id)
+    Ok(outcome.artifact.id)
 }
 
 #[tauri::command]
@@ -3295,7 +3725,8 @@ pub async fn handle_execute_web_research(
     let model_id = crate::workflow_settings::workflow_model(engine, "research", model_id)?;
     let resolved = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
-        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e|e.to_string())?
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model())
+            .map_err(|e| e.to_string())?
     };
     let run_engine = engine.with_model(resolved.provider);
     let active_provider = {
@@ -3305,17 +3736,11 @@ pub async fn handle_execute_web_research(
             .flatten()
     };
 
-    let entry = active_provider.unwrap_or_else(|| sthira_core::search::SearchProviderEntry {
-        id: "duckduckgo".to_string(),
-        display_name: "DuckDuckGo".to_string(),
-        provider_type: "duckduckgo_scraper".to_string(),
-        endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
-        api_key: None,
-        is_enabled: true,
-        is_default: true,
-    });
+    let Some(entry) = active_provider else {
+        return Err("No enabled search provider is configured.".to_string());
+    };
 
-    let provider = sthira_core::search::build_search_provider(&entry);
+    let provider = sthira_core::search::build_search_provider(&entry).map_err(|e| e.to_string())?;
     sthira_core::engines::research_engine::execute_multi_query_research(
         &run_engine,
         &query,
@@ -3385,8 +3810,10 @@ pub async fn handle_create_research_page(
         );
     }
 
-    if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
-        let _ = engine.attach_artifact(&pid, &art.id, "user_explicit", None);
+    if let Some(pid) = resolve_active_project_id(engine, project_id) {
+        engine
+            .attach_artifact(&pid, &art.id, "user_explicit", None)
+            .map_err(|e| e.to_string())?;
     }
 
     engine.document_conversation(&art.id, Some("research"), q)?;
@@ -3409,27 +3836,62 @@ pub async fn cmd_create_research_page(
 /// No URL is ever required — the pipeline generates its own search queries, dispatches
 /// them to the configured `SearchProvider`, scrapes the top documents, grounds quotes
 /// with `VerifiedQuote::verify`, and synthesizes with an explicit temporal instruction.
-pub fn handle_save_generated_artifact(engine: &Engine, artifact_id: String, content_md: String, title: String, project_id: Option<String>) -> Result<Artifact,String> {
-    if content_md.trim().is_empty() { return Err("The model returned an empty document; the saved draft was kept.".into()); }
-    let prior = engine.get_artifact(&artifact_id).map_err(|e|e.to_string())?;
-    if prior.deleted_at.is_some() { return Err("This document was deleted.".into()); }
-    let content_md = if content_md.starts_with("# ") {
-        format!("# {}{}", title, content_md.find('\n').map(|at| &content_md[at..]).unwrap_or(""))
-    } else { content_md };
-    let updated = engine.update_artifact(&artifact_id,&content_md,Actor::Ai,project_id.as_deref()).map_err(|e|e.to_string())?;
-    {
-        let writer=engine.db().writer();
-        writer.execute("UPDATE artifacts SET title=?1,authorship='ai_generated',is_unfinished_draft=0 WHERE id=?2",params![title,artifact_id]).map_err(|e|e.to_string())?;
+pub fn handle_save_generated_artifact(
+    engine: &Engine,
+    artifact_id: String,
+    content_md: String,
+    title: String,
+    project_id: Option<String>,
+) -> Result<Artifact, String> {
+    if content_md.trim().is_empty() {
+        return Err("The model returned an empty document; the saved draft was kept.".into());
     }
-    let updated=engine.get_artifact(&updated.id).map_err(|e|e.to_string())?;
-    if let Some(ref path)=updated.file_path { std::fs::write(engine.vault_dir().join(path),sthira_core::vault::render_file_with_frontmatter(&updated)).map_err(|e|e.to_string())?; }
-    engine.emit_event(sthira_core::CoreEvent::ArtifactChanged{id:artifact_id});
-    Ok(updated)
+    let valid_project_id = resolve_active_project_id(engine, project_id);
+    let content_md = if content_md.starts_with("# ") {
+        format!(
+            "# {}{}",
+            title,
+            content_md
+                .find('\n')
+                .map(|at| &content_md[at..])
+                .unwrap_or("")
+        )
+    } else {
+        content_md
+    };
+    let outcome = engine
+        .save_artifact(
+            &artifact_id,
+            SaveArtifactRequest {
+                content_md: &content_md,
+                title: Some(&title),
+                actor: Actor::Ai,
+                context_project_id: valid_project_id.as_deref(),
+                authorship: Some(Authorship::AiGenerated),
+                is_unfinished_draft: Some(false),
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    if !outcome.mirror_synced {
+        if let Some(ref err) = outcome.mirror_sync_error {
+            eprintln!(
+                "[handle_save_generated_artifact] Saved DB revision for {} but failed vault mirror sync: {err}",
+                artifact_id
+            );
+        }
+    }
+    Ok(outcome.artifact)
 }
 
 #[tauri::command]
-pub fn cmd_save_generated_artifact(state: State<'_, AppState>, artifact_id: String, content_md: String, title: String, project_id: Option<String>) -> Result<Artifact,String> {
-    handle_save_generated_artifact(&state.engine,artifact_id,content_md,title,project_id)
+pub fn cmd_save_generated_artifact(
+    state: State<'_, AppState>,
+    artifact_id: String,
+    content_md: String,
+    title: String,
+    project_id: Option<String>,
+) -> Result<Artifact, String> {
+    handle_save_generated_artifact(&state.engine, artifact_id, content_md, title, project_id)
 }
 
 pub async fn handle_run_research_into_page(
@@ -3442,66 +3904,84 @@ pub async fn handle_run_research_into_page(
     on_progress: tauri::ipc::Channel<sthira_core::engines::research_engine::ResearchStage>,
 ) -> Result<sthira_core::engines::research_engine::WebResearchResult, String> {
     let model_id = crate::workflow_settings::workflow_model(engine, "research", model_id)?;
-    use sthira_core::engines::research_engine::{execute_research_with_template, WebSearchMode};
+    use sthira_core::engines::research_engine::{
+        execute_research_with_options, ResearchRunOptions, WebSearchMode,
+    };
 
     let template_id = crate::workflow_settings::workflow_template(engine, "research", template_id)?;
     let resolved = {
-        let reader = engine.db().reader().map_err(|e|e.to_string())?;
-        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e|e.to_string())?
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model())
+            .map_err(|e| e.to_string())?
     };
     let run_engine = engine.with_model(resolved.provider);
     let capability = {
-        let reader = engine.db().reader().map_err(|e|e.to_string())?;
-        sthira_core::db::providers_repo::get_model_entry(&reader, &resolved.model_id).map_err(|e|e.to_string())?
-            .map(|(model,_,_)| model.web_search_capability)
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        sthira_core::db::providers_repo::get_model_entry(&reader, &resolved.model_id)
+            .map_err(|e| e.to_string())?
+            .map(|(model, _, _)| model.web_search_capability)
             .unwrap_or(sthira_core::llm::WebSearchCapability::EngineAugmentedOnly)
     };
-    // Verify the target page exists before doing any expensive work.
-    engine.get_artifact(&artifact_id).map_err(|e| e.to_string())?;
+    // Verify the target page exists and is active before doing any expensive work.
+    engine
+        .get_artifact(&artifact_id)
+        .map_err(|e| e.to_string())?;
 
     let mode = web_search_mode
         .as_deref()
         .map(WebSearchMode::from_str_lossy)
         .unwrap_or(WebSearchMode::Auto);
 
-    let entry = {
+    let active_provider = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
         sthira_core::db::search_repo::get_default_search_provider(&reader)
             .ok()
             .flatten()
-            .unwrap_or_else(|| sthira_core::search::SearchProviderEntry {
-                id: "duckduckgo".to_string(),
-                display_name: "DuckDuckGo".to_string(),
-                provider_type: "duckduckgo_scraper".to_string(),
-                endpoint_url: "https://html.duckduckgo.com/html/".to_string(),
-                api_key: None,
-                is_enabled: true,
-                is_default: true,
-            })
     };
-    let provider_label = entry.display_name.clone();
-    let provider = sthira_core::search::build_search_provider(&entry);
+
+    let (provider_box, provider_label) = match active_provider {
+        Some(ref entry) => match sthira_core::search::build_search_provider(entry) {
+            Ok(p) => (Some(p), entry.display_name.clone()),
+            Err(e) => {
+                eprintln!(
+                    "[handle_run_research_into_page] Failed to build configured search provider: {e}"
+                );
+                (None, entry.display_name.clone())
+            }
+        },
+        None => (None, "None".to_string()),
+    };
+    let provider_ref = provider_box.as_deref();
 
     // Forward every real pipeline stage to the UI as it happens.
     let progress = move |stage: sthira_core::engines::research_engine::ResearchStage| {
         let _ = on_progress.send(stage);
     };
 
-    let result = execute_research_with_template(
+    let result = execute_research_with_options(
         &run_engine,
         query.trim(),
-        mode,
-        Some(provider.as_ref()),
-        &provider_label,
-        4,
-        Some(capability),
-        template_id.as_deref(),
-        Some(&progress),
+        ResearchRunOptions {
+            mode,
+            search_provider: provider_ref,
+            provider_label: &provider_label,
+            limit_docs: 4,
+            capability: Some(capability),
+            template_id: template_id.as_deref(),
+            exclude_artifact_id: Some(artifact_id.as_str()),
+            on_stage: Some(&progress),
+        },
     )
     .await
     .map_err(|e| e.to_string())?;
 
-    handle_save_generated_artifact(engine, artifact_id, result.synthesized_markdown.clone(), result.title.clone(), None)?;
+    handle_save_generated_artifact(
+        engine,
+        artifact_id,
+        result.synthesized_markdown.clone(),
+        result.title.clone(),
+        None,
+    )?;
 
     Ok(result)
 }
@@ -3535,7 +4015,11 @@ pub async fn handle_stream_adaptive_run(
     model_id: Option<String>,
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
 ) -> Result<(), String> {
-    let workflow = match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" };
+    let workflow = match mode {
+        OperationalMode::Research => "research",
+        OperationalMode::Plan => "plan",
+        _ => "draft",
+    };
     let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ProgressiveStreamChunk>(64);
     let engine_clone = engine.clone();
@@ -3555,7 +4039,9 @@ pub async fn handle_stream_adaptive_run(
         if let Err(e) = on_chunk.send(chunk) {
             eprintln!("Failed to send chunk over Tauri IPC channel: {e}");
             producer_task.abort();
-            return Err("Generation delivery was interrupted. No generated document was saved.".into());
+            return Err(
+                "Generation delivery was interrupted. No generated document was saved.".into(),
+            );
         }
     }
 
@@ -3573,8 +4059,13 @@ pub async fn cmd_stream_adaptive_run(
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let workflow = match mode { OperationalMode::Research => "research", OperationalMode::Plan => "plan", _ => "draft" };
-    let raw_input = crate::workflow_settings::workflow_prompt(&state.engine, workflow, raw_input, template_id)?;
+    let workflow = match mode {
+        OperationalMode::Research => "research",
+        OperationalMode::Plan => "plan",
+        _ => "draft",
+    };
+    let raw_input =
+        crate::workflow_settings::workflow_prompt(&state.engine, workflow, raw_input, template_id)?;
     handle_stream_adaptive_run(&state.engine, raw_input, mode, model_id, on_chunk).await
 }
 
@@ -3590,7 +4081,7 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
         .prepare(
             "SELECT p.id, p.name, p.is_pinned, p.last_accessed_at, p.last_substantive_at
              FROM projects p
-             WHERE p.status <> 'archived' AND p.is_pinned = 1
+             WHERE p.status <> 'archived' AND p.deleted_at IS NULL AND p.is_pinned = 1
              ORDER BY p.last_accessed_at DESC, p.last_substantive_at DESC
              LIMIT 5;",
         )
@@ -3623,7 +4114,7 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
             .prepare(
                 "SELECT p.id, p.name, p.is_pinned, p.last_accessed_at, p.last_substantive_at
                  FROM projects p
-                 WHERE p.status <> 'archived' AND p.is_pinned = 0
+                 WHERE p.status <> 'archived' AND p.deleted_at IS NULL AND p.is_pinned = 0
                  ORDER BY p.last_accessed_at DESC, p.last_substantive_at DESC
                  LIMIT ?1;",
             )
@@ -3653,14 +4144,25 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
         projects.extend(unpinned);
     }
 
-    // 2. Notes: Top 7 (max 5 pinned + most recent)
+    // 2. Notes: Top 7 (max 5 pinned + most recent), without duplicating shared notes across rows
     let mut pinned_note_stmt = reader
         .prepare(
             "SELECT a.id, COALESCE(a.title, 'Untitled Note'), a.is_pinned, a.last_accessed_at, a.updated_at,
-                    pa.project_id, p.name
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END
              FROM artifacts a
-             LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-             LEFT JOIN projects p ON pa.project_id = p.id
              WHERE a.deleted_at IS NULL
                AND a.type = 'note'
                AND a.id NOT IN (SELECT artifact_id FROM object_instances)
@@ -3696,10 +4198,21 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
         let mut unpinned_note_stmt = reader
             .prepare(
                 "SELECT a.id, COALESCE(a.title, 'Untitled Note'), a.is_pinned, a.last_accessed_at, a.updated_at,
-                        pa.project_id, p.name
+                        CASE
+                          WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                          THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                          ELSE NULL
+                        END,
+                        CASE
+                          WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                          THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                          ELSE NULL
+                        END
                  FROM artifacts a
-                 LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-                 LEFT JOIN projects p ON pa.project_id = p.id
                  WHERE a.deleted_at IS NULL
                    AND a.type = 'note'
                    AND a.id NOT IN (SELECT artifact_id FROM object_instances)
@@ -3737,12 +4250,24 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
     let mut pinned_obj_stmt = reader
         .prepare(
             "SELECT a.id, COALESCE(a.title, 'Untitled Object'), a.is_pinned, a.last_accessed_at, a.updated_at,
-                    pa.project_id, p.name, ot.id, ot.display_name, ot.icon, ot.color
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    ot.id, ot.display_name, ot.icon, ot.color
              FROM artifacts a
              JOIN object_instances oi ON a.id = oi.artifact_id
              JOIN object_types ot ON oi.object_type_id = ot.id
-             LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-             LEFT JOIN projects p ON pa.project_id = p.id
              WHERE a.deleted_at IS NULL
                AND a.is_pinned = 1
              ORDER BY a.last_accessed_at DESC, a.updated_at DESC
@@ -3776,12 +4301,24 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
         let mut unpinned_obj_stmt = reader
             .prepare(
                 "SELECT a.id, COALESCE(a.title, 'Untitled Object'), a.is_pinned, a.last_accessed_at, a.updated_at,
-                        pa.project_id, p.name, ot.id, ot.display_name, ot.icon, ot.color
+                        CASE
+                          WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                          THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                          ELSE NULL
+                        END,
+                        CASE
+                          WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                          THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                                WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                          ELSE NULL
+                        END,
+                        ot.id, ot.display_name, ot.icon, ot.color
                  FROM artifacts a
                  JOIN object_instances oi ON a.id = oi.artifact_id
                  JOIN object_types ot ON oi.object_type_id = ot.id
-                 LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-                 LEFT JOIN projects p ON pa.project_id = p.id
                  WHERE a.deleted_at IS NULL
                    AND a.is_pinned = 0
                  ORDER BY a.last_accessed_at DESC, a.updated_at DESC
@@ -3821,9 +4358,7 @@ pub fn handle_get_sidebar_items(engine: &Engine) -> Result<SidebarItemsResponse,
 }
 
 #[tauri::command]
-pub fn cmd_get_sidebar_items(
-    state: State<'_, AppState>,
-) -> Result<SidebarItemsResponse, String> {
+pub fn cmd_get_sidebar_items(state: State<'_, AppState>) -> Result<SidebarItemsResponse, String> {
     handle_get_sidebar_items(&state.engine)
 }
 
@@ -3839,14 +4374,14 @@ pub fn handle_toggle_pin(
     if item_type.to_lowercase() == "project" {
         let count = writer
             .execute(
-                "UPDATE projects SET is_pinned = ?1 WHERE id = ?2;",
+                "UPDATE projects SET is_pinned = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
                 params![pin_val, item_id],
             )
             .map_err(|e| e.to_string())?;
         if count == 0 {
             writer
                 .execute(
-                    "UPDATE artifacts SET is_pinned = ?1 WHERE id = ?2;",
+                    "UPDATE artifacts SET is_pinned = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
                     params![pin_val, item_id],
                 )
                 .map_err(|e| e.to_string())?;
@@ -3854,7 +4389,7 @@ pub fn handle_toggle_pin(
     } else {
         writer
             .execute(
-                "UPDATE artifacts SET is_pinned = ?1 WHERE id = ?2;",
+                "UPDATE artifacts SET is_pinned = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
                 params![pin_val, item_id],
             )
             .map_err(|e| e.to_string())?;
@@ -3883,14 +4418,14 @@ pub fn handle_record_access(
     if item_type.to_lowercase() == "project" {
         writer
             .execute(
-                "UPDATE projects SET last_accessed_at = ?1 WHERE id = ?2;",
+                "UPDATE projects SET last_accessed_at = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
                 params![now_ms, item_id],
             )
             .map_err(|e| e.to_string())?;
     } else {
         writer
             .execute(
-                "UPDATE artifacts SET last_accessed_at = ?1 WHERE id = ?2;",
+                "UPDATE artifacts SET last_accessed_at = ?1 WHERE id = ?2 AND deleted_at IS NULL;",
                 params![now_ms, item_id],
             )
             .map_err(|e| e.to_string())?;
@@ -3921,7 +4456,7 @@ pub fn handle_get_workspace_index(
     // 1. Fetch counts
     let projects_count: usize = reader
         .query_row(
-            "SELECT COUNT(*) FROM projects WHERE status <> 'archived';",
+            "SELECT COUNT(*) FROM projects WHERE status <> 'archived' AND deleted_at IS NULL;",
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -3957,7 +4492,12 @@ pub fn handle_get_workspace_index(
              WHERE a.deleted_at IS NULL
                AND a.type = 'note'
                AND a.id NOT IN (SELECT artifact_id FROM object_instances)
-               AND a.id NOT IN (SELECT artifact_id FROM project_artifacts WHERE detached_at IS NULL);",
+               AND a.id NOT IN (
+                   SELECT pa.artifact_id
+                   FROM project_artifacts pa
+                   JOIN projects p ON p.id = pa.project_id
+                   WHERE pa.detached_at IS NULL AND p.deleted_at IS NULL
+               );",
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -3984,11 +4524,12 @@ pub fn handle_get_workspace_index(
     // Query helper for Projects
     let fetch_projects = |items: &mut Vec<WorkspaceIndexItem>| -> Result<(), rusqlite::Error> {
         let mut stmt = reader.prepare(
-            "SELECT p.id, p.name, COALESCE(pp.purpose, ''), p.is_pinned, p.last_accessed_at, p.last_substantive_at, p.created_at, COUNT(pa.artifact_id)
+            "SELECT p.id, p.name, COALESCE(pp.purpose, ''), p.is_pinned, p.last_accessed_at, p.last_substantive_at, p.created_at, COUNT(a.id)
              FROM projects p
              LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
              LEFT JOIN project_artifacts pa ON p.id = pa.project_id AND pa.detached_at IS NULL
-             WHERE p.status <> 'archived' AND (p.name LIKE ?1 OR COALESCE(pp.purpose, '') LIKE ?1)
+             LEFT JOIN artifacts a ON a.id = pa.artifact_id AND a.deleted_at IS NULL
+             WHERE p.status <> 'archived' AND p.deleted_at IS NULL AND (p.name LIKE ?1 OR COALESCE(pp.purpose, '') LIKE ?1)
              GROUP BY p.id
              ORDER BY p.is_pinned DESC, p.last_substantive_at DESC;",
         )?;
@@ -4022,35 +4563,67 @@ pub fn handle_get_workspace_index(
     };
 
     // Query helper for Notes
-    let fetch_notes = |items: &mut Vec<WorkspaceIndexItem>, only_standalone: bool| -> Result<(), rusqlite::Error> {
+    let fetch_notes = |items: &mut Vec<WorkspaceIndexItem>,
+                       only_standalone: bool|
+     -> Result<(), rusqlite::Error> {
         let sql = if only_standalone {
             "SELECT a.id, COALESCE(a.title, 'Untitled Note'), SUBSTR(a.content_md, 1, 200),
                     a.is_pinned, a.last_accessed_at, a.updated_at, a.created_at,
-                    NULL, NULL
+                    NULL, NULL, 1
              FROM artifacts a
              WHERE a.deleted_at IS NULL
                AND a.type = 'note'
                AND a.id NOT IN (SELECT artifact_id FROM object_instances)
-               AND a.id NOT IN (SELECT artifact_id FROM project_artifacts WHERE detached_at IS NULL)
+               AND a.id NOT IN (
+                   SELECT pa.artifact_id
+                   FROM project_artifacts pa
+                   JOIN projects p ON p.id = pa.project_id
+                   WHERE pa.detached_at IS NULL AND p.deleted_at IS NULL
+               )
                AND (a.title LIKE ?1 OR a.content_md LIKE ?1)
              ORDER BY a.is_pinned DESC, a.updated_at DESC;"
         } else {
             "SELECT a.id, COALESCE(a.title, 'Untitled Note'), SUBSTR(a.content_md, 1, 200),
                     a.is_pinned, a.last_accessed_at, a.updated_at, a.created_at,
-                    pa.project_id, p.name
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    NOT EXISTS (
+                      SELECT 1 FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                      WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL
+                    )
              FROM artifacts a
-             LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-             LEFT JOIN projects p ON pa.project_id = p.id
              WHERE a.deleted_at IS NULL
                AND a.type = 'note'
                AND a.id NOT IN (SELECT artifact_id FROM object_instances)
-               AND (a.title LIKE ?1 OR a.content_md LIKE ?1 OR COALESCE(p.name, '') LIKE ?1)
+               AND (
+                   a.title LIKE ?1
+                   OR a.content_md LIKE ?1
+                   OR EXISTS (
+                       SELECT 1 FROM project_artifacts pa_s
+                       JOIN projects p_s ON p_s.id = pa_s.project_id
+                       WHERE pa_s.artifact_id = a.id AND pa_s.detached_at IS NULL AND p_s.deleted_at IS NULL
+                         AND p_s.name LIKE ?1
+                   )
+               )
              ORDER BY a.is_pinned DESC, a.updated_at DESC;"
         };
 
         let mut stmt = reader.prepare(sql)?;
         let rows = stmt.query_map(params![pat], |r| {
             let pid: Option<String> = r.get(7)?;
+            let is_standalone = r.get::<_, i64>(9)? != 0;
             Ok(WorkspaceIndexItem {
                 id: r.get(0)?,
                 title: r.get(1)?,
@@ -4060,9 +4633,9 @@ pub fn handle_get_workspace_index(
                 last_accessed_at: r.get(4)?,
                 updated_at: r.get(5)?,
                 created_at: r.get(6)?,
-                project_id: pid.clone(),
+                project_id: pid,
                 project_name: r.get(8)?,
-                standalone: pid.is_none(),
+                standalone: is_standalone,
                 item_count: None,
                 object_type_id: None,
                 object_type_name: None,
@@ -4082,19 +4655,46 @@ pub fn handle_get_workspace_index(
         let mut stmt = reader.prepare(
             "SELECT a.id, COALESCE(a.title, 'Untitled Object'), SUBSTR(a.content_md, 1, 200),
                     a.is_pinned, a.last_accessed_at, a.updated_at, a.created_at,
-                    pa.project_id, p.name, ot.id, ot.display_name, ot.icon, ot.color
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT pa.project_id FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    CASE
+                      WHEN (SELECT COUNT(*) FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL) = 1
+                      THEN (SELECT p2.name FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                            WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL LIMIT 1)
+                      ELSE NULL
+                    END,
+                    ot.id, ot.display_name, ot.icon, ot.color,
+                    NOT EXISTS (
+                      SELECT 1 FROM project_artifacts pa JOIN projects p2 ON p2.id = pa.project_id
+                      WHERE pa.artifact_id = a.id AND pa.detached_at IS NULL AND p2.deleted_at IS NULL
+                    )
              FROM artifacts a
              JOIN object_instances oi ON a.id = oi.artifact_id
              JOIN object_types ot ON oi.object_type_id = ot.id
-             LEFT JOIN project_artifacts pa ON a.id = pa.artifact_id AND pa.detached_at IS NULL
-             LEFT JOIN projects p ON pa.project_id = p.id
              WHERE a.deleted_at IS NULL
-               AND (a.title LIKE ?1 OR a.content_md LIKE ?1 OR ot.display_name LIKE ?1 OR COALESCE(p.name, '') LIKE ?1)
+               AND (
+                   a.title LIKE ?1
+                   OR a.content_md LIKE ?1
+                   OR ot.display_name LIKE ?1
+                   OR EXISTS (
+                       SELECT 1 FROM project_artifacts pa_s
+                       JOIN projects p_s ON p_s.id = pa_s.project_id
+                       WHERE pa_s.artifact_id = a.id AND pa_s.detached_at IS NULL AND p_s.deleted_at IS NULL
+                         AND p_s.name LIKE ?1
+                   )
+               )
              ORDER BY a.is_pinned DESC, a.updated_at DESC;",
         )?;
 
         let rows = stmt.query_map(params![pat], |r| {
             let pid: Option<String> = r.get(7)?;
+            let is_standalone = r.get::<_, i64>(13)? != 0;
             Ok(WorkspaceIndexItem {
                 id: r.get(0)?,
                 title: r.get(1)?,
@@ -4104,9 +4704,9 @@ pub fn handle_get_workspace_index(
                 last_accessed_at: r.get(4)?,
                 updated_at: r.get(5)?,
                 created_at: r.get(6)?,
-                project_id: pid.clone(),
+                project_id: pid,
                 project_name: r.get(8)?,
-                standalone: pid.is_none(),
+                standalone: is_standalone,
                 item_count: None,
                 object_type_id: Some(r.get(9)?),
                 object_type_name: Some(r.get(10)?),
@@ -4139,7 +4739,8 @@ pub fn handle_get_workspace_index(
             fetch_notes(&mut items, false).map_err(|e| e.to_string())?;
             fetch_objects(&mut items).map_err(|e| e.to_string())?;
             items.sort_by(|a, b| {
-                b.is_pinned.cmp(&a.is_pinned)
+                b.is_pinned
+                    .cmp(&a.is_pinned)
                     .then_with(|| b.updated_at.cmp(&a.updated_at))
             });
         }
@@ -4156,8 +4757,6 @@ pub fn cmd_get_workspace_index(
 ) -> Result<WorkspaceIndexData, String> {
     handle_get_workspace_index(&state.engine, tab, search)
 }
-
-
 
 // ============================================================================
 // Phase 18: Continuous & Scheduled Research / Planning Topics
@@ -4226,7 +4825,11 @@ fn weekday_label(w: u8) -> &'static str {
 }
 
 /// Human-readable one-line summary of a topic's schedule, e.g. `Daily at 06:00 (UTC)`.
-fn schedule_label(cadence: sthira_core::TopicCadence, minutes: Option<i64>, weekday: Option<u8>) -> String {
+fn schedule_label(
+    cadence: sthira_core::TopicCadence,
+    minutes: Option<i64>,
+    weekday: Option<u8>,
+) -> String {
     let time = minutes.map(sthira_core::format_hhmm);
     match (cadence, time) {
         (sthira_core::TopicCadence::Manual, _) => "Manual only".to_string(),
@@ -4249,7 +4852,7 @@ fn to_topic_view(
     let project_name: Option<String> = topic.project_id.as_deref().and_then(|pid| {
         reader
             .query_row(
-                "SELECT name FROM projects WHERE id = ?1;",
+                "SELECT name FROM projects WHERE id = ?1 AND deleted_at IS NULL;",
                 params![pid],
                 |r| r.get::<_, String>(0),
             )
@@ -4262,7 +4865,7 @@ fn to_topic_view(
         .map(|run| {
             let artifact_title = reader
                 .query_row(
-                    "SELECT COALESCE(title, 'Untitled') FROM artifacts WHERE id = ?1;",
+                    "SELECT COALESCE(title, 'Untitled') FROM artifacts WHERE id = ?1 AND deleted_at IS NULL;",
                     params![run.artifact_id],
                     |r| r.get::<_, String>(0),
                 )
@@ -4337,7 +4940,6 @@ pub fn cmd_list_scheduled_topics(
     handle_list_scheduled_topics(&state.engine, topic_type)
 }
 
-
 pub fn handle_create_scheduled_topic(
     engine: &Engine,
     input: CreateScheduledTopicInput,
@@ -4365,7 +4967,9 @@ pub fn handle_create_scheduled_topic(
     };
 
     let schedule_weekday = match input.schedule_weekday {
-        Some(w) if w > 6 => return Err("Schedule weekday must be 0 (Monday) .. 6 (Sunday)".to_string()),
+        Some(w) if w > 6 => {
+            return Err("Schedule weekday must be 0 (Monday) .. 6 (Sunday)".to_string())
+        }
         other => other,
     };
 
@@ -4411,13 +5015,20 @@ pub async fn handle_trigger_scheduled_topic_run(
 ) -> Result<String, String> {
     let topic = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
-        sthira_core::db::scheduled_topics_repo::get_topic(&reader, &topic_id).map_err(|e| e.to_string())?.ok_or("Scheduled topic unavailable.")?
+        sthira_core::db::scheduled_topics_repo::get_topic(&reader, &topic_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Scheduled topic unavailable.")?
     };
-    let workflow = if topic.topic_type.as_str() == "research" { "research" } else { "plan" };
+    let workflow = if topic.topic_type.as_str() == "research" {
+        "research"
+    } else {
+        "plan"
+    };
     let model_id = crate::workflow_settings::workflow_model(engine, workflow, topic.model_id)?;
     let resolved = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
-        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model()).map_err(|e| e.to_string())?
+        sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model())
+            .map_err(|e| e.to_string())?
     };
     let run_engine = engine.with_model(resolved.provider);
     sthira_core::engines::scheduled_runner::execute_topic_run(&run_engine, &topic_id).await
@@ -4464,17 +5075,17 @@ pub fn cmd_delete_scheduled_topic(
     handle_delete_scheduled_topic(&state.engine, topic_id)
 }
 
-pub async fn handle_refine_artifact_with_cancellation(
+pub async fn handle_refine_artifact_outcome_with_cancellation(
     engine: &Engine,
     artifact_id: String,
     critique: String,
     model_id: Option<String>,
     web_search: bool,
     cancel_token: Option<&sthira_core::llm::lifecycle::CancellationToken>,
-) -> Result<String, String> {
+) -> Result<RefineArtifactOutcome, String> {
     let model_id = crate::workflow_settings::workflow_model(engine, "draft", model_id)?;
     engine
-        .refine_artifact_with_policy_and_cancellation(
+        .refine_artifact_with_policy_and_cancellation_outcome(
             &artifact_id,
             &critique,
             model_id.as_deref(),
@@ -4483,6 +5094,85 @@ pub async fn handle_refine_artifact_with_cancellation(
             cancel_token,
         )
         .await
+}
+
+pub async fn handle_refine_artifact_outcome(
+    engine: &Engine,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+) -> Result<RefineArtifactOutcome, String> {
+    handle_refine_artifact_outcome_with_cancellation(
+        engine,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_refine_artifact_outcome_with_request_id(
+    state: &AppState,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+    request_id: Option<String>,
+) -> Result<RefineArtifactOutcome, String> {
+    let cancel_token = request_id.as_ref().map(|id| state.requests.register(id));
+    let res = handle_refine_artifact_outcome_with_cancellation(
+        &state.engine,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        cancel_token.as_ref(),
+    )
+    .await;
+    if let Some(ref id) = request_id {
+        state.requests.unregister(id);
+    }
+    res
+}
+
+pub fn handle_undo_refinement(
+    engine: &Engine,
+    artifact_id: String,
+    change_set_id: String,
+) -> Result<SaveArtifactOutcome, String> {
+    engine.undo_refinement(&artifact_id, &change_set_id)
+}
+
+#[tauri::command]
+pub fn cmd_undo_refinement(
+    artifact_id: String,
+    change_set_id: String,
+    state: State<'_, AppState>,
+) -> Result<SaveArtifactOutcome, String> {
+    handle_undo_refinement(&state.engine, artifact_id, change_set_id)
+}
+
+pub async fn handle_refine_artifact_with_cancellation(
+    engine: &Engine,
+    artifact_id: String,
+    critique: String,
+    model_id: Option<String>,
+    web_search: bool,
+    cancel_token: Option<&sthira_core::llm::lifecycle::CancellationToken>,
+) -> Result<String, String> {
+    handle_refine_artifact_outcome_with_cancellation(
+        engine,
+        artifact_id,
+        critique,
+        model_id,
+        web_search,
+        cancel_token,
+    )
+    .await
+    .map(|outcome| outcome.content_md)
 }
 
 pub async fn handle_refine_artifact(
@@ -4511,20 +5201,16 @@ pub async fn handle_refine_artifact_with_request_id(
     web_search: bool,
     request_id: Option<String>,
 ) -> Result<String, String> {
-    let cancel_token = request_id.as_ref().map(|id| state.requests.register(id));
-    let res = handle_refine_artifact_with_cancellation(
-        &state.engine,
+    handle_refine_artifact_outcome_with_request_id(
+        state,
         artifact_id,
         critique,
         model_id,
         web_search,
-        cancel_token.as_ref(),
+        request_id,
     )
-    .await;
-    if let Some(ref id) = request_id {
-        state.requests.unregister(id);
-    }
-    res
+    .await
+    .map(|outcome| outcome.content_md)
 }
 
 #[tauri::command]
@@ -4535,8 +5221,8 @@ pub async fn cmd_refine_artifact(
     web_search: bool,
     request_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<String, String> {
-    handle_refine_artifact_with_request_id(
+) -> Result<RefineArtifactOutcome, String> {
+    handle_refine_artifact_outcome_with_request_id(
         &state,
         artifact_id,
         critique,
@@ -4556,7 +5242,11 @@ pub async fn handle_derive_artifact_with_cancellation(
     project_id: Option<String>,
     cancel_token: Option<&sthira_core::llm::lifecycle::CancellationToken>,
 ) -> Result<String, String> {
-    let workflow = if derivation_type == "plan_from_research" { "plan" } else { "draft" };
+    let workflow = if derivation_type == "plan_from_research" {
+        "plan"
+    } else {
+        "draft"
+    };
     let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
     let template_id = crate::workflow_settings::workflow_template(engine, workflow, template_id)?;
     engine
@@ -4653,10 +5343,7 @@ pub fn handle_cancel_request(state: &AppState, request_id: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn cmd_cancel_request(
-    request_id: String,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
+pub fn cmd_cancel_request(request_id: String, state: State<'_, AppState>) -> Result<bool, String> {
     Ok(handle_cancel_request(&state, &request_id))
 }
 
@@ -4699,6 +5386,3 @@ pub fn cmd_list_synthesis_templates(
 ) -> Result<Vec<SynthesisTemplateView>, String> {
     handle_list_synthesis_templates(&state.engine, target_mode)
 }
-
-
-

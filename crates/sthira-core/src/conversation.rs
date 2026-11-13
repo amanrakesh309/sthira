@@ -232,7 +232,7 @@ impl Engine {
             params![now, undo_cs, change_set_id],
         )
         .map_err(|e| e.to_string())?;
-        tx.execute("UPDATE artifacts SET content_md=?1,content_hash=?2,version=?3,updated_at=?4,is_unfinished_draft=?5 WHERE id=?6",params![original,hash,version+1,now,crate::epistemic::is_mid_sentence(&original),artifact_id]).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE artifacts SET content_md=?1,content_hash=?2,last_synced_hash=?2,version=?3,updated_at=?4,is_unfinished_draft=?5 WHERE id=?6 AND deleted_at IS NULL",params![original,hash,version+1,now,crate::epistemic::is_mid_sentence(&original),artifact_id]).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO artifact_revisions (id,artifact_id,version,content_md,content_hash,actor,change_set_id,created_at) VALUES (?1,?2,?3,?4,?5,'system',?6,?7)",params![uuid::Uuid::new_v4().to_string(),artifact_id,version+1,original,hash,undo_cs,now]).map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE document_conversation_turns SET proposal_state='reverted' WHERE id=?1",
@@ -316,7 +316,7 @@ impl Engine {
         let cs = uuid::Uuid::new_v4().to_string();
         let inverse = serde_json::json!({"operations":[{"type":"restore_artifact","artifact_id":artifact_id,"content_md":current,"content_hash":hash}]});
         tx.execute("INSERT INTO change_sets (id,actor,summary,inverse_payload,applied_at) VALUES (?1,'ai','Applied conversation edit',?2,?3)",params![cs,inverse.to_string(),now]).map_err(|e| e.to_string())?;
-        tx.execute("UPDATE artifacts SET content_md=?1,content_hash=?2,version=?3,updated_at=?4,is_unfinished_draft=?5 WHERE id=?6",params![content,new_hash,version+1,now,crate::epistemic::is_mid_sentence(&content),artifact_id]).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE artifacts SET content_md=?1,content_hash=?2,last_synced_hash=?2,version=?3,updated_at=?4,is_unfinished_draft=?5 WHERE id=?6 AND deleted_at IS NULL",params![content,new_hash,version+1,now,crate::epistemic::is_mid_sentence(&content),artifact_id]).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO artifact_revisions (id,artifact_id,version,content_md,content_hash,actor,change_set_id,created_at) VALUES (?1,?2,?3,?4,?5,'ai',?6,?7)",params![uuid::Uuid::new_v4().to_string(),artifact_id,version+1,content,new_hash,cs,now]).map_err(|e| e.to_string())?;
         tx.execute("UPDATE document_conversation_turns SET proposal_state='applied',change_set_id=?1 WHERE id=?2",params![cs,turn_id]).map_err(|e| e.to_string())?;
         self.log_event_tx(

@@ -1,7 +1,7 @@
 # Sthira (स्थिर)
 
 > **AI-Native, Local-First Knowledge Workspace & Research Engine**  
-> *Deterministic epistemic safety, zero-guilt resumption, bi-directional Markdown-SQLite synchronization, and adaptive generative UI.*
+> *Deterministic epistemic safety, zero-guilt resumption, bi-directional Markdown-SQLite synchronization, and durable rich-text editing.*
 
 Sthira is an offline-first knowledge workspace engineered for deep thinking, long-horizon research, and planning. It fuses the tactile durability of human-readable Markdown files with the relational rigor, vector search, and transactional integrity of an embedded SQLite database (`rusqlite` + `sqlite-vec`), wrapped in a desktop application built with Tauri v2, React 19, and Tailwind CSS.
 
@@ -38,10 +38,10 @@ Start with the [permanent product, design, and verification policies](docs/polic
    - Modular `SearchProvider` trait supporting SearXNG (local/private), Brave Search, Tavily AI, and a headless DuckDuckGo HTML scraper.
    - Scrapes web pages into clean Markdown, caches results in `web_research_cache`, verifies quotes against scraped text, and offers 1-click `[Import to Vault]` as durable source artifacts.
 
-7. **Adaptive Streaming & Conditional Generative UI:**
+7. **Progressive Streaming & Durable Rich-Text Editor:**
    - Rust progressive stream engine (`ProgressiveStreamChunk`) streaming over Tauri v2 IPC channels.
-   - Fail-Safe Parser Invariant: broken JSON gracefully degrades to raw Markdown tokens without crashing.
-   - Generative UI Widgets: `<MilestonePlanDagWidget>`, `<EvidenceComparisonMatrixWidget>`, `<InteractiveDecisionSelectorWidget>`, and a dual-mode toggle `[🎛️ Interactive Widgets]` ⟷ `[📄 Plain Markdown]`.
+   - Fail-Safe Parser Invariant: responses stream cleanly into the single document workspace and chat panel as durable Markdown.
+   - Generative UI widgets and interactive card toggles are deferred; pages, synthesis runs, and chat use ordinary rich text with Markdown as the sole durable storage format.
 
 8. **Extensible Typed Object System:**
    - Structured entities (`Idea` 💡, `To-Do / Action` ☑️, `Decision` ⚖️, `Source / Reading` 🔗) alongside freeform notes.
@@ -141,7 +141,9 @@ cargo run -p sthira-desktop
 - **Universal Input:** On Home View, capture thoughts, type search queries, or select operational modes (`Capture`, `Research`, `Plan`, `Act`). Streams real LLM inference from active models without stubs.
 - **Project & Document Workspaces:** Project navigation opens its overview; selecting an item opens it centrally. Notes use one rich editable Markdown-backed surface. Evidence opens through Page actions → Sources & insights; Connections provides contextual reference reading.
 - **Notion-Style Slash Commands (`/`):** Type `/` at the beginning of a line or after a space to trigger an interactive block menu:
-  - Formatting: `/h1`, `/h2`, `/h3`, `/todo`, `/bullet`, `/table`, `/code`, `/callout`
+  - Formatting: `/h1`, `/h2`, `/h3`, `/todo`, `/bullet`, `/table`, `/code`, `/callout`, `/divider`
+  - Create: `/new page` (current project or standalone), `/new project` (opens its overview), `/new custom object` (define a type, then create an instance)
+  - Saved object types accept both their name and `new` plus their name, such as `/idea` and `/new idea`; custom types appear automatically.
   - Epistemic & Objects: `/decision` (registers `UserRecorded` decision node), `/question`, `/idea`, `/task`
   - Inline AI: `/plan <goal>`, `/research <topic>`, `/expand`
 - **Formatting Toolbar:** `B`, `I`, `H1`, `H2`, `Checklist`, `Code`, `Table`, and `/ Insert Block` operate in the single editable document, including task checkboxes. There is no Edit/Preview mode toggle.
@@ -150,7 +152,7 @@ cargo run -p sthira-desktop
 - **Auto-Save:** Typing is automatically saved after 600ms of inactivity or upon clicking away. Watch the live status pill (`Saving...` $\rightarrow$ `Saved` $\rightarrow$ `Auto-saved`).
 - **Knowledge Graph:** Click `🌐 Knowledge Graph` in the sidebar to open the 2D force-directed physics graph. Pan, zoom, and filter by node types.
 - **Web Search & Center Workspace:** Research and Plan stream in the center workspace. Web search and Import to Vault preserve source attribution and durable offline material.
-- **Adaptive Stream Switcher:** During progressive AI responses, toggle between `[ 🎛️ Interactive Widgets ]` and `[ 📄 Plain Markdown ]`.
+- **Center Workspace Streaming:** Research and planning operations stream progressively into the active workspace or chat panel as durable Markdown without widget toggles.
 
 ---
 

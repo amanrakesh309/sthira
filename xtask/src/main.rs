@@ -28,7 +28,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let forbidden_content = fs::read_to_string(forbidden_file).expect("Failed to read forbidden_literals.txt");
+    let forbidden_content =
+        fs::read_to_string(forbidden_file).expect("Failed to read forbidden_literals.txt");
     let forbidden_tokens: Vec<&str> = forbidden_content
         .lines()
         .map(|l| l.trim())
@@ -48,7 +49,14 @@ fn main() {
                     token,
                     entry.path().display()
                 );
-                record_failure(phase, &format!("Forbidden literal '{}' in {}", token, entry.path().display()));
+                record_failure(
+                    phase,
+                    &format!(
+                        "Forbidden literal '{}' in {}",
+                        token,
+                        entry.path().display()
+                    ),
+                );
                 std::process::exit(1);
             }
         }
@@ -67,7 +75,11 @@ fn main() {
     for entry in WalkDir::new("crates/sthira-core/src")
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs" || ext == "sql"))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "rs" || ext == "sql")
+        })
     {
         let content = fs::read_to_string(entry.path()).expect("Failed to read file");
         for pattern in &banned_patterns {
@@ -77,7 +89,14 @@ fn main() {
                     pattern,
                     entry.path().display()
                 );
-                record_failure(phase, &format!("Banned wall-clock call '{}' in {}", pattern, entry.path().display()));
+                record_failure(
+                    phase,
+                    &format!(
+                        "Banned wall-clock call '{}' in {}",
+                        pattern,
+                        entry.path().display()
+                    ),
+                );
                 std::process::exit(1);
             }
         }
@@ -102,7 +121,15 @@ fn main() {
     };
 
     let status = Command::new("cargo")
-        .args(["test", "--package", "sthira-core", "--test", test_target, "--", "--nocapture"])
+        .args([
+            "test",
+            "--package",
+            "sthira-core",
+            "--test",
+            test_target,
+            "--",
+            "--nocapture",
+        ])
         .status()
         .expect("Failed to run cargo test");
 
@@ -151,7 +178,10 @@ fn record_success(phase: usize) {
             "total_phases": 7,
             "verification_status": "PASSED"
         });
-        fs::write("gate_reports/FINAL_VERIFICATION_REPORT.json", serde_json::to_string_pretty(&final_report).unwrap())
-            .expect("Failed to write final report");
+        fs::write(
+            "gate_reports/FINAL_VERIFICATION_REPORT.json",
+            serde_json::to_string_pretty(&final_report).unwrap(),
+        )
+        .expect("Failed to write final report");
     }
 }

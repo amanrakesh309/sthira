@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use sthira_core::{ArtifactType, Authorship, Engine};
 use sthira_desktop::{
     handle_derive_artifact, handle_get_artifact_context, handle_refine_artifact,
-    handle_revert_change_set,
+    handle_refine_artifact_outcome, handle_revert_change_set, handle_undo_refinement,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
@@ -1268,4 +1268,276 @@ async fn test_derive_fails_honestly_on_attachment_failure_without_mutations() {
         vault_files, 1,
         "Vault mirror file must be rolled back on attachment failure"
     );
+}
+
+#[tokio::test]
+async fn test_refine_outcome_supports_guarded_one_click_undo_and_blocks_if_edited_after() {
+    let generated_body =
+        "# Consensus Notes\n\nRefined findings with Byzantine fault tolerance metrics.";
+    let fixture = Fixture::start(FixtureResponse::ValidRefine {
+        content: generated_body.into(),
+        blocks: vec![],
+    })
+    .await;
+    let (_tmp, engine) = setup_test_engine(&fixture.base);
+
+    let original_content = "# Consensus Notes\n\nInitial Raft overview.";
+    let art = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Consensus Notes"),
+            original_content,
+            None,
+        )
+        .unwrap();
+    let other = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Other Note"),
+            "# Other Note\n\nMust remain intact.",
+            None,
+        )
+        .unwrap();
+
+    let outcome = handle_refine_artifact_outcome(
+        &engine,
+        art.id.clone(),
+        "Add BFT metrics".into(),
+        None,
+        false,
+    )
+    .await
+    .expect("Refine outcome should succeed");
+
+    assert_eq!(outcome.artifact_id, art.id);
+    assert_eq!(outcome.content_md, generated_body);
+    assert!(!outcome.change_set_id.is_empty());
+
+    // Wrong artifact ID must be rejected cleanly without mutating either artifact
+    let mismatch_err =
+        handle_undo_refinement(&engine, other.id.clone(), outcome.change_set_id.clone())
+            .expect_err("Mismatched artifact ID must refuse undo");
+    assert!(mismatch_err.contains("cannot be undone"));
+    assert_eq!(
+        engine.get_artifact(&other.id).unwrap().content_md,
+        "# Other Note\n\nMust remain intact."
+    );
+    assert_eq!(
+        engine.get_artifact(&art.id).unwrap().content_md,
+        generated_body
+    );
+
+    // Guarded undo succeeds on unmodified refined document and updates mirror + DB + ChangeSet
+    let undo_outcome =
+        handle_undo_refinement(&engine, art.id.clone(), outcome.change_set_id.clone())
+            .expect("Guarded undo should restore exact original content");
+    assert!(undo_outcome.mirror_synced);
+    assert!(undo_outcome.mirror_sync_error.is_none());
+    let restored = undo_outcome.artifact;
+    assert_eq!(restored.content_md, original_content);
+    assert_eq!(
+        restored.last_synced_hash.as_deref(),
+        Some(restored.content_hash.as_str())
+    );
+    let mirror = std::fs::read_to_string(
+        engine
+            .vault_dir()
+            .join(restored.file_path.as_ref().unwrap()),
+    )
+    .unwrap();
+    assert!(mirror.ends_with(original_content));
+
+    // Re-running undo on the same ChangeSet is refused cleanly
+    let dup_err = handle_undo_refinement(&engine, art.id.clone(), outcome.change_set_id)
+        .expect_err("Duplicate undo must be rejected");
+    assert!(dup_err.contains("already been undone"));
+
+    // Second refinement followed by newer saved edit -> guarded undo must refuse to overwrite
+    let outcome2 = handle_refine_artifact_outcome(
+        &engine,
+        art.id.clone(),
+        "Second refinement".into(),
+        None,
+        false,
+    )
+    .await
+    .expect("Second refine outcome should succeed");
+    let newer_body = "# Consensus Notes\n\nNewer user follow-up edit that must not be overwritten.";
+    engine
+        .save_artifact(
+            &art.id,
+            sthira_core::SaveArtifactRequest {
+                content_md: newer_body,
+                title: Some("Consensus Notes"),
+                actor: sthira_core::Actor::User,
+                authorship: None,
+                is_unfinished_draft: Some(false),
+                context_project_id: None,
+            },
+        )
+        .unwrap();
+
+    let conflict_err = handle_undo_refinement(&engine, art.id.clone(), outcome2.change_set_id)
+        .expect_err("Undo after newer saved edit must refuse conflict");
+    assert!(conflict_err.contains("document changed after this refinement"));
+    assert_eq!(engine.get_artifact(&art.id).unwrap().content_md, newer_body);
+}
+
+#[tokio::test]
+async fn test_desktop_undo_refinement_rejects_same_text_roundtrip_and_surfaces_mirror_warning() {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let refined_body =
+        "# Consensus Notes\n\nRefined findings with Byzantine fault tolerance metrics.";
+    let fixture = Fixture::start(FixtureResponse::ValidRefine {
+        content: refined_body.into(),
+        blocks: vec![],
+    })
+    .await;
+    let (_tmp, engine) = setup_test_engine(&fixture.base);
+
+    let original_body = "# Consensus Notes\n\nInitial Raft overview.";
+    let art = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Consensus Notes"),
+            original_body,
+            None,
+        )
+        .unwrap();
+
+    // 1. WB-R2 at desktop handler boundary: B -> C -> B round-trip must reject Undo
+    let roundtrip = handle_refine_artifact_outcome(
+        &engine,
+        art.id.clone(),
+        "Add BFT metrics".into(),
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    engine
+        .save_artifact(
+            &art.id,
+            sthira_core::SaveArtifactRequest {
+                content_md: "# Consensus Notes\n\nIntermediate C.",
+                title: Some("Consensus Notes"),
+                actor: sthira_core::Actor::User,
+                authorship: None,
+                is_unfinished_draft: Some(false),
+                context_project_id: None,
+            },
+        )
+        .unwrap();
+    engine
+        .save_artifact(
+            &art.id,
+            sthira_core::SaveArtifactRequest {
+                content_md: refined_body,
+                title: Some("Consensus Notes"),
+                actor: sthira_core::Actor::User,
+                authorship: None,
+                is_unfinished_draft: Some(false),
+                context_project_id: None,
+            },
+        )
+        .unwrap();
+    let roundtrip_err = handle_undo_refinement(&engine, art.id.clone(), roundtrip.change_set_id)
+        .expect_err("Same-text B->C->B round-trip must still reject Undo");
+    assert!(roundtrip_err.contains("document changed after this refinement"));
+
+    // 2. WB-R2 at desktop handler boundary: title-only save must reject Undo
+    let title_case =
+        handle_refine_artifact_outcome(&engine, art.id.clone(), "Refine again".into(), None, false)
+            .await
+            .unwrap();
+    engine
+        .save_artifact(
+            &art.id,
+            sthira_core::SaveArtifactRequest {
+                content_md: refined_body,
+                title: Some("Renamed Consensus Notes"),
+                actor: sthira_core::Actor::User,
+                authorship: None,
+                is_unfinished_draft: Some(false),
+                context_project_id: None,
+            },
+        )
+        .unwrap();
+    let title_err = handle_undo_refinement(&engine, art.id.clone(), title_case.change_set_id)
+        .expect_err("Title-only edit after refinement must reject Undo");
+    assert!(title_err.contains("document changed after this refinement"));
+
+    // 3. WB-R1 at desktop handler boundary: SQLite commit succeeds cleanly before 0444 mirror write failure;
+    //    SaveArtifactOutcome reports mirror_synced == false cleanly and repair does not repeat Undo.
+    let art2 = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Mirror Check"),
+            original_body,
+            None,
+        )
+        .unwrap();
+    let refine2 =
+        handle_refine_artifact_outcome(&engine, art2.id.clone(), "Add BFT".into(), None, false)
+            .await
+            .unwrap();
+    let mirror_path = engine
+        .vault_dir()
+        .join(engine.get_artifact(&art2.id).unwrap().file_path.unwrap());
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&mirror_path).unwrap().permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&mirror_path, perms).unwrap();
+    }
+
+    let undo_outcome =
+        handle_undo_refinement(&engine, art2.id.clone(), refine2.change_set_id.clone()).expect(
+            "Committed DB undo with mirror write failure should return Ok(SaveArtifactOutcome)",
+        );
+    assert!(!undo_outcome.mirror_synced);
+    assert!(undo_outcome.mirror_sync_error.is_some());
+    assert_eq!(undo_outcome.artifact.content_md, original_body);
+    assert_ne!(
+        undo_outcome.artifact.last_synced_hash.as_deref(),
+        Some(undo_outcome.artifact.content_hash.as_str())
+    );
+
+    // Repeating Undo must be rejected because DB ChangeSet already applied
+    let repeat_err = handle_undo_refinement(&engine, art2.id.clone(), refine2.change_set_id)
+        .expect_err("Repeated Undo after mirror warning must be rejected");
+    assert!(repeat_err.contains("already been undone"));
+
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&mirror_path).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&mirror_path, perms).unwrap();
+    }
+    let repaired = engine
+        .save_artifact(
+            &art2.id,
+            sthira_core::SaveArtifactRequest {
+                content_md: original_body,
+                title: Some("Mirror Check"),
+                actor: sthira_core::Actor::User,
+                authorship: None,
+                is_unfinished_draft: Some(false),
+                context_project_id: None,
+            },
+        )
+        .unwrap();
+    assert!(repaired.mirror_synced);
+    assert_eq!(
+        repaired.artifact.last_synced_hash.as_deref(),
+        Some(repaired.artifact.content_hash.as_str())
+    );
+    let repaired_disk = std::fs::read_to_string(&mirror_path).unwrap();
+    assert!(repaired_disk.ends_with(original_body));
 }

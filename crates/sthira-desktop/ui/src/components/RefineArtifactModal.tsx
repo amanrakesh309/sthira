@@ -1,9 +1,10 @@
 import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
 import { openWorkflowSettings } from '../api/workflowSettings';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, RefreshCw, Globe, Loader2, Sparkles } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { getProviderCatalog, refineArtifact, cancelRequest } from '../api/ipc';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import type { ProviderModelEntry, ProviderEntry } from '../types/sthira';
 
 export interface DocumentDraftSnapshot {
@@ -18,7 +19,12 @@ export interface RefineArtifactModalProps {
   artifactTitle: string;
   baseContent?: string;
   baseTitle?: string;
-  onRefined: (newContent: string, targetArtifactId?: string, baseSnapshot?: DocumentDraftSnapshot) => void;
+  onRefined: (
+    newContent: string,
+    targetArtifactId?: string,
+    baseSnapshot?: DocumentDraftSnapshot,
+    changeSetId?: string
+  ) => void;
   models?: ProviderModelEntry[];
 }
 
@@ -36,8 +42,10 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
   const explicitModel = useRef(false);
   const activeRequestIdRef = useRef<string | null>(null);
   const cancelInFlightRef = useRef<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const critiqueRef = useRef<HTMLTextAreaElement>(null);
 
-  const requestCancellation = async (reqId: string) => {
+  const requestCancellation = useCallback(async (reqId: string) => {
     if (cancelInFlightRef.current === reqId) return;
     cancelInFlightRef.current = reqId;
     try {
@@ -56,7 +64,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
         cancelInFlightRef.current = null;
       }
     }
-  };
+  }, []);
   const draftEnabled = !workflows.loading && !workflows.error && workflows.settings.draft.enabled;
   const [critique, setCritique] = useState('');
   const [webSearch, setWebSearch] = useState(false);
@@ -121,16 +129,23 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
     if (!explicitModel.current && !workflows.loading) setSelectedModelId(workflows.settings.draft.model_id || availableModels.find(model => model.is_default)?.id || null);
   }, [isOpen, availableModels, workflows.settings.draft.model_id, workflows.loading]);
 
-  if (!isOpen) return null;
-
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     const reqToCancel = activeRequestIdRef.current;
     if (reqToCancel) {
       void requestCancellation(reqToCancel);
     }
     setIsLoading(false);
     onClose();
-  };
+  }, [onClose, requestCancellation]);
+
+  useDialogFocus(isOpen, dialogRef, handleCancel, {
+    initialFocus: critiqueRef,
+    extraContainers: () => [
+      document.querySelector('[data-testid="model-selector-dropdown"]') as HTMLElement | null,
+    ],
+  });
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,7 +162,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
     setError(null);
 
     try {
-      const refinedText = await refineArtifact(
+      const outcome = await refineArtifact(
         targetArtifactId,
         critique.trim(),
         selectedModelId,
@@ -157,7 +172,9 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
       if (activeRequestIdRef.current !== requestId || targetArtifactId !== artifactId) return;
       activeRequestIdRef.current = null;
       setIsLoading(false);
-      onRefined(refinedText, targetArtifactId, baseSnapshot);
+      const refinedText = typeof outcome === 'string' ? outcome : outcome.content_md;
+      const changeSetId = typeof outcome === 'string' ? undefined : outcome.change_set_id;
+      onRefined(refinedText, targetArtifactId, baseSnapshot, changeSetId);
       setCritique('');
       onClose();
     } catch (err: any) {
@@ -178,23 +195,27 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      data-testid="refine-artifact-modal"
+      role="presentation"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) handleCancel(); }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150"
     >
       <div
-        className="w-full max-w-lg bg-[#FAF8F5] dark:bg-[#1C1E18] border border-[#E8E5DC] dark:border-[#2D3027] rounded-xl shadow-xl flex flex-col overflow-hidden"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="refine-modal-title"
+        data-testid="refine-artifact-modal"
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#FAF8F5] dark:bg-[#1C1E18] border border-[#E8E5DC] dark:border-[#2D3027] rounded-xl shadow-xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#E8E5DC] dark:border-[#2D3027] bg-[#F4F1EA] dark:bg-[#23261F]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#E8E5DC] dark:border-[#2D3027] bg-[#F4F1EA] dark:bg-[#23261F] rounded-t-xl">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 flex items-center justify-center">
               <RefreshCw className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-[#282C25] dark:text-[#EDEAE2]">
+              <h2 id="refine-modal-title" className="text-sm font-semibold text-[#282C25] dark:text-[#EDEAE2]">
                 Refine / Re-Research Note
               </h2>
               <p className="text-xs text-[#7D7A70] dark:text-[#9E9C93] truncate max-w-xs">
@@ -204,6 +225,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
           </div>
           <button
             type="button"
+            aria-label="Close refine modal"
             data-testid="btn-close-refine-modal"
             onClick={handleCancel}
             className="p-1 rounded-md text-[#7D7A70] dark:text-[#9E9C93] hover:text-[#282C25] dark:hover:text-[#EDEAE2] hover:bg-[#E8E5DC] dark:hover:bg-[#2D3027] transition-colors"
@@ -230,6 +252,7 @@ export const RefineArtifactModal: React.FC<RefineArtifactModalProps> = ({
               Critique & Angle Adjustments
             </label>
             <textarea
+              ref={critiqueRef}
               id="critique-prompt"
               data-testid="textarea-critique-prompt"
               rows={4}

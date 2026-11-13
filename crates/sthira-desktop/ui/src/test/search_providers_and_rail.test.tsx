@@ -125,5 +125,145 @@ describe('Phase 10: Search Providers UI Tests', () => {
       expect(screen.getByText(/Official Architectural Reference & Standard/i)).toBeInTheDocument();
     });
   });
+
+  it('renders truthful empty result notice when test search returns zero results', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'cmd_get_provider_catalog') return Promise.resolve([]);
+      if (cmd === 'cmd_get_search_providers') return Promise.resolve(sampleProviders);
+      if (cmd === 'cmd_test_search_provider') return Promise.resolve([]); // zero results
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ModelSettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onVaultMutated={vi.fn()}
+      />
+    );
+
+    const searchTabBtn = screen.getByRole('button', { name: /^Web Search$/i });
+    fireEvent.click(searchTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DuckDuckGo \(Headless HTML\)/i)).toBeInTheDocument();
+    });
+
+    const testBtns = screen.getAllByRole('button', { name: /Test Search/i });
+    fireEvent.click(testBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Test search returned 0 results from DuckDuckGo/i)).toBeInTheDocument();
+      expect(screen.getByText(/No results for this test query\. Try another query\./i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays structured error when test search fails with anti-bot challenge or rate limit', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'cmd_get_provider_catalog') return Promise.resolve([]);
+      if (cmd === 'cmd_get_search_providers') return Promise.resolve(sampleProviders);
+      if (cmd === 'cmd_test_search_provider') {
+        return Promise.reject("Anti-bot challenge detected on 'duckduckgo': verification required");
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ModelSettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onVaultMutated={vi.fn()}
+      />
+    );
+
+    const searchTabBtn = screen.getByRole('button', { name: /^Web Search$/i });
+    fireEvent.click(searchTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DuckDuckGo \(Headless HTML\)/i)).toBeInTheDocument();
+    });
+
+    const testBtns = screen.getAllByRole('button', { name: /Test Search/i });
+    fireEvent.click(testBtns[0]);
+
+    await waitFor(() => {
+      const errorElements = screen.getAllByText(
+        /Anti-bot challenge detected on 'duckduckgo': verification required/i
+      );
+      expect(errorElements.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('ignores stale test search completions when modal is closed before response returns', async () => {
+    let resolveSearch: (val: any) => void;
+    const pendingSearch = new Promise((resolve) => {
+      resolveSearch = resolve;
+    });
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'cmd_get_provider_catalog') return Promise.resolve([]);
+      if (cmd === 'cmd_get_search_providers') return Promise.resolve(sampleProviders);
+      if (cmd === 'cmd_test_search_provider') return pendingSearch;
+      return Promise.resolve(null);
+    });
+
+    const { rerender } = render(
+      <ModelSettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onVaultMutated={vi.fn()}
+      />
+    );
+
+    const searchTabBtn = screen.getByRole('button', { name: /^Web Search$/i });
+    fireEvent.click(searchTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DuckDuckGo \(Headless HTML\)/i)).toBeInTheDocument();
+    });
+
+    const testBtns = screen.getAllByRole('button', { name: /Test Search/i });
+    fireEvent.click(testBtns[0]);
+
+    // Close the modal while the test search is still pending
+    rerender(
+      <ModelSettingsModal
+        isOpen={false}
+        onClose={vi.fn()}
+        onVaultMutated={vi.fn()}
+      />
+    );
+
+    // Resolve the late response
+    resolveSearch!([
+      {
+        title: 'Late Completed Result',
+        url: 'https://example.com/late',
+        snippet: 'Late.',
+        score: 1.0,
+      },
+    ]);
+
+    // Give microtasks time to execute
+    await new Promise((r) => setTimeout(r, 50));
+
+    // When modal reopens, stale result must not be shown
+    rerender(
+      <ModelSettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onVaultMutated={vi.fn()}
+      />
+    );
+
+    const searchTabBtn2 = screen.getByRole('button', { name: /^Web Search$/i });
+    fireEvent.click(searchTabBtn2);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DuckDuckGo \(Headless HTML\)/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Late Completed Result/i)).not.toBeInTheDocument();
+  });
 });
 

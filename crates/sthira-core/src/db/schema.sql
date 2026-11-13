@@ -73,6 +73,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
 );
 
 CREATE TRIGGER IF NOT EXISTS artifacts_fts_insert AFTER INSERT ON artifacts
+WHEN NEW.deleted_at IS NULL
 BEGIN
     INSERT INTO artifacts_fts(artifact_id, title, content_md)
     VALUES (NEW.id, NEW.title, NEW.content_md);
@@ -82,7 +83,8 @@ CREATE TRIGGER IF NOT EXISTS artifacts_fts_update AFTER UPDATE ON artifacts
 BEGIN
     DELETE FROM artifacts_fts WHERE artifact_id = OLD.id;
     INSERT INTO artifacts_fts(artifact_id, title, content_md)
-    VALUES (NEW.id, NEW.title, NEW.content_md);
+    SELECT NEW.id, NEW.title, NEW.content_md
+    WHERE NEW.deleted_at IS NULL;
 END;
 
 CREATE TRIGGER IF NOT EXISTS artifacts_fts_delete AFTER DELETE ON artifacts

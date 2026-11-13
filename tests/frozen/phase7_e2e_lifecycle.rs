@@ -10,7 +10,12 @@ use sthira_core::{
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
 
-fn setup_test_engine() -> (Engine, Arc<FakeClock>, Arc<DeterministicFakeModel>, tempfile::TempDir) {
+fn setup_test_engine() -> (
+    Engine,
+    Arc<FakeClock>,
+    Arc<DeterministicFakeModel>,
+    tempfile::TempDir,
+) {
     let dir = tempdir().expect("Failed to create tempdir");
     let db_path = dir.path().join("sthira.db");
     let vault_dir = dir.path().join(".sthira_vault").join("artifacts");
@@ -213,8 +218,7 @@ async fn test_7_1_fourteen_day_end_to_end_lifecycle() {
         .expect("Day 3: extract decision note failed");
 
     // 3. Second note mid-sentence (is_unfinished_draft = 1)
-    let draft_content =
-        "Currently testing the harness with local test runner but the token budget";
+    let draft_content = "Currently testing the harness with local test runner but the token budget";
     let draft_note = engine
         .create_artifact(
             ArtifactType::Note,
@@ -453,9 +457,7 @@ async fn test_7_1_fourteen_day_end_to_end_lifecycle() {
     // 4. Verify that the saved AI answer from Day 4 was NEVER laundered into a user_recorded decision
     let reader = engine.db().reader().expect("reader failed");
     let ai_nodes: Vec<(String, String, String)> = reader
-        .prepare(
-            "SELECT id, origin, node_type FROM epistemic_nodes WHERE artifact_id = ?1;",
-        )
+        .prepare("SELECT id, origin, node_type FROM epistemic_nodes WHERE artifact_id = ?1;")
         .expect("prepare failed")
         .query_map(params![ai_note.id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -647,7 +649,9 @@ async fn test_7_2_metamorphic_cold_return_across_arbitrary_time_gaps() {
     for days in gaps_days {
         clock.advance(Duration::from_secs(days * 24 * 3600));
 
-        let hint = engine.get_resume_pane_hint(&proj.id).expect("get hint failed");
+        let hint = engine
+            .get_resume_pane_hint(&proj.id)
+            .expect("get hint failed");
         assert_eq!(
             hint,
             ResumePaneHint::Show {
@@ -657,7 +661,10 @@ async fn test_7_2_metamorphic_cold_return_across_arbitrary_time_gaps() {
             days
         );
 
-        let brief = engine.get_resume_brief(&proj.id, 1).await.expect("get brief failed");
+        let brief = engine
+            .get_resume_brief(&proj.id, 1)
+            .await
+            .expect("get brief failed");
         assert_no_guilt_language(&brief.purpose);
         for claim in &brief.recent_progress {
             assert_no_guilt_language(&claim.text);
@@ -706,5 +713,8 @@ async fn test_7_3_vault_reconcile_isolation_strictness() {
             |r| r.get(0),
         )
         .expect("count failed");
-    assert_eq!(count, 0, "No .sthira_meta files may ever enter artifacts table");
+    assert_eq!(
+        count, 0,
+        "No .sthira_meta files may ever enter artifacts table"
+    );
 }

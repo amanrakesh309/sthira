@@ -65,14 +65,18 @@
 .home-text-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; font-size: 13px; color: var(--sthira-primary); flex-shrink: 0; }
 .home-text-action:hover { text-decoration: underline; text-underline-offset: 4px; }
 .home-project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
-.home-project-card { min-width: 0; min-height: 144px; padding: 20px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-lg); background: var(--sthira-surface-raised); text-align: left; display: flex; flex-direction: column; gap: 12px; transition: border-color 150ms ease, background-color 150ms ease; }
+.home-project-card { min-width: 0; min-height: 144px; height: auto; padding: 20px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-lg); background: var(--sthira-surface-raised); text-align: left; display: flex; flex-direction: column; gap: 12px; transition: border-color 150ms ease, background-color 150ms ease; }
 .home-project-card:hover { border-color: var(--sthira-border-strong); background: var(--sthira-surface); }
-.home-project-heading { display: flex; align-items: center; gap: 12px; width: 100%; }
+.home-project-heading { display: flex; align-items: flex-start; gap: 12px; width: 100%; }
 .home-project-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; color: var(--sthira-accent); background: var(--sthira-surface-muted); border-radius: var(--sthira-radius-md); }
 .home-project-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.home-card-title { display: block; font-size: 15px; line-height: 1.4; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-card-meta { display: block; color: var(--sthira-text-muted); font-size: 13px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-project-arrow { flex-shrink: 0; color: var(--sthira-text-subtle); }
+.home-card-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 15px; line-height: 1.4; font-weight: 600; overflow: hidden; overflow-wrap: break-word; word-break: break-word; }
+.home-card-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; min-width: 0; width: 100%; color: var(--sthira-text-muted); font-size: 13px; line-height: 1.5; }
+.home-card-category { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%; }
+.home-card-meta-separator { flex-shrink: 0; opacity: .6; }
+.home-card-count { flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 500; }
+.home-resume-row .home-card-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-project-arrow { flex-shrink: 0; color: var(--sthira-text-subtle); margin-top: 2px; }
 .home-project-description { font-size: 13px; line-height: 1.55; color: var(--sthira-text-muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .home-resume-list { display: flex; flex-direction: column; gap: 4px; }
 .home-resume-row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 64px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); padding: 8px 20px; background: var(--sthira-surface-raised); text-align: left; transition: background-color 150ms ease, border-color 150ms ease; }
@@ -151,7 +155,7 @@
   .home-content { width: calc(100% - 48px); gap: 24px; }
   .home-toolbar { padding-inline: 24px; }
   .home-hero h1 { font-size: 40px; }
-  .home-project-grid { gap: 12px; }
+  .home-project-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .home-project-card { padding: 16px; }
   .home-project-heading { gap: 8px; }
   .home-project-arrow { display: none; }

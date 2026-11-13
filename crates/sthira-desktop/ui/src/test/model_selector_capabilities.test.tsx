@@ -305,3 +305,36 @@ it('passes the selected Home model through to Research and Plan', async () => {
   await user.type(screen.getByRole('textbox'),'Plan a garden'); await user.keyboard('{Enter}');
   expect(plan).toHaveBeenCalledWith('Plan a garden',null,null,'m-agentic');
 });
+
+it('ModelSelector portals its dropdown to document.body outside overflow-hidden ancestors and restores trigger focus on Escape (F-B5-008)', async () => {
+  const user = userEvent.setup();
+  const onSelect = vi.fn();
+
+  render(
+    <div data-testid="overflow-ancestor" style={{ overflow: 'hidden' }}>
+      <ModelSelector
+        models={MOCK_MODELS}
+        selectedModelId="m-agentic"
+        onSelectModel={onSelect}
+        dataTestId="clipped-model-selector"
+      />
+    </div>
+  );
+
+  const trigger = screen.getByTestId('clipped-model-selector');
+  const ancestor = screen.getByTestId('overflow-ancestor');
+  expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+  expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+  await user.click(trigger);
+
+  const dropdown = screen.getByTestId('model-selector-dropdown');
+  expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  expect(dropdown.parentElement).toBe(document.body);
+  expect(ancestor.contains(dropdown)).toBe(false);
+
+  // Pressing Escape closes the dropdown and returns focus to the trigger button
+  await user.keyboard('{Escape}');
+  expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+});

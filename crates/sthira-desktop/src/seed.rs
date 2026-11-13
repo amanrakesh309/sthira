@@ -1,7 +1,5 @@
 use std::sync::Arc;
-use sthira_core::{
-    ArtifactType, Authorship, CanvasItemKind, CoreError, Engine,
-};
+use sthira_core::{ArtifactType, Authorship, CanvasItemKind, CoreError, Engine};
 
 pub fn clean_duplicate_models_on_startup(engine: &Arc<Engine>) -> Result<usize, CoreError> {
     let writer = engine.db().writer();
@@ -13,7 +11,11 @@ pub fn seed_demo_workspace_if_empty(engine: &Arc<Engine>) -> Result<(), CoreErro
     let _ = clean_duplicate_models_on_startup(engine);
 
     let reader = engine.db().reader()?;
-    let project_count: i64 = reader.query_row("SELECT COUNT(*) FROM projects;", [], |r| r.get(0))?;
+    let project_count: i64 = reader.query_row(
+        "SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL;",
+        [],
+        |r| r.get(0),
+    )?;
     drop(reader);
 
     if project_count > 0 {
@@ -49,7 +51,10 @@ pub fn seed_demo_workspace_if_empty(engine: &Arc<Engine>) -> Result<(), CoreErro
             ArtifactType::Note,
             Authorship::User,
             Some(t),
-            &format!("# {}\n\nInitial findings and architecture considerations.\n", t),
+            &format!(
+                "# {}\n\nInitial findings and architecture considerations.\n",
+                t
+            ),
             None,
         )?;
         engine.attach_artifact(&p1.id, &a.id, "user_explicit", None)?;
@@ -69,7 +74,10 @@ pub fn seed_demo_workspace_if_empty(engine: &Arc<Engine>) -> Result<(), CoreErro
             ArtifactType::Note,
             Authorship::User,
             Some(&t),
-            &format!("# {}\n\nWebhook architecture and delivery guarantees component.\n", t),
+            &format!(
+                "# {}\n\nWebhook architecture and delivery guarantees component.\n",
+                t
+            ),
             None,
         )?;
         engine.attach_artifact(&p2.id, &a.id, "user_explicit", None)?;

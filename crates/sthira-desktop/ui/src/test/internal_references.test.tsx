@@ -20,8 +20,10 @@ describe('Saved internal references',()=>{
  });
  it('supports ordinary Markdown links, raw URI references and keyboard activation',()=>{
   const p=props(`[Named source](${uri})\n\n\`${uri}\`\n\nsthira://project/plan`);render(<DocumentEditor {...p}/>);
-  fireEvent.click(screen.getByRole('link',{name:'Named source'}));expect(p.onOpenEntity).toHaveBeenCalledWith({kind:'artifact',id});
-  const codeLink=screen.getByRole('link',{name:'Open saved page'});fireEvent.keyDown(codeLink,{key:'Enter'});expect(p.onOpenEntity).toHaveBeenCalledTimes(2);
+  const named=screen.getByRole('link',{name:'Named source'});expect(named).toHaveAttribute('tabindex','0');
+  fireEvent.keyDown(named,{key:' '});expect(p.onOpenEntity).toHaveBeenCalledWith({kind:'artifact',id});
+  fireEvent.click(named);expect(p.onOpenEntity).toHaveBeenCalledTimes(2);
+  const codeLink=screen.getByRole('link',{name:'Open saved page'});expect(codeLink).toHaveAttribute('tabindex','0');fireEvent.keyDown(codeLink,{key:'Enter'});expect(p.onOpenEntity).toHaveBeenCalledTimes(3);
   fireEvent.click(screen.getByRole('link',{name:'Open saved project'}));expect(p.onOpenEntity).toHaveBeenLastCalledWith({kind:'project',id:'plan'});
  });
  it('leaves fenced code, ordinary inline code and invalid reference examples intact',()=>{

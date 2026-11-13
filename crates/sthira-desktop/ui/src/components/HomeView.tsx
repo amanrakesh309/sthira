@@ -119,8 +119,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </section>
 
         {loadStatus === 'error' && (
-          <div className="home-load-notice" role="alert">
-            <span>Couldn’t load your workspace. Your saved work is still in the vault.</span>
+          <div className="home-load-notice">
+            <p role="alert">Couldn’t load your workspace. Your saved work is still in the vault.</p>
             <Button type="button" onClick={onRefresh}>Try again</Button>
           </div>
         )}
@@ -142,7 +142,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <span className="home-project-icon"><Folder size={23} strokeWidth={1.5} /></span>
                     <span className="home-project-label">
                       <span className="home-card-title" title={project.name}>{project.name}</span>
-                      <span className="home-card-meta">{project.category || 'Project'} · {project.item_count} {project.item_count === 1 ? 'item' : 'items'}</span>
+                      <span className="home-card-meta">
+                        <span className="home-card-category" title={project.category || 'Project'}>{project.category || 'Project'}</span>
+                        <span className="home-card-meta-separator" aria-hidden="true">·</span>
+                        <span className="home-card-count" data-testid="project-item-count">{project.item_count} {project.item_count === 1 ? 'item' : 'items'}</span>
+                      </span>
                     </span>
                     <ArrowUpRight className="home-project-arrow" size={16} aria-hidden="true" />
                   </span>

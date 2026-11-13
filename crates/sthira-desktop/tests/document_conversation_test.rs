@@ -292,7 +292,7 @@ fn early_v14_without_model_columns_opens_empty_chat_and_preserves_history() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        18
+        19
     );
     drop(engine);
     let engine = Engine::open(&db, &vault, clock, model).unwrap();

@@ -33,7 +33,8 @@ impl Engine {
         explicit_mode: Option<OperationalMode>,
         selected_model_id: Option<&str>,
     ) -> Result<RouteOutcome, CoreError> {
-        self.route_input_steered_with_template(raw, explicit_mode, selected_model_id, None).await
+        self.route_input_steered_with_template(raw, explicit_mode, selected_model_id, None)
+            .await
     }
 
     pub async fn route_input_steered_with_template(
@@ -54,7 +55,7 @@ impl Engine {
 
             let mut active_projs = Vec::new();
             if let Ok(mut stmt) = ro_conn.prepare(
-                "SELECT id, name FROM projects WHERE status = 'active' ORDER BY created_at DESC LIMIT 5;",
+                "SELECT id, name FROM projects WHERE status = 'active' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 5;",
             ) {
                 if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
                     for r in rows.filter_map(|r| r.ok()) {
@@ -192,7 +193,7 @@ impl Engine {
                 "SELECT p.id, p.name, pp.purpose
                  FROM projects p
                  LEFT JOIN project_purposes pp ON p.id = pp.project_id AND pp.superseded_at IS NULL
-                 WHERE p.status = 'active';",
+                 WHERE p.status = 'active' AND p.deleted_at IS NULL;",
             )
             .ok()?;
 
@@ -235,7 +236,9 @@ impl Engine {
 
         let mode_desc = match mode {
             OperationalMode::Plan => "strategic planning, milestone roadmaps, and domain execution",
-            OperationalMode::Research => "systematic research, comparative investigation, and evaluation",
+            OperationalMode::Research => {
+                "systematic research, comparative investigation, and evaluation"
+            }
             _ => "structured analysis and execution",
         };
 
@@ -246,9 +249,15 @@ impl Engine {
         };
 
         let template_skeleton = if let Some(tid) = template_id {
-            self.get_synthesis_template(tid).ok().flatten().map(|t| t.template_skeleton_md)
+            self.get_synthesis_template(tid)
+                .ok()
+                .flatten()
+                .map(|t| t.template_skeleton_md)
         } else {
-            self.get_default_synthesis_template(target_mode_str).ok().flatten().map(|t| t.template_skeleton_md)
+            self.get_default_synthesis_template(target_mode_str)
+                .ok()
+                .flatten()
+                .map(|t| t.template_skeleton_md)
         };
 
         let template_instruction = match template_skeleton.as_deref() {
@@ -278,7 +287,6 @@ impl Engine {
             Ok(json_str) => serde_json::from_str(&json_str).ok(),
             Err(_) => None,
         };
-
 
         let breakdown = if let Some(mut b) = llm_res {
             b.page_title = crate::engines::research_engine::clean_smart_title(&b.page_title);
@@ -318,7 +326,8 @@ impl Engine {
                         "Which failure modes require deterministic rollback?".to_string(),
                     ],
                     _ => vec![
-                        "What is the empirical throughput delta between local and remote?".to_string(),
+                        "What is the empirical throughput delta between local and remote?"
+                            .to_string(),
                         "How do memory constraints affect long context retrieval?".to_string(),
                     ],
                 };
@@ -374,7 +383,15 @@ impl Engine {
             };
 
             LlmPlanBreakdown {
-                summary: format!("{}: {}", if mode == OperationalMode::Plan { "Plan" } else { "Research" }, clean_topic),
+                summary: format!(
+                    "{}: {}",
+                    if mode == OperationalMode::Plan {
+                        "Plan"
+                    } else {
+                        "Research"
+                    },
+                    clean_topic
+                ),
                 phases: vec![p1, p2, p3],
                 open_questions: vec![q1, q2],
                 project_name: clean_topic.clone(),

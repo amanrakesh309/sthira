@@ -6,7 +6,7 @@ use sthira_core::{
         build_continuity_boundary, execute_topic_run_with_provider, list_due_topics,
     },
     models::scheduled_topics::{is_topic_due, ScheduledTopic, TopicCadence, TopicType},
-    search::{ScrapedWebDocument, SearchProvider, SearchResultItem},
+    search::{ScrapedWebDocument, SearchError, SearchProvider, SearchResultItem},
     ArtifactType, Authorship, Clock, Engine,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
@@ -46,13 +46,18 @@ impl FakeSearchProvider {
 
 #[async_trait]
 impl SearchProvider for FakeSearchProvider {
-    async fn search(&self, query: &str, _limit: usize) -> Result<Vec<SearchResultItem>, String> {
+    async fn search(
+        &self,
+        query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SearchResultItem>, SearchError> {
         self.calls.lock().unwrap().push(query.to_string());
         Ok(vec![
             SearchResultItem {
                 title: "NVMe Streaming Architecture Deep Dive".to_string(),
                 url: NVME_URL.to_string(),
-                snippet: "PCIe Gen5 NVMe streaming sustains twelve gigabytes per second.".to_string(),
+                snippet: "PCIe Gen5 NVMe streaming sustains twelve gigabytes per second."
+                    .to_string(),
                 score: 1.0,
             },
             SearchResultItem {
@@ -91,15 +96,27 @@ fn seed_scrape_cache(engine: &Engine) {
 struct SchedulerResearchModel;
 #[async_trait]
 impl sthira_core::ModelProvider for SchedulerResearchModel {
-    fn id(&self)->&str { "test-scheduler-research" }
-    fn locality(&self)->sthira_core::Locality { sthira_core::Locality::Local }
-    async fn generate_json(&self,schema:&serde_json::Value,_system:&str,_user:&str)->Result<String,sthira_core::CoreError> {
+    fn id(&self) -> &str {
+        "test-scheduler-research"
+    }
+    fn locality(&self) -> sthira_core::Locality {
+        sthira_core::Locality::Local
+    }
+    async fn generate_json(
+        &self,
+        schema: &serde_json::Value,
+        _system: &str,
+        _user: &str,
+    ) -> Result<String, sthira_core::CoreError> {
         if schema.to_string().contains("contradictions_and_evolution") {
             Ok(serde_json::json!({"synthesis":"Scheduler fixture synthesis from supplied sources.","contradictions_and_evolution":[],"open_questions":[]}).to_string())
-        } else { Ok("{}".into()) }
+        } else {
+            Ok("{}".into())
+        }
     }
-    async fn embed(&self,texts:&[String])->Result<Vec<Vec<f32>>,sthira_core::CoreError> {
-        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("test-embedding"),texts).await
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, sthira_core::CoreError> {
+        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("test-embedding"), texts)
+            .await
     }
 }
 
@@ -194,9 +211,30 @@ fn at_time(base_ms: i64, day_offset: i64, minutes: i64) -> i64 {
 async fn test_create_list_and_filter_topics_by_type() {
     let (_tmp, engine, _clock) = setup();
 
-    make_topic(&engine, "t-research", "SSD Streaming & NVMe", TopicType::Research, TopicCadence::Daily, None);
-    make_topic(&engine, "t-plan", "Architecture Review", TopicType::Plan, TopicCadence::Weekly, None);
-    make_topic(&engine, "t-manual", "Ad-hoc Probe", TopicType::Research, TopicCadence::Manual, None);
+    make_topic(
+        &engine,
+        "t-research",
+        "SSD Streaming & NVMe",
+        TopicType::Research,
+        TopicCadence::Daily,
+        None,
+    );
+    make_topic(
+        &engine,
+        "t-plan",
+        "Architecture Review",
+        TopicType::Plan,
+        TopicCadence::Weekly,
+        None,
+    );
+    make_topic(
+        &engine,
+        "t-manual",
+        "Ad-hoc Probe",
+        TopicType::Research,
+        TopicCadence::Manual,
+        None,
+    );
 
     let reader = engine.db().reader().unwrap();
 
@@ -218,7 +256,10 @@ async fn test_create_list_and_filter_topics_by_type() {
     // Round-trip a single topic.
     let fetched = repo::get_topic(&reader, "t-research").unwrap().unwrap();
     assert_eq!(fetched.title, "SSD Streaming & NVMe");
-    assert_eq!(fetched.prompt_query, "Track developments in SSD Streaming & NVMe");
+    assert_eq!(
+        fetched.prompt_query,
+        "Track developments in SSD Streaming & NVMe"
+    );
     assert!(fetched.last_run_at.is_none());
     drop(reader);
 
@@ -226,7 +267,12 @@ async fn test_create_list_and_filter_topics_by_type() {
     let writer = engine.db().writer();
     repo::update_topic_status(&writer, "t-manual", false).unwrap();
     let reader = engine.db().reader().unwrap();
-    assert!(!repo::get_topic(&reader, "t-manual").unwrap().unwrap().is_active);
+    assert!(
+        !repo::get_topic(&reader, "t-manual")
+            .unwrap()
+            .unwrap()
+            .is_active
+    );
     drop(reader);
 
     repo::delete_topic(&writer, "t-manual").unwrap();
@@ -246,7 +292,10 @@ async fn test_cadence_evaluation_flags_topics_older_than_24_hours() {
     let now = clock.now_ms();
 
     // Pure window logic.
-    assert!(is_topic_due(TopicCadence::Daily, None, now), "never-run daily topic is due");
+    assert!(
+        is_topic_due(TopicCadence::Daily, None, now),
+        "never-run daily topic is due"
+    );
     assert!(
         !is_topic_due(TopicCadence::Daily, Some(now - 23 * HOUR_MS), now),
         "daily topic run 23h ago is not due"
@@ -269,10 +318,38 @@ async fn test_cadence_evaluation_flags_topics_older_than_24_hours() {
     );
 
     // Scheduler-level enumeration.
-    make_topic(&engine, "due-old", "Stale Daily", TopicType::Research, TopicCadence::Daily, None);
-    make_topic(&engine, "due-fresh", "Fresh Daily", TopicType::Research, TopicCadence::Daily, None);
-    make_topic(&engine, "due-weekly", "Fresh Weekly", TopicType::Research, TopicCadence::Weekly, None);
-    make_topic(&engine, "due-manual", "Manual Only", TopicType::Research, TopicCadence::Manual, None);
+    make_topic(
+        &engine,
+        "due-old",
+        "Stale Daily",
+        TopicType::Research,
+        TopicCadence::Daily,
+        None,
+    );
+    make_topic(
+        &engine,
+        "due-fresh",
+        "Fresh Daily",
+        TopicType::Research,
+        TopicCadence::Daily,
+        None,
+    );
+    make_topic(
+        &engine,
+        "due-weekly",
+        "Fresh Weekly",
+        TopicType::Research,
+        TopicCadence::Weekly,
+        None,
+    );
+    make_topic(
+        &engine,
+        "due-manual",
+        "Manual Only",
+        TopicType::Research,
+        TopicCadence::Manual,
+        None,
+    );
 
     {
         let writer = engine.db().writer();
@@ -284,9 +361,18 @@ async fn test_cadence_evaluation_flags_topics_older_than_24_hours() {
     let due = list_due_topics(&engine, now).unwrap();
     let ids: Vec<&str> = due.iter().map(|t| t.id.as_str()).collect();
     assert!(ids.contains(&"due-old"), "25h-old daily topic must be due");
-    assert!(!ids.contains(&"due-fresh"), "2h-old daily topic must not be due");
-    assert!(!ids.contains(&"due-weekly"), "2d-old weekly topic must not be due");
-    assert!(!ids.contains(&"due-manual"), "manual topic must never be scheduled");
+    assert!(
+        !ids.contains(&"due-fresh"),
+        "2h-old daily topic must not be due"
+    );
+    assert!(
+        !ids.contains(&"due-weekly"),
+        "2d-old weekly topic must not be due"
+    );
+    assert!(
+        !ids.contains(&"due-manual"),
+        "manual topic must never be scheduled"
+    );
 
     // Pausing removes a topic from the due set entirely.
     {
@@ -296,7 +382,6 @@ async fn test_cadence_evaluation_flags_topics_older_than_24_hours() {
     let due_after_pause = list_due_topics(&engine, now).unwrap();
     assert!(due_after_pause.is_empty());
 }
-
 
 // ---------------------------------------------------------------------------
 // 3. Research execution: citations, External authorship, project association
@@ -330,7 +415,10 @@ async fn test_execute_research_topic_produces_grounded_digest_with_citations() {
 
     // Digest title carries the ISO date stamp.
     let title = artifact.title.clone().unwrap();
-    assert!(title.starts_with("Digest: SSD Streaming & NVMe — "), "got {title}");
+    assert!(
+        title.starts_with("Digest: SSD Streaming & NVMe — "),
+        "got {title}"
+    );
     assert_eq!(
         title.rsplit('—').next().unwrap().trim().len(),
         10,
@@ -341,13 +429,26 @@ async fn test_execute_research_topic_produces_grounded_digest_with_citations() {
     assert_eq!(artifact.authorship, Authorship::External);
 
     // Grounded evidence + numbered citations rendered into the note.
-    assert!(artifact.content_md.contains("Grounded Web Evidence & Verified Findings"));
-    assert!(artifact.content_md.contains("## Sources"), "numbered source index must be present");
-    assert!(artifact.content_md.contains("[Source 1]"), "findings must carry [Source N] markers");
-    assert!(artifact.content_md.contains("favicon"), "citations must carry a favicon");
+    assert!(artifact
+        .content_md
+        .contains("Grounded Web Evidence & Verified Findings"));
+    assert!(
+        artifact.content_md.contains("## Sources"),
+        "numbered source index must be present"
+    );
+    assert!(
+        artifact.content_md.contains("[Source 1]"),
+        "findings must carry [Source N] markers"
+    );
+    assert!(
+        artifact.content_md.contains("favicon"),
+        "citations must carry a favicon"
+    );
     // Temporal grounding contract.
     assert!(
-        artifact.content_md.contains("## Contradictions & Evolution"),
+        artifact
+            .content_md
+            .contains("## Contradictions & Evolution"),
         "temporal grounding block must be present"
     );
     assert!(artifact.content_md.contains("## Synthesis"));
@@ -386,7 +487,6 @@ async fn test_execute_research_topic_produces_grounded_digest_with_citations() {
         assert!(topic.last_run_at.is_some(), "last_run_at must be stamped");
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // 4. Anti-duplication boundary carries prior digests into the next run
@@ -427,7 +527,9 @@ async fn test_second_run_applies_continuity_boundary() {
 
     let second_artifact = engine.get_artifact(&second).unwrap();
     assert!(second_artifact.content_md.contains("Previously Covered"));
-    assert!(second_artifact.content_md.contains("Anti-duplication boundary applied"));
+    assert!(second_artifact
+        .content_md
+        .contains("Anti-duplication boundary applied"));
 
     // The inquiry handed to the search planner carries the exclusion instruction.
     let queries = provider.queries();
@@ -483,7 +585,9 @@ async fn test_execute_plan_topic_produces_plan_review() {
 
     // The review always reports progress, blockers and a next phase.
     assert!(artifact.content_md.contains("## Progress Assessment"));
-    assert!(artifact.content_md.contains("## Blockers & Unresolved Dependencies"));
+    assert!(artifact
+        .content_md
+        .contains("## Blockers & Unresolved Dependencies"));
     assert!(artifact.content_md.contains("## Next Phase"));
     assert!(artifact.content_md.contains("Retrieval Systems"));
 
@@ -529,7 +633,6 @@ async fn test_execute_unknown_topic_errors() {
     assert!(err.is_err());
     assert!(err.unwrap_err().contains("not found"));
 }
-
 
 // ---------------------------------------------------------------------------
 // 7. Phase 18.1: wall-clock scheduling ("run every day at 06:00")
@@ -615,7 +718,6 @@ async fn test_daily_wall_clock_scheduling_fires_at_configured_time() {
     );
 }
 
-
 #[tokio::test]
 async fn test_weekly_wall_clock_scheduling_anchors_on_weekday() {
     let (_tmp, engine, _clock) = setup();
@@ -700,7 +802,10 @@ async fn test_hhmm_parsing_and_formatting_roundtrip() {
     assert_eq!(sthira_core::format_hhmm(1439), "23:59");
 
     for m in [0_i64, 1, 59, 60, 725, 1439] {
-        assert_eq!(sthira_core::parse_hhmm(&sthira_core::format_hhmm(m)), Some(m));
+        assert_eq!(
+            sthira_core::parse_hhmm(&sthira_core::format_hhmm(m)),
+            Some(m)
+        );
     }
 }
 
@@ -720,8 +825,15 @@ async fn test_manual_and_paused_topics_ignore_wall_clock_time() {
         Some(6 * 60),
         None,
     );
-    assert!(!manual.is_due(base), "manual topics never fire autonomously");
-    assert_eq!(manual.next_run_at(base), None, "manual topics have no next run");
+    assert!(
+        !manual.is_due(base),
+        "manual topics never fire autonomously"
+    );
+    assert_eq!(
+        manual.next_run_at(base),
+        None,
+        "manual topics have no next run"
+    );
 
     // Even with a time set, the scheduler must not pick it up.
     let due = list_due_topics(&engine, base).unwrap();
@@ -784,6 +896,9 @@ async fn test_wall_clock_topic_runs_end_to_end_and_stamps_last_run() {
     // After running, the topic is no longer due at the same instant.
     let due_after = list_due_topics(&engine, base).unwrap();
     assert!(due_after.iter().all(|t| t.id != "t-sched-run"));
-    assert!(!engine.get_artifact(&artifact_id).unwrap().content_md.is_empty());
+    assert!(!engine
+        .get_artifact(&artifact_id)
+        .unwrap()
+        .content_md
+        .is_empty());
 }
-

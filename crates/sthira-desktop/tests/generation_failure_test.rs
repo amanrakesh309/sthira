@@ -77,7 +77,15 @@ async fn research_uses_selected_provider_and_preserves_draft_on_model_failure() 
                 None,
             )
             .unwrap();
-    sthira_desktop::workflow_settings::save_workflow_setting(&engine, "research", sthira_desktop::workflow_settings::WorkflowSetting { enabled: true, ..Default::default() }).unwrap();
+        sthira_desktop::workflow_settings::save_workflow_setting(
+            &engine,
+            "research",
+            sthira_desktop::workflow_settings::WorkflowSetting {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let result = handle_run_research_into_page(
             &engine,
             artifact.id.clone(),

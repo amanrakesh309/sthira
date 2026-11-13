@@ -101,11 +101,36 @@ pub fn render_file_with_frontmatter(artifact: &Artifact) -> String {
     )
 }
 
+/// Writes an artifact's `.md` mirror directly to `vault_dir/file_path`.
+/// Uses `fs::write` rather than temp-file rename so read-only (`0444`) mirrors
+/// and directory-collision paths surface honest filesystem errors.
+pub fn write_artifact_mirror(vault_dir: &Path, artifact: &Artifact) -> Result<(), CoreError> {
+    let Some(rel_path) = artifact.file_path.as_deref() else {
+        return Ok(());
+    };
+    let full_path = vault_dir.join(rel_path);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let rendered = render_file_with_frontmatter(artifact);
+    fs::write(&full_path, rendered)?;
+    Ok(())
+}
+
 pub fn reconcile_vault(
     db: &Db,
     vault_dir: &Path,
     now_ms: i64,
-    log_event: impl Fn(&rusqlite::Connection, &str, Option<&str>, Actor, EventType, Materiality, serde_json::Value, i64) -> Result<(), CoreError>,
+    log_event: impl Fn(
+        &rusqlite::Connection,
+        &str,
+        Option<&str>,
+        Actor,
+        EventType,
+        Materiality,
+        serde_json::Value,
+        i64,
+    ) -> Result<(), CoreError>,
 ) -> Result<ReconcileResult, CoreError> {
     if !vault_dir.exists() {
         fs::create_dir_all(vault_dir)?;
@@ -131,9 +156,7 @@ pub fn reconcile_vault(
         let path = entry.path();
 
         // Rule (f): Strictly ignore .sthira_meta directory
-        let has_sthira_meta = path
-            .components()
-            .any(|c| c.as_os_str() == ".sthira_meta");
+        let has_sthira_meta = path.components().any(|c| c.as_os_str() == ".sthira_meta");
         if has_sthira_meta {
             continue;
         }
@@ -205,6 +228,10 @@ pub fn reconcile_vault(
                 .ok();
 
             if let Some(mut artifact) = db_art {
+                if artifact.deleted_at.is_some() {
+                    continue;
+                }
+
                 // Rule (d): Check for file rename with preserved ID
                 if artifact.file_path.as_deref() != Some(&rel_path) {
                     writer.execute(
@@ -259,8 +286,12 @@ pub fn reconcile_vault(
                         )?;
 
                         result.files_imported += 1;
-                        result.events.push(CoreEvent::ExternalEditDetected { id: artifact.id.clone() });
-                        result.events.push(CoreEvent::ArtifactChanged { id: artifact.id });
+                        result.events.push(CoreEvent::ExternalEditDetected {
+                            id: artifact.id.clone(),
+                        });
+                        result
+                            .events
+                            .push(CoreEvent::ArtifactChanged { id: artifact.id });
                     } else if db_changed && !disk_changed {
                         // DB edit: export to disk
                         let rendered = render_file_with_frontmatter(&artifact);
@@ -274,7 +305,9 @@ pub fn reconcile_vault(
                         // Concurrent conflict! Keep disk edit in conflict copy, write DB version to main file
                         let conflict_filename = format!(
                             "{}.conflict-{}.md",
-                            path.file_stem().and_then(|s| s.to_str()).unwrap_or("conflict"),
+                            path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("conflict"),
                             now_ms
                         );
                         let conflict_path = path.with_file_name(conflict_filename);
@@ -349,7 +382,9 @@ pub fn reconcile_vault(
                 )?;
 
                 result.files_imported += 1;
-                result.events.push(CoreEvent::ArtifactChanged { id: art_id.clone() });
+                result
+                    .events
+                    .push(CoreEvent::ArtifactChanged { id: art_id.clone() });
             }
         } else {
             // No ID in frontmatter: generate ID and write it back
@@ -433,7 +468,9 @@ pub fn reconcile_vault(
             )?;
 
             result.files_imported += 1;
-            result.events.push(CoreEvent::ArtifactChanged { id: new_id });
+            result
+                .events
+                .push(CoreEvent::ArtifactChanged { id: new_id });
         }
     }
 

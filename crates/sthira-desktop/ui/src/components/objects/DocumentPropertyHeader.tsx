@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Check, Layers } from 'lucide-react';
 import { PropertyFieldRenderer } from './PropertyFieldRenderer';
 import { saveObjectInstance } from '../../api/ipc';
@@ -27,6 +27,19 @@ export const DocumentPropertyHeader: React.FC<DocumentPropertyHeaderProps> = ({
   const [properties, setProperties] = useState<Record<string, any>>(instance.properties || {});
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const mountedRef = useRef(true);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (savedTimerRef.current) {
+        clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setProperties(instance.properties || {});
@@ -49,12 +62,17 @@ export const DocumentPropertyHeader: React.FC<DocumentPropertyHeaderProps> = ({
       try {
         setSaveState('saving');
         await saveObjectInstance(updated);
+        if (!mountedRef.current) return;
         setSaveState('saved');
         window.dispatchEvent(new CustomEvent('sthira:refresh_objects'));
-        setTimeout(() => setSaveState((prev) => (prev === 'saved' ? 'idle' : prev)), 1500);
+        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = setTimeout(() => {
+          savedTimerRef.current = null;
+          if (mountedRef.current) setSaveState((prev) => (prev === 'saved' ? 'idle' : prev));
+        }, 1500);
       } catch (err) {
         console.error('Failed to save object instance property', err);
-        setSaveState('error');
+        if (mountedRef.current) setSaveState('error');
       }
     },
     [artifactId, instance, objectType.id, onInstanceUpdated],
