@@ -611,7 +611,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   return (
     <div
       data-testid="explore-plan-view"
-      className="flex-1 min-h-screen bg-[var(--sthira-canvas)] text-[var(--sthira-text)] flex flex-col transition-colors overflow-y-auto"
+      className="earth-workspace flex-1 min-h-screen bg-[var(--sthira-canvas)] text-[var(--sthira-text)] flex flex-col transition-colors overflow-y-auto"
     >
       <div className="max-w-6xl w-full mx-auto px-6 py-8 flex flex-col space-y-6">
         {/* Header & Breadcrumbs */}

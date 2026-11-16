@@ -1,7 +1,7 @@
 /* The connection rail shares the workspace's tactile paper and sage palette. */
 .focus-workspace[data-connections-open="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr) 320px; }
 .focus-workspace[data-connections-open="true"][data-connection-preview="true"] .focus-workspace-body { grid-template-columns: minmax(0, 1fr) minmax(360px, 46%); }
-.connections-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--sthira-canvas); color: var(--sthira-text); border-left: 1px solid var(--sthira-border); font-family: var(--sthira-font-ui); font-size: 13px; }
+.connections-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--sthira-rail); color: var(--sthira-text); border-left: 1px solid var(--sthira-border); font-family: var(--sthira-font-ui); font-size: 13px; }
 .connections-panel button { transition: background-color .15s, border-color .15s; }
 .connections-panel button:disabled { opacity: .55; cursor: default; }
 .connections-panel :is(button, input):focus-visible, .connection-inline-link:focus-visible { outline: 2px solid var(--sthira-focus); outline-offset: 2px; }

@@ -1,0 +1,109 @@
+/* Faint geological detail belongs to the workspace surround. Opaque document,
+   table and form surfaces protect the reading/editing plane above it. */
+.sthira-home,
+.sthira-all-files,
+.project-overview-scroll,
+.settings-content-col,
+.focus-document-scroll,
+.earth-workspace {
+  position: relative;
+  isolation: isolate;
+}
+
+.sthira-home::before,
+.sthira-all-files::before,
+.project-overview-scroll::before,
+.settings-content-col::before,
+.focus-document-scroll::before,
+.earth-workspace::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 100% 100%, var(--sthira-earth-clay), transparent 58%),
+    radial-gradient(ellipse at 0 85%, var(--sthira-earth-sage), transparent 62%);
+  opacity: var(--sthira-earth-wash-opacity);
+}
+
+.sthira-home::after,
+.sthira-all-files::after,
+.project-overview-scroll::after,
+.settings-content-col::after,
+.focus-document-scroll::after,
+.focus-editor-contours,
+.earth-workspace::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  right: 0;
+  bottom: 0;
+  width: min(52%, 640px);
+  height: 480px;
+  background: var(--sthira-earth-line);
+  mask: url('../assets/terrain-contours.svg') right bottom / contain no-repeat;
+  opacity: var(--sthira-earth-line-opacity);
+}
+
+/* Mirror the existing right-hand texture behind the document's opaque sheet.
+   Both sides share the same asset, geometry and theme strength; the sheet
+   naturally conceals the texture wherever there is no spare editor margin. */
+.focus-editor-contours {
+  right: auto;
+  left: 0;
+  transform: scaleX(-1);
+}
+
+/* Balance Home's mountain header with a quiet lower-left terrain edge. */
+.sthira-home::after {
+  right: auto;
+  left: 0;
+  width: min(44%, 520px);
+  transform: scaleX(-1);
+}
+
+/* Keep scrolling flex children and modal layouts at their existing sizes. */
+.settings-content-col::before,
+.settings-content-col::after,
+.earth-workspace::before,
+.earth-workspace::after { flex: none; }
+
+/* Empty directory cards have their own opaque reading plane and edge detail. */
+.directory-empty,
+.project-empty { position: relative; isolation: isolate; overflow: hidden; }
+.directory-empty::after,
+.project-empty::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  right: 0;
+  bottom: 0;
+  width: min(32%, 280px);
+  height: 200px;
+  background: var(--sthira-earth-line);
+  mask: url('../assets/terrain-contours.svg') right bottom / contain no-repeat;
+  opacity: var(--sthira-earth-line-opacity);
+}
+
+@media (max-width: 1000px) {
+  .sthira-home::after, .sthira-all-files::after,
+  .project-overview-scroll::after, .settings-content-col::after,
+  .focus-document-scroll::after, .focus-editor-contours, .earth-workspace::after {
+    height: 300px;
+    width: min(40%, 360px);
+  }
+  .directory-empty::after, .project-empty::after { display: none; }
+}
+@media (forced-colors: active) {
+  .sthira-home::before, .sthira-home::after,
+  .sthira-all-files::before, .sthira-all-files::after,
+  .project-overview-scroll::before, .project-overview-scroll::after,
+  .settings-content-col::before, .settings-content-col::after,
+  .focus-document-scroll::before, .focus-document-scroll::after,
+  .focus-editor-contours,
+  .earth-workspace::before, .earth-workspace::after,
+  .directory-empty::after, .project-empty::after { display: none; }
+}

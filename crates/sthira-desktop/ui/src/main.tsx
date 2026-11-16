@@ -12,6 +12,8 @@ import './styles/project-overview.css';
 import './styles/object-workspace.css';
 import './styles/graph-view.css';
 import './styles/settings-modal.css';
+import './styles/ambient-surfaces.css';
+import './styles/earth-surfaces.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

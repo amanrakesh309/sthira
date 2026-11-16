@@ -939,14 +939,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     >
       {/* 1. Generous Editorial Header */}
       <header className="graph-header">
-        {/* Mountain watercolor silhouette background */}
-        <div className="graph-header-art" aria-hidden="true">
-          <svg viewBox="0 0 640 100" fill="none" preserveAspectRatio="none" className="w-full h-full opacity-35 dark:opacity-15">
-            <path d="M0 100 Q120 62 240 76 T480 50 T640 65 L640 100 Z" fill="#9FB096" />
-            <path d="M140 100 Q260 38 380 54 T640 28 L640 100 Z" fill="#667A58" />
-            <path d="M260 100 Q400 16 520 28 T640 10 L640 100 Z" fill="#49583D" />
-          </svg>
-        </div>
+        <div className="graph-header-art" aria-hidden="true" />
 
         <div className="graph-header-top">
           <div>

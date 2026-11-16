@@ -8,7 +8,7 @@ Sthira brings Markdown-backed documents, projects, structured objects, reference
 
 Built with **Rust, Tauri 2, React 19, TypeScript, TipTap, and SQLite**. The application manifests currently identify version **0.1.0**. This is an evolving alpha; see [current limitations](#current-limitations) and the [roadmap](#roadmap).
 
-![Sthira workspace with two document tabs and a sample reading note](docs/images/document-tabs.jpg)
+![Sthira Home with its refreshed watercolor landscape, botanical accents, and warm paper surfaces](docs/images/home.jpg)
 
 *These are fresh screenshots of the current browser preview, using synthetic documentation notes or built-in preview fixtures. They illustrate the interface; browser fallback data does not establish native vault persistence or successful AI execution. [Screenshot details](#about-the-screenshots).*
 
@@ -75,7 +75,7 @@ These capabilities have implementations in the repository. Platform coverage and
 | Scheduled work | Research/Plan topic trackers, daily/weekly cadence, pause/resume, run-now, and saved digests. |
 | Trust | Separate user/external/AI authorship, verified quotes, evidence attribution, and inspectable organizational proposals. |
 | Storage | Local SQLite, Markdown mirrors, reconciliation, FTS5 indexing, and vector-search infrastructure through sqlite-vec. |
-| Appearance | Light/dark themes, a calm interface, and neutral return-to-work language. |
+| Appearance | Light/dark themes, bundled watercolor landscapes, botanical accents, paper grain, contour textures, and neutral return-to-work language. |
 | CLI | Capture, projects, routing, legacy resumption, history, and vault reconciliation. |
 
 ## Install and run
@@ -165,7 +165,7 @@ Open `http://localhost:1420`. This is a **UI development preview** with browser 
 5. Use **Connections → Link an item** to relate pages without copying them.
 6. Return through the project overview and choose **Resume** when you want working context.
 
-![First-run Home with Capture and project creation](docs/images/home.jpg)
+![Rich text editor with a sample reading workflow and project navigation](docs/images/editor.jpg)
 
 ## Writing, pages, and tabs
 
@@ -190,9 +190,9 @@ For project deletion, review the impact dialog: the default keeps pages as unass
 Change theme with the sidebar toggle or **Settings → Appearance**, which also offers system appearance. **Account** currently shows local identity/integrity information rather than a hosted sign-in or synchronization account.
 
 <details>
-<summary>See rich text and slash commands</summary>
+<summary>See document tabs and slash commands</summary>
 
-![Rich text content in the document workspace](docs/images/editor.jpg)
+![Two sample documents open in the tabbed workspace](docs/images/document-tabs.jpg)
 
 ![Slash menu with formatting and workspace creation commands](docs/images/slash-menu.jpg)
 
@@ -574,7 +574,7 @@ No repository-wide license file is currently included. Do not assume an open-sou
 
 ## About the screenshots
 
-All **13 images** in [`docs/images/`](docs/images/) were captured from the current source through Vite's browser preview at **1280 × 720**, in **light mode**, at default browser scale. Reading-journal pages and their connection were created solely for documentation; the graph uses built-in synthetic topology. Home shows an empty first-run workspace; conversation shows its disabled/unconfigured state. No owner vault data, API keys, or successful live AI responses are shown.
+All **13 images** in [`docs/images/`](docs/images/) have been recaptured from the updated interface through Vite's browser preview at **1280 × 720**, in **light mode**, at default browser scale. They show the refreshed watercolor landscapes, botanical accents, paper surfaces, and contour details. Reading-journal pages and their connection were created solely for documentation; the graph uses built-in synthetic topology. Home shows an empty first-run workspace; conversation shows its disabled/unconfigured state. No owner vault data, API keys, or successful live AI responses are shown.
 
 The directory screenshot below shows the preview's empty fallback; it does not query the sample pages or a native vault. AI-generated Research/Plan output, native storage behavior, and platform-specific UI are not demonstrated by this image set.
 

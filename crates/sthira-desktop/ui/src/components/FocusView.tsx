@@ -1690,6 +1690,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
         <div className="focus-document-column">
           {/* Generous Full-Height Document Canvas */}
           <div className="focus-document-scroll" data-testid="document-scroll-region" ref={scrollRef} onScroll={event => onScrollPosition?.(event.currentTarget.scrollTop)}>
+            <div className="focus-editor-contours" aria-hidden="true" />
             <div
               data-testid="editor-canvas"
               className="focus-document-sheet flex-1 min-h-full relative" inert={chatApplying}

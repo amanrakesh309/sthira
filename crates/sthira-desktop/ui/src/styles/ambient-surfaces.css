@@ -1,0 +1,157 @@
+/* Bundled watercolor and paper textures follow the approved references.
+   Blend modes preserve the pigment's detail across warm paper and dark stone. */
+.sthira-sidebar,
+.settings-navigation {
+  background-image: url('../assets/paper-grain.svg'),
+    radial-gradient(ellipse at 0 100%, color-mix(in srgb, var(--sthira-pane-wash) 15%, transparent), transparent 75%);
+}
+.sthira-home,
+.sthira-all-files,
+.project-overview-scroll { background-image: url('../assets/paper-grain.svg'); }
+
+.home-hero,
+.all-files-header,
+.settings-header,
+.graph-header,
+.home-project-card,
+.home-empty-projects,
+.connections-scroll,
+.focus-margin,
+.document-chat-empty,
+.settings-navigation { isolation: isolate; }
+.home-hero,
+.all-files-header { position: relative; }
+
+.home-hero::before,
+.all-files-header::before,
+.settings-header::before,
+.settings-navigation::after,
+.graph-header-art,
+.home-project-card::after,
+.home-empty-projects::after,
+.connections-scroll::after,
+.focus-margin::after,
+.document-chat-empty::after {
+  content: '';
+  display: block;
+  pointer-events: none;
+  background: url('../assets/landscape-watercolor.webp') center / contain no-repeat;
+  opacity: var(--sthira-art-opacity);
+  filter: var(--sthira-art-filter);
+  mix-blend-mode: var(--sthira-art-blend);
+}
+/* Keep the landscape in the spare right half, clear of the heading copy. */
+.home-hero::before,
+.all-files-header::before {
+  position: absolute;
+  z-index: -1;
+  width: calc(100% - 420px);
+  height: 232px;
+  right: min(-56px, calc((var(--sthira-content-max) - 100cqw) / 2));
+  bottom: -48px;
+  background-position: right center;
+}
+.all-files-header::before { width: 62%; right: -32px; bottom: -68px; height: 216px; }
+.graph-header-art { width: 54%; height: 192px; top: auto; bottom: -60px; }
+.settings-header::before {
+  position: absolute;
+  width: 40%;
+  height: 184px;
+  right: 48px;
+  bottom: -56px;
+}
+.settings-header > div { position: relative; z-index: 1; }
+.settings-navigation::after {
+  width: 160px;
+  height: 104px;
+  margin: 48px 0 0 auto;
+  background-image: url('../assets/olive-watercolor.webp');
+}
+.home-project-card,
+.home-empty-projects {
+  position: relative;
+  overflow: hidden;
+  /* Room for the painted edge without placing pigment behind descriptions. */
+  padding-bottom: 44px;
+  background-image: url('../assets/paper-grain.svg'),
+    linear-gradient(135deg, transparent 45%, color-mix(in srgb, var(--sthira-art-ochre) 4%, transparent));
+}
+.home-project-card::after,
+.home-empty-projects::after {
+  position: absolute;
+  z-index: -1;
+  right: -16px;
+  bottom: -32px;
+  width: 72%;
+  height: 108px;
+  filter: var(--sthira-art-ochre-filter);
+}
+.home-project-card:nth-child(3n + 1)::after,
+.home-empty-projects::after {
+  width: 112px;
+  height: 76px;
+  bottom: -22px;
+  right: 4px;
+  background-image: url('../assets/olive-watercolor.webp');
+  filter: var(--sthira-art-filter);
+}
+.home-project-heading,
+.home-project-description { flex-shrink: 0; }
+.home-project-card:nth-child(3n)::after { width: 86%; transform: scaleX(-1); }
+
+.connections-panel,
+.focus-margin,
+.document-chat { background-image: url('../assets/paper-grain.svg'); }
+.connections-scroll { display: flex; flex-direction: column; }
+.connections-scroll > * { flex-shrink: 0; }
+.connections-scroll > .connection-add { margin-bottom: 0; }
+.connections-scroll > .connection-picker { margin-top: 12px; }
+/* In-flow artwork settles below the content at the foot of a short rail.
+   Long lists and reference previews push it down rather than painting over it. */
+.connections-scroll::after,
+.focus-margin::after,
+.document-chat-empty::after {
+  height: 136px;
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 24px;
+  background-origin: content-box;
+}
+.document-chat-empty::after { margin-top: 32px; }
+.connections-scroll::after {
+  margin-inline: -20px;
+  margin-bottom: -32px;
+  height: 164px;
+  background-size: auto 176px;
+  background-position: 65% bottom;
+}
+.sidebar-nav-row[aria-current="page"],
+.home-new-trigger,
+.universal-submit {
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--sthira-on-primary) 8%, transparent), transparent);
+  box-shadow: inset 0 1px color-mix(in srgb, var(--sthira-on-primary) 10%, transparent);
+}
+@container home (max-width: 1000px) {
+  .home-hero::before { right: -40px; }
+}
+@container home (max-width: 900px) {
+  .home-hero::before { width: 46%; height: 160px; right: -20px; opacity: .5; }
+}
+@container home (max-width: 720px) {
+  .home-hero::before { display: none; }
+}
+@container directory (max-width: 1000px) {
+  .all-files-header::before { display: none; }
+}
+@media (max-width: 1100px) {
+  .graph-header-art, .settings-header::before { display: none; }
+}
+@media (max-width: 900px) {
+  .settings-navigation::after { display: none; }
+}
+@media (forced-colors: active) {
+  .home-hero::before, .all-files-header::before, .graph-header-art,
+  .settings-header::before, .settings-navigation::after,
+  .home-project-card::after, .home-empty-projects::after,
+  .connections-scroll::after, .focus-margin::after, .document-chat-empty::after { display: none; }
+}

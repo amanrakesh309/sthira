@@ -2,7 +2,7 @@
 .sthira-sidebar {
   container: sidebar / inline-size;
   width: min(var(--sidebar-user-width, var(--sthira-sidebar-width)), 45vw);
-  background: var(--sthira-app);
+  background: var(--sthira-sidebar);
   color: var(--sthira-text);
   border-color: var(--sthira-border);
 }
@@ -64,9 +64,9 @@
 .home-section-heading h2 { font: 600 24px/1.25 var(--sthira-font-editorial); letter-spacing: -.025em; }
 .home-text-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; font-size: 13px; color: var(--sthira-primary); flex-shrink: 0; }
 .home-text-action:hover { text-decoration: underline; text-underline-offset: 4px; }
-.home-project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.home-project-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; }
 .home-project-card { min-width: 0; min-height: 144px; height: auto; padding: 20px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-lg); background: var(--sthira-surface-raised); text-align: left; display: flex; flex-direction: column; gap: 12px; transition: border-color 150ms ease, background-color 150ms ease; }
-.home-project-card:hover { border-color: var(--sthira-border-strong); background: var(--sthira-surface); }
+.home-project-card:hover { border-color: var(--sthira-border-strong); background-color: var(--sthira-surface); }
 .home-project-heading { display: flex; align-items: flex-start; gap: 12px; width: 100%; }
 .home-project-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; color: var(--sthira-accent); background: var(--sthira-surface-muted); border-radius: var(--sthira-radius-md); }
 .home-project-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
@@ -99,8 +99,8 @@
 .home-load-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); color: var(--sthira-danger); background: var(--sthira-surface); font-size: 14px; }
 
 .universal-input-card { padding: 16px 20px; border: 1px solid var(--sthira-border-strong); border-radius: var(--sthira-radius-hero); background: var(--sthira-surface); box-shadow: 0 4px 12px color-mix(in srgb, var(--sthira-text) 4%, transparent); min-width: 0; }
-.universal-entry { display: flex; align-items: flex-start; gap: 12px; min-height: 88px; margin-bottom: 12px; }
-.universal-entry textarea { flex: 1; min-width: 0; min-height: 80px; max-height: 240px; padding: 8px 0; resize: none; background: transparent; color: var(--sthira-text); font: 400 18px/1.55 var(--sthira-font-ui); border: 0; border-radius: 0; }
+.universal-entry { display: flex; align-items: flex-start; gap: 12px; min-height: 56px; margin-bottom: 12px; }
+.universal-entry textarea { flex: 1; min-width: 0; min-height: 56px; max-height: 240px; padding: 8px 0; resize: none; background: transparent; color: var(--sthira-text); font: 400 18px/1.55 var(--sthira-font-ui); border: 0; border-radius: 0; }
 .universal-entry textarea::placeholder { color: var(--sthira-text-subtle); opacity: 1; }
 /* The composer keeps a single neutral border, including after mode changes.
    Keyboard focus on its buttons still uses the shared focus indicator. */
@@ -150,6 +150,7 @@
 
 @container home (max-width: 1000px) {
   .home-content { width: calc(100% - 80px); }
+  .home-project-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
 @container home (max-width: 900px) {
   .home-content { width: calc(100% - 48px); gap: 24px; }
