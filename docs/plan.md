@@ -2,6 +2,8 @@
 
 > Historical implementation plan. Current product/design decisions and verification rules live in [permanent policies](policies/README.md). Earlier controls, phase statuses, test counts, and timings below do not certify the current application or override those policies.
 
+The new five-phase agent sequence is maintained separately in [Agent Extension: AE1–AE5](agent-extension-plan.md). The original phases below retain their historical numbering.
+
 **Target System:** `sthira-core` (Pure Rust Engine), `sthira-cli` (Headless Harness), `sthira-testkit` (Deterministic Verification Kit), and `xtask` (Automated Gate Runner)  
 **Target UI Integration:** Zero-rewrite integration into `sthira-desktop` (Tauri v2)  
 **Execution Mode:** Autonomous LLM Agent / Zero-Human-Babysitting TDD Loop with Frozen Oracles  

@@ -9,8 +9,10 @@ pub mod resume;
 pub mod resume_pack;
 pub mod scheduler;
 pub mod seed;
+pub mod shared_memory;
 pub mod state;
 pub mod workflow_settings;
+pub mod workspace_agent;
 pub mod workspace_session;
 
 pub use commands::*;
@@ -24,6 +26,16 @@ pub use workspace_session::handle_get_workspace_session_key;
 
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
+        shared_memory::cmd_memory_action,
+        workspace_agent::cmd_create_agent_run,
+        workspace_agent::cmd_list_agent_runs,
+        workspace_agent::cmd_list_agent_tasks,
+        workspace_agent::cmd_follow_up_agent_run,
+        workspace_agent::cmd_get_agent_run,
+        workspace_agent::cmd_execute_agent_run,
+        workspace_agent::cmd_cancel_agent_run,
+        workspace_agent::cmd_review_agent_step,
+        workspace_agent::cmd_undo_agent_edit,
         ai_setup::cmd_open_ai_app_download,
         resume::cmd_get_resume_settings,
         resume::cmd_get_resume_model,

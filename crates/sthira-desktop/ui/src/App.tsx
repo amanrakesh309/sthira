@@ -1,3 +1,6 @@
+import { AgentTasksProvider } from './context/AgentTasksContext';
+import { AgentTaskCenter } from './components/AgentTaskCenter';
+import { OPEN_AGENT_TASKS } from './api/workspaceAgent';
 import { DocumentTabs } from './components/DocumentTabs';
 import { useDocumentTabs, openDocumentTab, closeDocumentTab, type DocumentTabsState, type DocumentTab } from './hooks/useDocumentTabs';
 import { useWorkflowSettings } from './hooks/useWorkflowSettings';
@@ -15,6 +18,8 @@ import { InteractiveFlowModal, type FlowMode } from './components/InteractiveFlo
 import { ObjectCollectionContainer } from './components/objects/ObjectCollectionContainer';
 import { ObjectTypeBuilderModal } from './components/objects/ObjectTypeBuilderModal';
 import { ObjectTypeManagerModal } from './components/objects/ObjectTypeManagerModal';
+import { AgentView } from './views/AgentView';
+import { MemoryView } from './views/MemoryView';
 import { GraphView } from './views/GraphView';
 import { WorkspaceIndexView } from './views/WorkspaceIndexView';
 import { ProjectOverviewView, DEFAULT_PROJECT_BROWSE } from './views/ProjectOverviewView';
@@ -42,7 +47,9 @@ import {
   type WebResearchResult,
 } from './types/sthira';
 
-export const App: React.FC = () => {
+const WorkspaceApp: React.FC = () => {
+  const [taskCenterOpen,setTaskCenterOpen]=useState(false);
+  const [agentRunToOpen,setAgentRunToOpen]=useState<string|null>(null);
   const workflows = useWorkflowSettings();
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('models');
   useEffect(() => {
@@ -52,6 +59,7 @@ export const App: React.FC = () => {
   }, []);
   useEffect(() => {
     const onVaultReset = () => {
+      setTaskCenterOpen(false);setAgentRunToOpen(null);
       navigating.current = false;
       beforeLeaveRef.current = null;
       newTabIntent.current = false;
@@ -79,6 +87,8 @@ export const App: React.FC = () => {
     | 'canvas'
     | 'objects'
     | 'graph'
+    | 'memory'
+    | 'agent'
     | 'workspace_index'
     | 'scheduled_topics'
     | 'explore_plan'
@@ -90,6 +100,8 @@ export const App: React.FC = () => {
       if (v === 'focus') return 'focus';
       if (v === 'project' && params.get('projectId')) return 'project';
       if (v === 'graph') return 'graph';
+      if (v === 'agent') return 'agent';
+      if (v === 'memory') return 'memory';
       if (v === 'objects') return 'objects';
       if (v === 'explore_plan') return 'explore_plan';
     }
@@ -535,6 +547,10 @@ export const App: React.FC = () => {
     }
   };
 
+  const openAgentRun = useCallback((id:string) => { void navigate(()=>{
+    setCurrentView('agent');setAgentRunToOpen(id);setProjectReturnId(null);setActiveArtifactId(null);setActiveProjectId(null);setActiveObjectTypeId(null);setTaskCenterOpen(false);
+  }); },[navigate]);
+  useEffect(()=>{const open=()=>setTaskCenterOpen(true);const run=(event:Event)=>{const id=(event as CustomEvent<string>).detail;if(typeof id==='string')openAgentRun(id);};window.addEventListener(OPEN_AGENT_TASKS,open);window.addEventListener('sthira:open-agent-run',run);return()=>{window.removeEventListener(OPEN_AGENT_TASKS,open);window.removeEventListener('sthira:open-agent-run',run);};},[openAgentRun]);
   return (
     <div className="sthira-shell flex h-screen w-screen overflow-hidden" onClickCapture={event => { newTabIntent.current = event.ctrlKey || event.metaKey; }} onKeyDownCapture={event => { if(event.key === 'Enter') newTabIntent.current = event.ctrlKey || event.metaKey; }}>
       {/* Step 2: Left Hierarchy Sidebar */}
@@ -560,6 +576,8 @@ export const App: React.FC = () => {
           setActiveObjectTypeId(null);
           });
         }}
+        onNavigateAgent={() => { void navigate(() => { setCurrentView('agent'); setAgentRunToOpen(null); setProjectReturnId(null); setActiveArtifactId(null); setActiveProjectId(null); setActiveObjectTypeId(null); }); }}
+        onNavigateMemory={() => { void navigate(() => { setCurrentView('memory'); setProjectReturnId(null); setActiveArtifactId(null); setActiveProjectId(null); setActiveObjectTypeId(null); }); }}
         onNavigateWorkspaceIndex={handleNavigateWorkspaceIndex}
         onNavigateExplorePlan={handleNavigateExplorePlan}
         onNavigateScheduledTopics={handleNavigateScheduledTopics}
@@ -613,6 +631,9 @@ export const App: React.FC = () => {
             onStartPlan={handleStartPlan}
           />
         )}
+
+        {currentView === 'agent' && <AgentView initialRunId={agentRunToOpen} onOpenArtifact={handleOpenArtifact} registerBeforeLeave={registerBeforeLeave} />}
+        {currentView === 'memory' && <MemoryView onOpenArtifact={handleOpenArtifact} registerBeforeLeave={registerBeforeLeave} />}
 
         {currentView === 'workspace_index' && (
           <WorkspaceIndexView
@@ -785,6 +806,7 @@ export const App: React.FC = () => {
         )}
       </main>
 
+      <AgentTaskCenter open={taskCenterOpen} onClose={()=>setTaskCenterOpen(false)} onOpenRun={openAgentRun} onOpenDocument={id=>{setTaskCenterOpen(false);handleOpenArtifact(id);}} />
       {/* Global Interactive Modals */}
       <SearchModal
         isOpen={isSearchOpen}
@@ -836,4 +858,5 @@ export const App: React.FC = () => {
   );
 };
 
+export const App: React.FC = () => <AgentTasksProvider><WorkspaceApp /></AgentTasksProvider>;
 export default App;

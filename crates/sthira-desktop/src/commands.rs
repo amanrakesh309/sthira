@@ -1338,6 +1338,10 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
                 .collect()
         };
 
+        tx.execute("DELETE FROM agent_runs;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM shared_memories;", [])
+            .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM canvas_layout_revisions;", [])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM canvas_items;", [])
@@ -1420,6 +1424,7 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
 
 #[tauri::command]
 pub fn cmd_clear_vault_data(state: State<'_, AppState>) -> Result<(), String> {
+    state.requests.cancel_agent_tasks();
     handle_clear_vault_data(&state.engine)
 }
 

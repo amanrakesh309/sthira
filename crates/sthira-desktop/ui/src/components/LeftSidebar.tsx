@@ -1,3 +1,5 @@
+import { useAgentTasks } from '../context/AgentTasksContext';
+import { openAgentTasks, isAgentActive } from '../api/workspaceAgent';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Folder,
@@ -22,6 +24,8 @@ import {
   Settings2,
   Compass,
   Sprout,
+  BookOpen,
+  ListTodo,
   HardDrive,
   ArrowUpRight,
   Info,
@@ -67,11 +71,15 @@ interface LeftSidebarProps {
     | 'canvas'
     | 'objects'
     | 'graph'
+    | 'memory'
+    | 'agent'
     | 'workspace_index'
     | 'scheduled_topics'
     | 'explore_plan';
   onNavigateHome: () => void;
   onNavigateGraph: () => void;
+  onNavigateAgent?: () => void;
+  onNavigateMemory?: () => void;
   onNavigateWorkspaceIndex?: (tab?: WorkspaceIndexTab) => void;
   /** Opens the Explore & Plan tabbed workspace in the center workspace. */
   onNavigateExplorePlan?: (tab?: ExplorePlanTab) => void;
@@ -104,6 +112,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   currentView,
   onNavigateHome,
   onNavigateGraph,
+  onNavigateMemory,
+  onNavigateAgent,
   onNavigateWorkspaceIndex,
   onNavigateExplorePlan,
   onNavigateScheduledTopics,
@@ -123,6 +133,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   realtimeTitleUpdate,
   onArtifactRenamed,
 }) => {
+  const {tasks:agentTasks}=useAgentTasks();
+  const activeTasks=agentTasks.filter(isAgentActive).length;
+  const readyTasks=agentTasks.filter(task=>task.status==='review').length;
+  const tasksLabel=`Agent tasks${activeTasks?`, ${activeTasks} working`:''}${readyTasks?`, ${readyTasks} ready for review`:''}`;
   const workflows = useWorkflowSettings();
   const [catalog, setCatalog] = useState<ProviderEntry[]>(providersProp || []);
   const [catalogLoaded, setCatalogLoaded] = useState(providersProp !== undefined);
@@ -648,6 +662,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </div>
           )}
 
+          <button type="button" title="Agent" aria-label="Agent" aria-current={currentView === 'agent' ? 'page' : undefined} onClick={onNavigateAgent} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4" /></button>
+          <button type="button" title={tasksLabel} aria-label={tasksLabel} onClick={openAgentTasks} className="w-8 h-8 rounded-lg flex items-center justify-center text-sthira-text-muted hover:bg-sthira-surface-muted"><ListTodo className="w-4 h-4"/>{activeTasks+readyTasks>0&&<small>{activeTasks+readyTasks}</small>}</button>
+          <button type="button" title="Memory" aria-label="Memory" aria-current={currentView === 'memory' ? 'page' : undefined} onClick={onNavigateMemory} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4" /></button>
           {/* 4. Graph Trigger */}
           <button
             type="button"
@@ -894,6 +911,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         )}
 
+        <div className="sidebar-agent-controls"><button type="button" data-testid="nav-agent" aria-current={currentView === 'agent' ? 'page' : undefined} onClick={onNavigateAgent} className={`sidebar-nav-row flex-1 flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4"/><span>Agent</span></button><button type="button" className="sidebar-agent-tasks" aria-label={tasksLabel} title={tasksLabel} onClick={openAgentTasks}><ListTodo size={16}/>{activeTasks+readyTasks>0&&<span>{activeTasks+readyTasks}</span>}</button></div>
+        <button type="button" data-testid="nav-memory" aria-current={currentView === 'memory' ? 'page' : undefined} onClick={onNavigateMemory} className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4"/><span>Memory</span></button>
         {/* 4. Knowledge Graph */}
         <button
           type="button"

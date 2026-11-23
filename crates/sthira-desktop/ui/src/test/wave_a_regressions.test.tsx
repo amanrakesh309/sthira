@@ -930,9 +930,9 @@ describe('Wave A End-to-End UI Regressions (A1, A3, A5)', () => {
     await user.click(await screen.findByText('Search workspace...'));
     const searchBox = await screen.findByPlaceholderText(/Search/i);
     await user.type(searchBox, 'Vanishing Note');
-    await screen.findByText('Vanishing Note');
+    const vanishingResult = await screen.findByRole('option', { name: 'Open Vanishing Note' });
     artifacts.delete('art-vanishing');
-    await user.click(screen.getByText('Vanishing Note'));
+    await user.click(vanishingResult);
 
     expect(await screen.findByTestId('document-unavailable-state')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();

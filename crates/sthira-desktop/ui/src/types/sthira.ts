@@ -250,6 +250,8 @@ export interface SearchResultItem {
 }
 
 export type CoreEvent =
+  | { type: 'memory_changed'; id: string }
+  | { type: 'agent_changed'; id: string }
   | { type: 'artifact_changed'; id: string }
   | { type: 'extraction_finished'; id: string }
   | { type: 'proposals_ready'; count: number }

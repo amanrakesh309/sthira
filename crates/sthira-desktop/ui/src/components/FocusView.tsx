@@ -2204,7 +2204,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
           )}
         </div>
 
-        {conversation && artifactId && chatArtifactId === artifactId && <DocumentChatPanel sessionNamespace={sessionNamespace} key={artifactId} artifactId={artifactId} initialConversation={conversation}
+        {conversation && artifactId && chatArtifactId === artifactId && <DocumentChatPanel onOpenArtifact={async id=>{if(await handleSave())onOpenArtifact?.(id);}} sessionNamespace={sessionNamespace} key={artifactId} artifactId={artifactId} initialConversation={conversation}
           open={showChat} busy={isLoadingDocument || isAiStreaming || (documentRun?.artifactId === artifactId && documentRun?.status === 'running')} modelId={conversation.model_id || activeModelId} modelName={conversation.model_name || activeModelName}
           currentContent={editorContent} onApplyingChange={handleChatPanelApplyingChange} onClose={() => setChatOpen(false)} beforeRequest={async () => {
             if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);

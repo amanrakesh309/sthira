@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use sthira_core::Engine;
 use tauri::State;
 
-pub const WORKFLOWS: [&str; 5] = ["research", "plan", "draft", "chat", "resume"];
+pub const WORKFLOWS: [&str; 6] = ["research", "plan", "draft", "chat", "resume", "agent"];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkflowSetting {

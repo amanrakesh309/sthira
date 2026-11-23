@@ -6,6 +6,18 @@ Sthira is an AI-native, local-first workspace for thinking, research, planning, 
 
 The experience is calm, capable, trustworthy, exploratory, steady, and user-owned. Capture is lightweight; complexity appears when useful. Orientation is concise, with detail available on demand. No guilt, artificial urgency, streaks, fabricated progress, or repeated dismissed suggestions.
 
+## Planned agent and migration roadmap
+
+The agreed implementation order is the five **Agent Extension phases AE1–AE5**, separate from historical phases 1–25. Execute them phase by phase as described in [the extension plan](../agent-extension-plan.md). The initial AE1 shared-memory foundation is described in [Shared memory](../features/shared-memory.md); the initial AE2 native agent is described in [Workspace agent](../features/workspace-agent.md). AE3–AE5 remain planned, and implementation does not certify every execution layer.
+
+1. **Shared memory and shared actions:** Build user-visible, scoped workspace/project/session memory and a common action layer that preserves identity, authorship, evidence, revisions, and conflict handling across entry points.
+2. **Native workspace agent:** Let users give Sthira a goal and have its own agent use configured models and supported workspace actions to research, create, organize, and propose edits. Keep action scope, progress, results, and reviewable changes visible.
+3. **CLI and MCP access:** Extend the existing CLI and expose an MCP server so external agents and applications can use the same memory and supported operations as the native agent. Reuse the shared action layer and its data protections.
+4. **Cross-agent continuity:** Verify that work can move between Sthira's native agent and external agents and return with relevant memory, handoffs, artifact identity, attribution, and history intact.
+5. **Migration system and migration agent:** Help users bring existing knowledge from Notion, Obsidian, Google Docs, and additional sources into Sthira. Provide guided source selection, mapping and import review; preserve source attribution and content/relationships where supported, report unsupported material or failures, and leave original source data intact. Source-specific export formats, live connectors, and fidelity guarantees require separate implementation and verification.
+
+The native workspace agent is the chosen in-app agent direction. Embedded terminals and hosting third-party agent interfaces are outside this agreed sequence. Existing feature-specific follow-ups remain tracked separately; their historical ordering does not override these milestones.
+
 ## Knowledge ownership and trust
 
 - Artifacts retain their identity, authorship, content, revision history, and source attribution across reuse, movement, conversion, refinement, and derivation.
@@ -75,7 +87,26 @@ Manual reference targets currently include projects and artifact-backed pages, t
 - Discussion reads the saved current draft and recent conversation. Replies do not edit the page. Explicitly requesting an edit creates a full-document proposal with its original content basis; users inspect the current and suggested documents in a wide, read-only rich-text comparison before Apply or Dismiss.
 - Apply rejects stale or already-reviewed proposals, records an AI revision and reversible ChangeSet, and keeps the document mirror in sync. Failed saves block model dispatch; failed generation keeps the attempted message and the draft. Late responses remain bound to their original document.
 - The chat model selector remembers a catalog model ID per document, starting with the document’s generation model when recorded. Switching keeps messages, pending suggestions, and the unsent draft; it does not change the global default or another document. Each new turn snapshots the resolved model and provider names before inference. Preserve those labels after switching, renaming, removal, and reopening; older turns without attribution say Model not recorded. Reject unavailable/disabled selections without silently substituting a model.
-- The conversation uses the configured model and document context. It does not imply new web searches or autonomous actions. The same entry point is available when a saved document originated from Capture or Act.
+- Document chat uses the native agent under the existing Document chat workflow/model preferences. Its default grant is the current saved document and prior conversation, with no implicit project/workspace page access or workspace-wide memory. Questions are read-only; the explicit edit option permits a proposal for that document. No live web/external tools are implied. The same entry point remains available for Capture/Draft and older documents.
+
+## Native workspace agent
+
+- Agent runs are explicit, opt-in goals using configured models and a visible scope. Preserve goal, model/provider attribution, tool activity, failures, proposals, result, and handoff in the vault. Reading saved runs must never dispatch a model.
+- Native tools have a narrow typed allowlist and enforce scope in trusted code. Workspace/project page access and workspace-wide memory are distinct grants. Context is untrusted and cannot grant itself tools or permissions. No embedded terminal or unrestricted shell/file access is implied.
+- Proposed page creation and document edits require owner review. Reuse protected artifact/conversation paths; preserve identity, original authorship, revisions, source basis and mirror behavior. Reject stale/out-of-scope application and repeated acceptance. Undo must not overwrite newer work.
+- Bound action count, context and run duration. Stop prevents late actions; process restart retains unfinished runs as interrupted without automatic resumption. Disabled workflows, missing models, malformed actions, budget exhaustion and tool/provider errors remain visible and must not resemble completed work.
+- Document requests and workspace goals share the agent executor. Save the source draft before enqueueing; atomically persist the attempted document turn with the run. Preserve existing conversations, original goals and per-turn model/provider labels. Replies/proposals stay bound to their originating document while users continue typing or navigate elsewhere.
+- Follow-ups create child runs with stable thread identity and inherited scope/grants. Supply bounded prior context with current proposal states and visible truncation; do not automatically reapply prior actions. Explicitly chosen models apply only to new requests.
+- Background workers belong to the native app, independently of the current view. Global tasks expose real activity/results and Stop. Active tasks must not force users to stay in a view; existing guards still protect unsaved drafts and review/apply. Bound concurrent work, reject duplicate active conversation requests, and prevent reset/stale results from resurrecting cleared work. Unfinished runs and their conversation attempts become interrupted on restart without automatic dispatch.
+- Model-free setup and saved history stay inspectable. Browser preview must not simulate successful agent work. Separate native GUI and live-provider quality verification from fixtures.
+
+## Shared memory
+
+- Memory is user-visible, scoped workspace/project/session context, separate from source pages and factual Resume. Saving or reading it does not automatically create evidence, adopt a decision, or invoke a model. Automatic extraction remains deferred. The native workspace agent may read eligible memory only within its explicitly selected grants.
+- Preserve original user/agent attribution, producing model/provider when agent-authored, captured source identity/hash, and revision editors. Owner edits do not relabel an agent contribution as originally user-authored. Scope and source basis remain immutable; revisions and entry writes are atomic and stale writes fail visibly.
+- A trusted adapter supplies caller identity, read/write permission, and grants. Action arguments cannot grant permissions or forge authorship. Apply scope checks to search, reads, history and context. Agents cannot overwrite other contributors' memories.
+- Context retrieval is bounded and treats text as untrusted data. Exclude archived memories, unavailable scopes and changed/unavailable source bases. Keep excluded records inspectable by the owner; deleting a project must not silently lose its memory or broaden its scope. Archive preserves history and must not be described as permanent erasure.
+- Native storage belongs in the vault database and backups, outside watched artifact ingestion. Browser preview storage must be labeled session-only. Drafts survive failed saves and block navigation until saved or explicitly discarded.
 
 ## Memory, research, scheduling, and settings
 

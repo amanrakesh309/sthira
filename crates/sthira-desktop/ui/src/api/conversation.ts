@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import { isTauri, getArtifactContext } from './ipc';
+import { isTauri } from './ipc';
+import { notifyAgentTasksChanged } from './workspaceAgent';
 import type { Artifact } from '../types/sthira';
 export interface ConversationTurn {
   id: string; user_text: string; reply: string | null; error: string | null;
   basis_content_md: string; proposed_content_md: string | null;
   model_id?: string | null; model_name?: string | null; provider_id?: string | null; provider_name?: string | null;
+  agent_run_id?: string | null; agent_status?: string | null;
   proposal_state: 'pending' | 'applied' | 'dismissed' | 'reverted'; change_set_id: string | null;
 }
 export interface Conversation { mode: 'plan' | 'research' | 'document'; initial_prompt: string; model_id?: string | null; model_name?: string | null; turns: ConversationTurn[] }
@@ -18,22 +20,16 @@ export async function getDocumentConversation(artifactId: string, mode?: 'plan' 
   return preview.get(artifactId) || null;
 }
 export async function discussDocument(artifactId: string, text: string, modelId: string | undefined, proposeEdit: boolean): Promise<Conversation> {
-  if (isTauri) return invoke('cmd_discuss_document', { artifactId, text, modelId: modelId || null, proposeEdit });
-  const chat = preview.get(artifactId);
-  if (!chat) throw new Error('Conversation unavailable.');
-  const context = await getArtifactContext(artifactId);
-  const next: Conversation = { ...chat, turns: [...chat.turns, { id: crypto.randomUUID(), user_text: text,
-    reply: 'Browser preview: live discussion requires the desktop app and a configured model. Your document has not changed.',
-    error: null, basis_content_md: context.artifact.content_md, proposed_content_md: null, proposal_state: 'pending', change_set_id: null }] };
-  preview.set(artifactId, next); return next;
+  if (isTauri) {const value=await invoke<Conversation>('cmd_discuss_document', { artifactId, text, modelId: modelId || null, proposeEdit });notifyAgentTasksChanged();return value;}
+  throw new Error('Document agent requests require the desktop app and a configured model. Your draft is preserved.');
 }
 export async function decideDocumentEdit(artifactId: string, turnId: string, apply: boolean): Promise<Artifact> {
-  if (isTauri) return invoke('cmd_decide_document_edit', { artifactId, turnId, apply });
+  if (isTauri) {const value=await invoke<Artifact>('cmd_decide_document_edit', { artifactId, turnId, apply });notifyAgentTasksChanged();return value;}
   throw new Error('Applying model suggestions requires the desktop app.');
 }
 
 export async function undoDocumentEdit(artifactId: string, changeSetId: string): Promise<Artifact> {
-  if (isTauri) return invoke('cmd_undo_document_edit', { artifactId, changeSetId });
+  if (isTauri) {const value=await invoke<Artifact>('cmd_undo_document_edit', { artifactId, changeSetId });notifyAgentTasksChanged();return value;}
   throw new Error('Undoing model edits requires the desktop app.');
 }
 

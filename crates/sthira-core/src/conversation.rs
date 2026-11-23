@@ -25,6 +25,8 @@ pub struct ConversationTurn {
     pub model_name: Option<String>,
     pub provider_id: Option<String>,
     pub provider_name: Option<String>,
+    pub agent_run_id: Option<String>,
+    pub agent_status: Option<String>,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
 struct DiscussionOutput {
@@ -67,7 +69,7 @@ impl Engine {
         let Some((mode, initial_prompt, model_id, model_name)) = meta else {
             return Ok(None);
         };
-        let mut stmt = reader.prepare("SELECT id,user_text,reply,error,basis_content_md,proposed_content_md,proposal_state,change_set_id,model_id,model_name,provider_id,provider_name FROM document_conversation_turns WHERE artifact_id=?1 ORDER BY rowid").map_err(|e| e.to_string())?;
+        let mut stmt = reader.prepare("SELECT id,user_text,reply,error,basis_content_md,proposed_content_md,proposal_state,change_set_id,model_id,model_name,provider_id,provider_name,(SELECT r.id FROM agent_runs r WHERE r.document_turn_id=document_conversation_turns.id OR EXISTS(SELECT 1 FROM agent_steps s WHERE s.run_id=r.id AND s.turn_id=document_conversation_turns.id) ORDER BY r.rowid DESC LIMIT 1),(SELECT r.status FROM agent_runs r WHERE r.document_turn_id=document_conversation_turns.id OR EXISTS(SELECT 1 FROM agent_steps s WHERE s.run_id=r.id AND s.turn_id=document_conversation_turns.id) ORDER BY r.rowid DESC LIMIT 1) FROM document_conversation_turns WHERE artifact_id=?1 ORDER BY rowid").map_err(|e| e.to_string())?;
         let turns = stmt
             .query_map([artifact_id], |r| {
                 Ok(ConversationTurn {
@@ -83,6 +85,8 @@ impl Engine {
                     model_name: r.get(9)?,
                     provider_id: r.get(10)?,
                     provider_name: r.get(11)?,
+                    agent_run_id: r.get(12)?,
+                    agent_status: r.get(13)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -135,6 +139,7 @@ impl Engine {
             .ok_or("Conversation unavailable.".into())
     }
 
+    /// Legacy synchronous discussion API. Desktop chat queues a document-scoped agent task.
     pub async fn discuss_document(
         &self,
         artifact_id: &str,
@@ -236,9 +241,10 @@ impl Engine {
         tx.execute("INSERT INTO artifact_revisions (id,artifact_id,version,content_md,content_hash,actor,change_set_id,created_at) VALUES (?1,?2,?3,?4,?5,'system',?6,?7)",params![uuid::Uuid::new_v4().to_string(),artifact_id,version+1,original,hash,undo_cs,now]).map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE document_conversation_turns SET proposal_state='reverted' WHERE id=?1",
-            [turn],
+            [&turn],
         )
         .map_err(|e| e.to_string())?;
+        crate::workspace_agent::refresh_review_state(&tx, &turn, now).map_err(|e| e.to_string())?;
         self.log_event_tx(
             &tx,
             None,
@@ -303,9 +309,13 @@ impl Engine {
                 [turn_id],
             )
             .map_err(|e| e.to_string())?;
+            crate::workspace_agent::refresh_review_state(&tx, turn_id, self.clock().now_ms())
+                .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(art);
         }
+        crate::workspace_agent::guard_edit_review(&tx, turn_id, artifact_id)
+            .map_err(|e| e.to_string())?;
         let (current,version,hash): (String,i64,String) = tx.query_row("SELECT content_md,version,content_hash FROM artifacts WHERE id=?1 AND deleted_at IS NULL",[artifact_id],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e| e.to_string())?;
         if current != basis {
             return Err("The document changed after this suggestion. Ask for an updated edit before applying.".into());
@@ -319,6 +329,8 @@ impl Engine {
         tx.execute("UPDATE artifacts SET content_md=?1,content_hash=?2,last_synced_hash=?2,version=?3,updated_at=?4,is_unfinished_draft=?5 WHERE id=?6 AND deleted_at IS NULL",params![content,new_hash,version+1,now,crate::epistemic::is_mid_sentence(&content),artifact_id]).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO artifact_revisions (id,artifact_id,version,content_md,content_hash,actor,change_set_id,created_at) VALUES (?1,?2,?3,?4,?5,'ai',?6,?7)",params![uuid::Uuid::new_v4().to_string(),artifact_id,version+1,content,new_hash,cs,now]).map_err(|e| e.to_string())?;
         tx.execute("UPDATE document_conversation_turns SET proposal_state='applied',change_set_id=?1 WHERE id=?2",params![cs,turn_id]).map_err(|e| e.to_string())?;
+        crate::workspace_agent::refresh_review_state(&tx, turn_id, now)
+            .map_err(|e| e.to_string())?;
         self.log_event_tx(
             &tx,
             None,

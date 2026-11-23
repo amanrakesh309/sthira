@@ -311,5 +311,48 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
         tx.commit()?;
     }
+    if user_version < 20 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("shared_memory.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 20;")?;
+        tx.commit()?;
+    }
+    if user_version < 21 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("workspace_agent.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 21;")?;
+        tx.commit()?;
+    }
+    if user_version < 22 {
+        let tx = conn.transaction()?;
+        for (name, definition) in [
+            ("thread_id", "TEXT"),
+            ("revision", "INTEGER NOT NULL DEFAULT 1"),
+            ("parent_run_id", "TEXT"),
+            ("document_id", "TEXT"),
+            ("document_turn_id", "TEXT"),
+            ("allow_edits", "INTEGER NOT NULL DEFAULT 1"),
+        ] {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_runs') WHERE name=?1)",
+                [name],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE agent_runs ADD COLUMN {name} {definition}"
+                ))?;
+            }
+        }
+        tx.execute_batch(
+            "UPDATE agent_runs SET thread_id=id WHERE thread_id IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_agent_thread ON agent_runs(thread_id,created_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_document ON agent_runs(document_id,created_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_step_turn ON agent_steps(turn_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_document_turn ON agent_runs(document_turn_id) WHERE document_turn_id IS NOT NULL;
+            PRAGMA user_version = 22;",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }

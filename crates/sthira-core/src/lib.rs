@@ -14,7 +14,9 @@ pub mod resume;
 pub mod reversibility;
 pub mod router;
 pub mod search;
+pub mod shared_memory;
 pub mod vault;
+pub mod workspace_agent;
 
 pub use engines::{
     execute_adaptive_stream, generate_simulated_token_stream, AdaptiveStreamParser,
@@ -101,6 +103,8 @@ pub trait ModelProvider: Send + Sync {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreEvent {
     ArtifactChanged { id: String },
+    MemoryChanged { id: String },
+    AgentChanged { id: String },
     ExtractionFinished { id: String },
     ProposalsReady { count: u32 },
     ChangeSetApplied { id: String },
@@ -306,7 +310,7 @@ impl Engine {
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
 
         {
-            let writer = db.writer();
+            let mut writer = db.writer();
             let existing_instance: Option<String> = writer
                 .query_row(
                     "SELECT value FROM vault_meta WHERE key = 'vault_instance_id';",
@@ -322,6 +326,12 @@ impl Engine {
                 )?;
             }
             let now_ms = clock.now_ms();
+            {
+                let tx = writer.transaction()?;
+                tx.execute("UPDATE document_conversation_turns SET error='The app stopped before this request finished. Send a follow-up to continue.',proposal_state='dismissed' WHERE reply IS NULL AND id IN (SELECT document_turn_id FROM agent_runs WHERE status IN ('queued','running'))",[])?;
+                tx.execute("UPDATE agent_runs SET revision=revision+1,status='interrupted',error='The app stopped before this run finished. Start a new run to continue.',updated_at=?1 WHERE status IN ('queued','running')", [now_ms])?;
+                tx.commit()?;
+            }
             let _ = db::providers_repo::clean_duplicate_models(&writer);
             // AI setup is explicit. An empty catalog must stay empty until the user
             // connects a provider; installed runtimes and models are never assumed.
@@ -545,6 +555,7 @@ impl Engine {
             })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_artifact_inner(
         &self,
         artifact_type: ArtifactType,
@@ -553,6 +564,7 @@ impl Engine {
         content_md: &str,
         source_url: Option<&str>,
         target_project_id: Option<&str>,
+        agent_step_id: Option<&str>,
     ) -> Result<(Artifact, Option<String>), CoreError> {
         let now_ms = self.clock.now_ms();
         let artifact_id = uuid::Uuid::new_v4().to_string();
@@ -576,6 +588,10 @@ impl Engine {
 
         let mut writer = self.db.writer();
         let tx = writer.transaction()?;
+
+        if let Some(step_id) = agent_step_id {
+            workspace_agent::claim_creation(&tx, step_id, &artifact_id, target_project_id)?;
+        }
 
         if let Some(pid) = target_project_id {
             let exists: bool = tx.query_row(
@@ -608,15 +624,19 @@ impl Engine {
         let rev_id = uuid::Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO artifact_revisions (id, artifact_id, version, content_md, content_hash, actor, created_at)
-             VALUES (?1, ?2, 1, ?3, ?4, 'user', ?5);",
-            params![rev_id, artifact_id, normalized_body, content_hash, now_ms],
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6);",
+            params![rev_id, artifact_id, normalized_body, content_hash, if agent_step_id.is_some() { "ai" } else { "user" }, now_ms],
         )?;
 
         self.log_event_tx(
             &tx,
             target_project_id,
             Some(&artifact_id),
-            Actor::User,
+            if agent_step_id.is_some() {
+                Actor::Ai
+            } else {
+                Actor::User
+            },
             EventType::ArtifactCreated,
             Materiality::Substantive,
             serde_json::json!({ "title": title }),
@@ -701,6 +721,7 @@ impl Engine {
             content_md,
             source_url,
             None,
+            None,
         )?;
         Ok(artifact)
     }
@@ -721,6 +742,7 @@ impl Engine {
             content_md,
             source_url,
             target_project_id,
+            None,
         )?;
         let mirror_synced = mirror_sync_error.is_none();
         Ok(SaveArtifactOutcome {

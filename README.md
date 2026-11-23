@@ -25,6 +25,8 @@ Built with **Rust, Tauri 2, React 19, TypeScript, TipTap, and SQLite**. The appl
 - [Research, planning, and drafting](#research-planning-and-drafting)
 - [Document conversation, Refine, and Derive](#document-conversation-refine-and-derive)
 - [Resume and title suggestions](#resume-and-title-suggestions)
+- [Shared memory](#shared-memory)
+- [Workspace agent](#workspace-agent)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Storage, privacy, and backups](#storage-privacy-and-backups)
 - [Command-line usage](#command-line-usage)
@@ -47,6 +49,7 @@ Sthira is designed for personal knowledge work that develops over time: reading 
 | **Typed object** | A page with a schema and properties, such as an Idea, Task, Decision, Source, or your own type. |
 | **Connection** | An explicit reference between saved items, with outgoing links and backlinks. |
 | **Canvas** | A spatial arrangement of cards and text for exploring ideas. |
+| **Memory** | Intentional workspace/project/session context with attribution, sources, and revision history. |
 | **Resume** | An explicit return to saved project context, with factual state and optional model-selected excerpts. |
 
 Core writing and organization work without an AI connection. Research, Plan, Draft, and document-chat generation require an enabled workflow and an available model. Web research additionally uses a configured search provider.
@@ -71,6 +74,8 @@ These capabilities have implementations in the repository. Platform coverage and
 | Research | Streaming synthesis using saved context and optional web retrieval; source inspection and Import to Vault. |
 | AI editing | Document conversation, reviewable edit proposals, Refine, and Derive with source lineage. |
 | Return to work | Factual Resume, optional source-validated model excerpts, cached reviews, and explicit refresh. |
+| Workspace agent | Scoped goals, agent-powered document chat, conversational follow-ups, background tasks, shared-memory reads, reviewed pages/edits, cancellation, and edit undo. |
+| Shared memory | Manual scoped context, search, pinning, attribution, source freshness, revisions, archive/restore, and model-free context preview. |
 | Naming | On-demand title suggestions with model attribution and explicit acceptance. |
 | Scheduled work | Research/Plan topic trackers, daily/weekly cadence, pause/resume, run-now, and saved digests. |
 | Trust | Separate user/external/AI authorship, verified quotes, evidence attribution, and inspectable organizational proposals. |
@@ -318,9 +323,9 @@ For recurring topics, create a Research/Plan tracker with the desired cadence an
 
 ## Document conversation, Refine, and Derive
 
-**Chat** opens a conversation attached to the saved document. After enabling Document chat and selecting an available model, ask follow-up questions or explore alternatives. It uses the saved page and recent turns; it does not perform fresh web retrieval or execute external tools.
+**Chat** opens an agent-powered conversation attached to the saved document. Enable Document chat and select an available model, then ask a question or request an edit. Sthira saves the draft before queueing the request and uses that note plus bounded prior conversation. Existing messages and model attribution remain intact. Document chat grants no implicit access to other pages or live web/external tools.
 
-To request a change, enable **Suggest a document edit**. Inspect current and proposed documents in the review comparison, then choose Apply or Dismiss. Application checks for stale source content and records a reversible change. A discussion reply by itself does not edit the page. Model choice is remembered per document, and saved replies retain producing-model attribution.
+To request a change, enable **Suggest a document edit**. Inspect current and proposed documents in the review comparison, then choose Apply or Dismiss. Application checks for stale source content and records a reversible change. A discussion reply by itself does not edit the page. Keep writing, close chat or switch documents while the task runs; **View agent activity** and **Stop agent task** remain available. Model choice is remembered per document, and saved replies retain producing-model attribution.
 
 **Refine** updates the current document using your critique, with revision/restore protections. **Derive** creates a separate page from saved source content and records lineage. An explicit destination project controls where a derived page belongs; shared sources without unambiguous context stay standalone. Save failures and provider errors must not be presented as completed edits.
 
@@ -340,6 +345,24 @@ For optional model-selected excerpts, open **Settings → Workflows → Resume**
 The optional **Local Resume pack** downloads an app-managed runtime and SmolLM2-360M model only on request (about 410 MB of download data). It is a preview with limited quality, primarily for English, separate from Ollama/LM Studio connections. There is no continuous background summary generation. See [Resume behavior and pack details](docs/features/resume.md).
 
 **Suggest a title** reads a bounded saved excerpt and offers reviewable names using the configured Resume model or an explicit override. Generation does not rename the document. Choose **Use title** to accept; changed source content or a manually changed title can invalidate a suggestion. Small local models may produce misleading wording, so review names before accepting. See [title suggestions](docs/features/title-suggestions.md).
+
+## Shared memory
+
+Open **Memory** in the sidebar, choose **New memory**, and write something worth carrying forward: a preference, a project constraint, or an unresolved question. Choose Workspace, an existing Project, or a Session identifier, optionally pin it and select saved source pages, then **Save memory**. No model is required.
+
+Search titles/content and filter by scope. Select a memory to edit it, inspect original attribution and **History**, or **Archive memory**. Use **Include archived** and **Restore memory** to return it to active context. Scope and captured sources stay fixed; create a new memory to change its source basis. Failed or conflicting saves retain your draft.
+
+**Preview shared context** shows up to 8 eligible entries and 8,000 serialized characters without a model call. Archived entries, unavailable projects, and memories with changed/unavailable sources are excluded. Archive preserves content/history. Desktop memories persist in the vault database; browser preview memories reset on reload. The native workspace agent reads eligible entries within its grants; other existing AI workflows do not use this store automatically. See [shared memory details and limits](docs/features/shared-memory.md).
+
+## Workspace agent
+
+Enable **Workspace agent** in **Settings → Workflows** and choose an enabled model. Open **Agent** in the sidebar, describe your goal, choose Entire workspace or a project, and select the model connection. Workspace-wide memory is a separate optional grant. Selected context is sent to that connection only after **Start working**.
+
+The agent can search/read saved pages, use eligible shared memory, and prepare a new page or document edit. Follow its activity, inspect the result and saved handoff, then **Review proposal** and explicitly Create/Apply or Dismiss. Applied document edits support guarded undo. **Stop run** cancels active work; unfinished runs remain visible as interrupted after startup. Saved runs do not restart themselves.
+
+Use **Continue this conversation** on a saved run to send a follow-up with the same scope and bounded prior context. Each turn keeps its own model, activity and proposal decisions. The checklist icon beside **Agent** opens **Agent tasks** from any view, including the collapsed sidebar: inspect progress, open a result or its original document, or stop a task. You can navigate and keep editing while work continues. Up to three tasks may be active, with one per conversation; background execution requires the desktop app to remain open.
+
+The initial tool set works with saved local knowledge. It has no live web, shell, or external tools, and uses bounded work rather than unlimited autonomous execution. Browser preview does not simulate successful runs. See [agent setup, scope, limits, and lifecycle](docs/features/workspace-agent.md) and [document conversations/background tasks](docs/features/agent-conversations-and-tasks.md).
 
 ## Keyboard shortcuts
 
@@ -370,7 +393,7 @@ The native executable opens **`$HOME/.sthira/vault`** by default, or the exact d
 ```text
 ~/.sthira/
 ├── vault/
-│   ├── sthira.db              # Documents, relationships, history, settings, conversations
+│   ├── sthira.db              # Documents, relationships, history, settings, conversations, memories
 │   ├── sthira.db-wal          # SQLite sidecar while applicable
 │   ├── sthira.db-shm          # SQLite sidecar while applicable
 │   └── <artifact-id>.md       # Markdown with identity/authorship frontmatter
@@ -538,7 +561,23 @@ The authoritative list is [docs/known-limitations.md](docs/known-limitations.md)
 
 ## Roadmap
 
-These items come from current feature contracts and follow-ups. They are intended directions, **not release-date commitments**.
+### Agreed implementation order
+
+These are five new **Agent Extension phases AE1–AE5**, separate from the original phases 1–25. The [extension plan](docs/agent-extension-plan.md) defines scope and acceptance criteria. AE1 has the shared-memory foundation and AE2 has the initial native workspace agent described above; AE3–AE5 remain planned. Native GUI verification limits are tracked separately, and no release dates are promised.
+
+| Phase | Milestone | Intended outcome |
+| --- | --- | --- |
+| AE1 | Shared memory and shared actions | Initial memory UI and shared core actions implemented; scoped context, attribution, history, and source freshness. Native GUI follow-up remains. |
+| AE2 | Native workspace agent | Scoped agent, document chat, follow-ups, background tasks, reviewed pages/edits, cancellation, and undo implemented; native GUI/live-provider follow-up remains. |
+| AE3 | CLI and MCP access | Extend the existing CLI and expose the same supported memory/actions to external agents and applications through MCP. |
+| AE4 | Cross-agent continuity | Continue work inside or outside Sthira with durable handoffs, relevant memory, and preserved artifact identity and history. |
+| AE5 | Migration system and migration agent | Guide imports from Notion, Obsidian, Google Docs, and additional sources, with reviewable mappings, source attribution, and visible import limitations. |
+
+Migration will bring existing knowledge into Sthira while preserving the original source data. Exact supported formats, connector requirements, and content/link/property/media fidelity will be documented as each importer is implemented and verified. Embedded terminals and hosting third-party agent interfaces are outside this sequence.
+
+### Additional follow-ups
+
+These items remain planned or deferred alongside the five milestones:
 
 | Planned or deferred work | Expected improvement |
 | --- | --- |
@@ -550,7 +589,7 @@ These items come from current feature contracts and follow-ups. They are intende
 | Platform/integration validation | Broader native lifecycle/live-provider checks, cross-platform local packs, OS links, and assistive technology. |
 | Model quality evaluation | Better evidence for naming, multilingual use, and Resume coverage, preserving factual fallback and review. |
 
-See [workflow configuration](docs/features/workflow-settings.md) for implementation sequencing. Historical phase plans describe earlier intentions and may not match current policy.
+See [workflow configuration](docs/features/workflow-settings.md) for its feature-specific implementation history and follow-ups. The five milestones above define the agreed product order; historical phase plans may not match current policy.
 
 ## Documentation and contributing
 
@@ -561,6 +600,8 @@ See [workflow configuration](docs/features/workflow-settings.md) for implementat
 | [Product understanding](docs/sthira_product_understanding.md) | Broader product context and motivation. |
 | [Design sources](docs/design/README.md) | Approved visual targets and the design system, separate from running-app screenshots. |
 | [Project overview](docs/design/project-overview.md) / [Connections](docs/design/workspace-connections.md) | Contents browsing and reference semantics. |
+| [Workspace agent](docs/features/workspace-agent.md) / [Conversations and tasks](docs/features/agent-conversations-and-tasks.md) | AE2 goals, document context, follow-ups, background work, review, permissions and recovery. |
+| [Agent Extension plan](docs/agent-extension-plan.md) / [Shared memory](docs/features/shared-memory.md) | Five new phases and the AE1 memory contract, usage, permissions, and limits. |
 | [Workflow settings](docs/features/workflow-settings.md) | Opt-in generation, model resolution, and implementation sequence. |
 | [Resume](docs/features/resume.md) / [Title suggestions](docs/features/title-suggestions.md) | Source packets, pack, cache, naming, and quality limits. |
 | [Document tabs](docs/features/document-tabs.md) / [Internal references](docs/features/internal-references.md) | Session behavior and stable links. |

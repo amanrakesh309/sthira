@@ -14,6 +14,11 @@ import { Sparkles, CheckCircle2, AlertTriangle, ArrowUpRight, ShieldCheck } from
 
 const workflows = [
   {
+    id: 'agent', name: 'Workspace agent',
+    description: 'Work toward a goal using scoped pages and memory, with review before writes.',
+    purpose: 'Enables new goals in Agent. Saved goals stay available while disabled.',
+  },
+  {
     id: 'research',
     name: 'Research',
     description: 'Investigate a question using saved context and optional web sources.',
@@ -176,7 +181,7 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
               <div className="mt-3 pt-3 border-t border-sthira-border/60 flex items-center justify-between text-xs text-sthira-text-muted">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-sthira-text-subtle/50" />
-                  <span>Disabled · Turn switch On to make {name} accessible in the sidebar and workspace.</span>
+                  <span>{id === 'agent' ? 'Disabled · Saved goals remain available. Enable to start new work.' : <>Disabled · Turn switch On to make {name} accessible in the sidebar and workspace.</>}</span>
                 </span>
                 <span className="text-[11px] font-medium text-sthira-text-subtle">No model calls</span>
               </div>

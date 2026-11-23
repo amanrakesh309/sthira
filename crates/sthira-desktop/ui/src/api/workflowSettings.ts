@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from './ipc';
 import type { ProviderEntry, ProviderModelEntry } from '../types/sthira';
 
-export const WORKFLOW_IDS = ['research', 'plan', 'draft', 'chat', 'resume'] as const;
+export const WORKFLOW_IDS = ['research', 'plan', 'draft', 'chat', 'resume', 'agent'] as const;
 export type WorkflowId = typeof WORKFLOW_IDS[number];
 export interface WorkflowSetting { enabled: boolean; model_id: string | null; templates_enabled: boolean }
 export type WorkflowSettings = Record<WorkflowId, WorkflowSetting>;

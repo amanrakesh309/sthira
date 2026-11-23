@@ -31,11 +31,35 @@ impl RequestRegistry {
         }
         None
     }
+    /// Do not replace a live token when a duplicate agent dispatch arrives.
+    pub fn register_unique(&self, request_id: &str) -> Option<CancellationToken> {
+        let mut map = self.tokens.lock().ok()?;
+        if map.contains_key(request_id) {
+            return None;
+        }
+        let token = CancellationToken::new();
+        map.insert(request_id.to_string(), token.clone());
+        Some(token)
+    }
 
     pub fn cancel(&self, request_id: &str) -> bool {
         self.cancel_with_outcome(request_id) == Some(CancelOutcome::Cancelled)
     }
 
+    pub fn cancel_agent_tasks(&self) {
+        if let Ok(map) = self.tokens.lock() {
+            for (id, token) in map.iter() {
+                if id.starts_with("workspace-agent:") {
+                    token.cancel();
+                }
+            }
+        }
+    }
+    pub fn is_registered(&self, request_id: &str) -> bool {
+        self.tokens
+            .lock()
+            .is_ok_and(|map| map.contains_key(request_id))
+    }
     pub fn unregister(&self, request_id: &str) {
         if let Ok(mut map) = self.tokens.lock() {
             map.remove(request_id);

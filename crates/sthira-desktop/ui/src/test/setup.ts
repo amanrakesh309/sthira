@@ -6,7 +6,7 @@ beforeEach(() => { localStorage.removeItem('sthira.tabs.v1:preview'); });
 // Workflow settings/gating suites unmock this hook and test the fresh/off state,
 // persistence, updates and failures through the real hook and API boundary.
 vi.mock('../hooks/useWorkflowSettings', () => {
-  const settings = Object.fromEntries(['research', 'plan', 'draft', 'chat', 'resume'].map(id => [id, { enabled: true, model_id: null, templates_enabled: true }]));
+  const settings = Object.fromEntries(['research', 'plan', 'draft', 'chat', 'resume', 'agent'].map(id => [id, { enabled: true, model_id: null, templates_enabled: true }]));
   return { useWorkflowSettings: () => ({ settings, loading: false, error: null, retry: vi.fn() }) };
 });
 

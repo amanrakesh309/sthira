@@ -56,10 +56,25 @@ pub async fn cmd_discuss_document(
         .and_then(|chat| chat.model_id);
     let model_id =
         crate::workflow_settings::workflow_model(&state.engine, "chat", model_id.or(remembered))?;
+    let run = state
+        .engine
+        .create_document_agent_run(sthira_core::workspace_agent::DocumentAgentGoal {
+            artifact_id: artifact_id.clone(),
+            text,
+            model_id: model_id.ok_or("Choose an available model.")?,
+            propose_edit,
+        })
+        .map_err(|e| e.to_string())?;
+    if let Err(failure) =
+        crate::workspace_agent::start_agent_task(state.inner().clone(), run.id.clone())
+    {
+        let _ = state.engine.fail_agent_run(&run.id, &failure);
+        return Err(failure);
+    }
     state
         .engine
-        .discuss_document(&artifact_id, &text, model_id.as_deref(), propose_edit)
-        .await
+        .document_conversation(&artifact_id, None, "")?
+        .ok_or("Conversation unavailable.".into())
 }
 #[tauri::command]
 pub fn cmd_decide_document_edit(
