@@ -92,10 +92,11 @@ pub fn cmd_review_agent_step(
     run_id: String,
     step_id: String,
     apply: bool,
+    title: Option<String>,
 ) -> Result<AgentRun, String> {
     state
         .engine
-        .review_agent_step(&run_id, &step_id, apply)
+        .review_agent_step_with_title(&run_id, &step_id, apply, title.as_deref())
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -108,4 +109,80 @@ pub fn cmd_undo_agent_edit(
         .engine
         .undo_agent_edit(&run_id, &step_id)
         .map_err(|e| e.to_string())
+}
+
+use sthira_core::workspace_agent::{
+    external::ExternalConnection,
+    handoffs::{ContinueHandoff, Handoff, HandoffDraft, HandoffView},
+};
+#[tauri::command]
+pub fn cmd_list_handoff_connections(
+    state: State<'_, AppState>,
+) -> Result<Vec<ExternalConnection>, String> {
+    state
+        .engine
+        .list_external_connections()
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn cmd_list_agent_handoffs(
+    state: State<'_, AppState>,
+    run_id: Option<String>,
+) -> Result<Vec<Handoff>, String> {
+    state
+        .engine
+        .list_agent_handoffs(run_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn cmd_get_agent_handoff(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<HandoffView, String> {
+    state.engine.agent_handoff(&id).map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn cmd_save_agent_handoff(
+    state: State<'_, AppState>,
+    draft: HandoffDraft,
+) -> Result<HandoffView, String> {
+    state
+        .engine
+        .save_agent_handoff(draft)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn cmd_close_agent_handoff(
+    state: State<'_, AppState>,
+    id: String,
+    expected_revision: i64,
+) -> Result<HandoffView, String> {
+    state
+        .engine
+        .close_agent_handoff(&id, expected_revision)
+        .map_err(|e| e.to_string())
+}
+pub fn handle_continue_agent_handoff(
+    state: AppState,
+    mut input: ContinueHandoff,
+) -> Result<AgentRun, String> {
+    input.model_id =
+        crate::workflow_settings::workflow_model(&state.engine, "agent", Some(input.model_id))?
+            .ok_or("Choose an available model.")?;
+    let run = state
+        .engine
+        .continue_agent_handoff(input)
+        .map_err(|e| e.to_string())?;
+    if run.status == "queued" {
+        start_agent_task(state, run.id)
+    } else {
+        Ok(run)
+    }
+}
+#[tauri::command]
+pub fn cmd_continue_agent_handoff(
+    state: State<'_, AppState>,
+    input: ContinueHandoff,
+) -> Result<AgentRun, String> {
+    handle_continue_agent_handoff(state.inner().clone(), input)
 }

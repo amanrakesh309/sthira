@@ -1,3 +1,4 @@
+import { MigrationPanel } from './MigrationPanel';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
@@ -644,6 +645,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
               </p>
             </div>
 
+            <MigrationPanel onChanged={onVaultMutated}/>
             <div className="space-y-4">
 <details className="settings-danger-zone"><summary>Delete workspace data</summary>              <div className="flex items-center justify-between p-4 bg-red-50/50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-2xl shadow-xs">
                 <div>

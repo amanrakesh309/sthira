@@ -4,18 +4,7 @@ use serde::{Deserialize, Serialize};
 use sthira_core::{Engine, ObjectInstance, ObjectType};
 use tauri::State;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityKind {
-    Artifact,
-    Project,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EntityRef {
-    pub kind: EntityKind,
-    pub id: String,
-}
+pub use sthira_core::workspace_structure::{EntityKind, EntityRef};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceEntity {
@@ -278,40 +267,17 @@ pub fn handle_create_workspace_connection(
     source: EntityRef,
     target: EntityRef,
 ) -> Result<String, String> {
-    if source == target {
-        return Err("An item cannot link to itself.".to_string());
-    }
-    let mut writer = engine.db().writer();
-    let tx = writer.transaction().map_err(|e| e.to_string())?;
-    resolve(&tx, &source)?;
-    resolve(&tx, &target)?;
-    let (sa, sp) = split_ref(&source);
-    let (ta, tp) = split_ref(&target);
-    tx.execute(
-        "INSERT OR IGNORE INTO workspace_links (id, source_artifact_id, source_project_id, target_artifact_id, target_project_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![uuid::Uuid::new_v4().to_string(), sa, sp, ta, tp, engine.clock().now_ms()],
-    ).map_err(|e| e.to_string())?;
-    let id = tx.query_row(
-        "SELECT id FROM workspace_links WHERE source_artifact_id IS ?1 AND source_project_id IS ?2 AND target_artifact_id IS ?3 AND target_project_id IS ?4",
-        params![sa, sp, ta, tp], |r| r.get::<_, String>(0),
-    ).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(id)
+    engine
+        .create_workspace_reference(&source, &target)
+        .map_err(|e| e.to_string())
 }
-
 pub fn handle_delete_workspace_connection(
     engine: &Engine,
     connection_id: String,
 ) -> Result<(), String> {
-    if connection_id.starts_with("lineage:") {
-        return Err("Derivation lineage is preserved with the document.".into());
-    }
     engine
-        .db()
-        .writer()
-        .execute("DELETE FROM workspace_links WHERE id = ?1", [connection_id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .delete_workspace_reference(&connection_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

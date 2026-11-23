@@ -36,7 +36,64 @@ fn agent_workflow_is_opt_in_and_reset_removes_saved_runs() {
     .unwrap();
     let run = engine.create_agent_run(goal()).unwrap();
     assert_eq!(run.status, "queued");
+    let project = engine.create_project("Reset fixture", None).unwrap();
+    engine
+        .set_project_purpose(&project.id, "Disposable reset direction.")
+        .unwrap();
+    assert_eq!(
+        engine
+            .db()
+            .reader()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM workspace_project_versions", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let (_, external_token) = engine
+        .grant_external_access(sthira_core::workspace_agent::external::ExternalGrant {
+            name: "Reset client".into(),
+            whole_workspace: true,
+            project_id: None,
+            workspace_memory: false,
+            can_propose: false,
+            model: "Declared model".into(),
+            provider: "Declared provider".into(),
+        })
+        .unwrap();
+    engine.publish_external_run(&run);
+    let migration = engine
+        .preview_migration(sthira_core::migration::ImportDraft {
+            request_id: "reset-import".into(),
+            source: "markdown".into(),
+            collection: "reset-fixture".into(),
+            project_id: None,
+            files: vec![sthira_core::migration::ImportFile {
+                path: "Reset.md".into(),
+                content: Some("Disposable migration fixture.".into()),
+                problem: None,
+            }],
+        })
+        .unwrap();
+    engine
+        .apply_migration(&migration.id, migration.revision, vec!["Reset.md".into()])
+        .unwrap();
     handle_clear_vault_data(&engine).unwrap();
+    assert_eq!(
+        engine
+            .db()
+            .reader()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM workspace_project_versions", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(engine.list_migrations().unwrap().is_empty());
+    assert!(engine.migration_run(&migration.id).is_err());
+    assert!(engine.external_status(&external_token).is_err());
+    assert!(engine.list_external_connections().unwrap().is_empty());
+    assert_eq!(engine.external_event_cursor().unwrap(), 0);
     assert!(engine.agent_run(&run.id).is_err());
     assert!(engine.list_agent_runs().unwrap().is_empty());
 }
@@ -283,4 +340,90 @@ async fn vault_reset_cancels_workers_and_never_restores_old_tasks_or_conversatio
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn clear_vault_removes_saved_handoffs_contributions_and_external_credentials() {
+    use sthira_core::workspace_agent::{
+        external::{ExternalBatch, ExternalGrant},
+        handoffs::{ExternalContribution, ExternalHandoffAction, HandoffDraft},
+    };
+    let (tmp, engine) = background_fixture();
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Disposable handoff source"),
+            "Keep uncertainty.",
+            None,
+        )
+        .unwrap();
+    let (connection, token) = engine
+        .grant_external_access(ExternalGrant {
+            name: "Reset contributor".into(),
+            whole_workspace: true,
+            project_id: None,
+            workspace_memory: false,
+            can_propose: true,
+            model: "Declared model".into(),
+            provider: "Declared provider".into(),
+        })
+        .unwrap();
+    let value = engine
+        .external_workspace(
+            &token,
+            ExternalBatch {
+                request_id: "origin".into(),
+                goal: "Inspect context.".into(),
+                actions: vec![sthira_core::workspace_agent::AgentAction::ReadPage {
+                    artifact_id: page.id.clone(),
+                }],
+            },
+        )
+        .unwrap();
+    let run: sthira_core::workspace_agent::AgentRun =
+        serde_json::from_value(value["run"].clone()).unwrap();
+    let handoff = engine
+        .save_agent_handoff(HandoffDraft {
+            request_id: "save".into(),
+            run_id: run.id.clone(),
+            expected_run_revision: run.revision,
+            recipient_connection_id: connection.id,
+            title: "Reset handoff".into(),
+            next_steps: "Inspect the source.".into(),
+            open_questions: "Still unresolved.".into(),
+            artifact_ids: vec![page.id],
+            memory_ids: vec![],
+        })
+        .unwrap();
+    engine
+        .external_handoff(
+            &token,
+            ExternalHandoffAction::Contribute {
+                contribution: ExternalContribution {
+                    handoff_id: handoff.handoff.id.clone(),
+                    expected_revision: handoff.handoff.revision,
+                    request_id: "contribute".into(),
+                    summary: "Source remains uncertain.".into(),
+                    next_steps: "Review evidence.".into(),
+                    open_questions: "What is missing?".into(),
+                    actions: vec![],
+                },
+            },
+        )
+        .unwrap();
+    handle_clear_vault_data(&engine).unwrap();
+    assert!(engine.agent_handoff(&handoff.handoff.id).is_err());
+    assert!(engine.external_status(&token).is_err());
+    assert!(engine.list_agent_handoffs(None).unwrap().is_empty());
+    drop(engine);
+    let reopened = Engine::open(
+        tmp.path().join("sthira.db"),
+        tmp.path().join("vault"),
+        Arc::new(FakeClock::new(2000)),
+        Arc::new(DeterministicFakeModel::new("unused")),
+    )
+    .unwrap();
+    assert!(reopened.list_agent_handoffs(None).unwrap().is_empty());
+    assert!(reopened.list_external_connections().unwrap().is_empty());
 }

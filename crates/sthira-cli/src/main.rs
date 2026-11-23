@@ -1,3 +1,4 @@
+mod external;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -30,7 +31,7 @@ impl ModelProvider for CliModel {
         _system_prompt: &str,
         _user_prompt: &str,
     ) -> Result<String, CoreError> {
-        Ok("{}".to_string())
+        Err(CoreError::Model("No generation provider is configured in the CLI. Use the desktop model workflow or an external agent.".into()))
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
@@ -70,9 +71,17 @@ COMMANDS:
     history <project_id>            Display project history milestones and evolution
     reconcile                       Reconcile filesystem Markdown files with SQLite database
     audit                           Run live multi-model benchmark against Ollama endpoints
+    init                            Explicitly initialize a new vault
+    access grant|list|revoke         Manage scoped external credentials (owner only)
+    api schema|call                 Discover/call JSON workspace and memory tools
+    mcp                             Run the authenticated stdio MCP server
+    review show|apply|dismiss|undo   Inspect and review a saved agent proposal (owner only)
+    handoff list|read|save|close|continue  Owner saved handoff and continuation actions
+    migration preview|list|read|apply|cancel|rollback  Review local export imports
     help                            Display this help message
 
 OPTIONS:
+    --workspace <directory>         Use desktop layout: <directory>/sthira.db + Markdown
     --db <path>                     Path to SQLite database (default: ./sthira.db)
     --vault <path>                  Path to vault directory (default: ./.sthira_vault/artifacts)
 "#
@@ -82,6 +91,10 @@ OPTIONS:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+    if external::dispatch(&args).await? {
+        return Ok(());
+    }
+
     if args.len() < 2 || args[1] == "help" || args[1] == "--help" || args[1] == "-h" {
         print_usage();
         return Ok(());
@@ -92,7 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cmd_idx = 1;
     while cmd_idx < args.len() {
-        if args[cmd_idx] == "--db" && cmd_idx + 1 < args.len() {
+        if args[cmd_idx] == "--workspace" && cmd_idx + 1 < args.len() {
+            vault_dir = PathBuf::from(&args[cmd_idx + 1]);
+            db_path = vault_dir.join("sthira.db");
+            cmd_idx += 2;
+        } else if args[cmd_idx] == "--db" && cmd_idx + 1 < args.len() {
             db_path = PathBuf::from(&args[cmd_idx + 1]);
             cmd_idx += 2;
         } else if args[cmd_idx] == "--vault" && cmd_idx + 1 < args.len() {
@@ -110,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let clock = Arc::new(SystemClock);
     let model = Arc::new(CliModel);
-    let engine = Engine::open(&db_path, &vault_dir, clock.clone(), model)?;
+    let engine = Engine::attach(&db_path, &vault_dir, clock.clone(), model)?;
 
     let command = &args[cmd_idx];
     match command.as_str() {

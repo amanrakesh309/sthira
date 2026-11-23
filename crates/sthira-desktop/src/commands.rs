@@ -1338,7 +1338,16 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
                 .collect()
         };
 
+        tx.execute("DELETE FROM migration_sources;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM migration_imports;", [])
+            .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM agent_runs;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM external_connections;", [])
+            .map_err(|e| e.to_string())?;
+        // Keep the notification sequence monotonic across a clear while a bridge is running.
+        tx.execute("DELETE FROM external_events;", [])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM shared_memories;", [])
             .map_err(|e| e.to_string())?;
@@ -1353,6 +1362,8 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
         tx.execute("DELETE FROM artifact_links;", [])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM project_artifacts;", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM workspace_relation_versions;", [])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM project_purposes;", [])
             .map_err(|e| e.to_string())?;
@@ -1411,6 +1422,8 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+        tx.execute("DELETE FROM workspace_project_versions;", [])
+            .map_err(|e| e.to_string())?;
         Engine::rotate_vault_instance_id_tx(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         files

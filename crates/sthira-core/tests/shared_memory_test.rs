@@ -114,7 +114,7 @@ fn migration_reopen_and_attribution_are_durable_without_touching_notes() {
         writer
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        22
+        27
     );
     assert_eq!(
         writer

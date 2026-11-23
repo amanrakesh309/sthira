@@ -10,7 +10,7 @@ Sending first saves the current draft through the editor's existing save path. A
 
 Document requests are restricted to **that saved document and its conversation**. They do not inherit workspace/project page access or workspace-wide memory. They can read memory explicitly placed in the thread's session scope. Use the Agent workspace and its explicit scope controls for broader work.
 
-A question can finish in one model action using the supplied saved-document context. **Suggest a document edit** permits a reviewed edit to the same document; leaving it unchecked makes the request read-only. Document tasks cannot create other pages. Related-page scope expansion, selection-specific editing and additional tools are outside this batch.
+A question can finish in one model action using the supplied saved-document context. **Suggest a document edit** permits a reviewed edit to the same document; leaving it unchecked makes the request read-only. Document tasks cannot create other pages. The next [workflow proposal batch](agent-workflow-proposals.md) also permits reviewed Refine/title proposals for this document when the edit option is enabled; review those in Agent activity. Related-page scope expansion, selection-specific editing and additional tools are outside this batch.
 
 After the task is queued, keep typing in the editor or compose the next question. One task runs per conversation at a time. Closing chat, switching tabs, or navigating elsewhere leaves the native task running. The acknowledged message stays in history; a newer unsent message stays in its document/vault draft namespace. Failure after queueing is saved on the attempted turn and visible in task history.
 

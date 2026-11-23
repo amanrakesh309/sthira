@@ -74,14 +74,14 @@ These capabilities have implementations in the repository. Platform coverage and
 | Research | Streaming synthesis using saved context and optional web retrieval; source inspection and Import to Vault. |
 | AI editing | Document conversation, reviewable edit proposals, Refine, and Derive with source lineage. |
 | Return to work | Factual Resume, optional source-validated model excerpts, cached reviews, and explicit refresh. |
-| Workspace agent | Scoped goals, agent-powered document chat, conversational follow-ups, background tasks, shared-memory reads, reviewed pages/edits, cancellation, and edit undo. |
+| Workspace agent | Scoped goals, document chat, follow-ups, background tasks, reviewed pages/edits, Refine/Derive/titles/memory proposals, project memberships/page references, reviewed project creation/direction/moves, cancellation, and guarded undo. |
 | Shared memory | Manual scoped context, search, pinning, attribution, source freshness, revisions, archive/restore, and model-free context preview. |
 | Naming | On-demand title suggestions with model attribution and explicit acceptance. |
 | Scheduled work | Research/Plan topic trackers, daily/weekly cadence, pause/resume, run-now, and saved digests. |
 | Trust | Separate user/external/AI authorship, verified quotes, evidence attribution, and inspectable organizational proposals. |
 | Storage | Local SQLite, Markdown mirrors, reconciliation, FTS5 indexing, and vector-search infrastructure through sqlite-vec. |
 | Appearance | Light/dark themes, bundled watercolor landscapes, botanical accents, paper grain, contour textures, and neutral return-to-work language. |
-| CLI | Capture, projects, routing, legacy resumption, history, and vault reconciliation. |
+| CLI and MCP | Scoped JSON tools and local stdio MCP, revocable credentials, reviewed workspace proposals, plus owner storage/routing commands. |
 
 ## Install and run
 
@@ -358,9 +358,19 @@ Search titles/content and filter by scope. Select a memory to edit it, inspect o
 
 Enable **Workspace agent** in **Settings → Workflows** and choose an enabled model. Open **Agent** in the sidebar, describe your goal, choose Entire workspace or a project, and select the model connection. Workspace-wide memory is a separate optional grant. Selected context is sent to that connection only after **Start working**.
 
-The agent can search/read saved pages, use eligible shared memory, and prepare a new page or document edit. Follow its activity, inspect the result and saved handoff, then **Review proposal** and explicitly Create/Apply or Dismiss. Applied document edits support guarded undo. **Stop run** cancels active work; unfinished runs remain visible as interrupted after startup. Saved runs do not restart themselves.
+The agent can search/read saved pages, use eligible shared memory, prepare pages and edits, and propose **Refine, Derive, title suggestions and shared-memory updates**. Follow its activity, inspect the result and saved handoff, then **Review proposal** and explicitly Create/Apply or Dismiss. Applied document edits support guarded undo. **Stop run** cancels active work; unfinished runs remain visible as interrupted after startup. Saved runs do not restart themselves.
 
 Use **Continue this conversation** on a saved run to send a follow-up with the same scope and bounded prior context. Each turn keeps its own model, activity and proposal decisions. The checklist icon beside **Agent** opens **Agent tasks** from any view, including the collapsed sidebar: inspect progress, open a result or its original document, or stop a task. You can navigate and keep editing while work continues. Up to three tasks may be active, with one per conversation; background execution requires the desktop app to remain open.
+
+For project organization, ask “Add my release research page to Release planning and propose a reference to its risks page.” The agent can inspect project metadata and prepare reviewed membership/reference changes. These preserve page identity, content and unrelated relationships, with guarded **Undo organization change**. See [organization usage and scope](docs/features/agent-organization.md).
+
+You can also ask “Create a Release planning project,” “Clarify this project’s purpose,” or “Move this page from Research to Release planning.” Project creation and moves require **Entire workspace**; purpose updates stay within the selected scope and retain AI provenance. Review before applying, then use guarded **Undo project change** where eligible. New project identities become available after acceptance for follow-up work. See [project workflow usage and recovery](docs/features/agent-project-workflows.md).
+
+External agents can now connect through a scoped JSON CLI API or local stdio MCP server. They can read authorized pages/memory and prepare the same reviewed workspace proposals. Connection revocation and owner approval stay separate from model tools. See [CLI/MCP setup, schemas and examples](docs/features/cli-and-mcp.md).
+
+For deliberate task transfers, use **Saved handoffs** in a finished workspace run: choose a scoped connection and source references, inspect external contributions and their review states, then **Continue in Sthira** with an available model. Source changes are visible and rechecked. See [cross-agent continuity](docs/features/cross-agent-continuity.md).
+
+For example, ask “Refine my research note, derive an execution plan, suggest clearer titles, and propose a project memory of the open questions.” Refine retains its guarded restore path; Derive records source lineage; title review requires choosing a saved suggestion; memory changes preserve authorship, source evidence and revision history. All require explicit review. See [workflow proposal usage and recovery](docs/features/agent-workflow-proposals.md).
 
 The initial tool set works with saved local knowledge. It has no live web, shell, or external tools, and uses bounded work rather than unlimited autonomous execution. Browser preview does not simulate successful runs. See [agent setup, scope, limits, and lifecycle](docs/features/workspace-agent.md) and [document conversations/background tasks](docs/features/agent-conversations-and-tasks.md).
 
@@ -401,7 +411,7 @@ The native executable opens **`$HOME/.sthira/vault`** by default, or the exact d
     └── memory_mirrors/        # Derived memory exports, when generated
 ```
 
-The legacy CLI defaults differ: `./sthira.db` and `./.sthira_vault/artifacts`. Supply **both** `--db` and `--vault` to operate on a native vault; changing `STHIRA_VAULT_DIR` alone does not configure the CLI. Derived-memory paths depend on the vault layout; the standard native layout uses the sibling directory shown above.
+The legacy CLI defaults differ: `./sthira.db` and `./.sthira_vault/artifacts`. Use `--workspace /absolute/path/to/vault` for the native layout, or supply **both** `--db` and `--vault` for separate paths; changing `STHIRA_VAULT_DIR` alone does not configure the CLI. Derived-memory paths depend on the vault layout; the standard native layout uses the sibling directory shown above.
 
 Markdown files are portable content; SQLite retains additional state such as connections, project membership, properties, revisions, and conversations. Keep frontmatter IDs intact when editing files externally. Reconciliation detects imports, renames, and conflicting external changes; it is not multi-device synchronization. Derived memory is marked `STHIRA_DERIVED_MEMORY: DO_NOT_INGEST` and excluded from normal ingestion to avoid recursively treating summaries as original notes.
 
@@ -419,6 +429,10 @@ The current implementation stores provider/search credentials in the local datab
 
 Tab metadata and some panel/theme preferences use WebView-local storage. A vault backup does not guarantee restoration of every UI preference or unsent draft. Text typed immediately before termination, before autosave completes, may be lost. **Reset Vault** in Settings is destructive, not a backup or recovery feature.
 
+## Import existing knowledge
+
+Open **Settings → Workspace & Data → Import existing knowledge** to inventory and review local Notion Markdown, Obsidian Markdown, Google Docs Markdown/plain text or other text exports. Source files remain untouched; duplicate and changed-source conflicts stay visible. See [migration formats, limits and recovery](docs/features/migration.md).
+
 ## Command-line usage
 
 From the repository root:
@@ -435,6 +449,9 @@ cargo build --locked -p sthira-cli --bin sthira-cli
 
 # Options go BEFORE the command.
 ./target/debug/sthira-cli --db "$cli_demo_dir/sthira.db" \
+  --vault "$cli_demo_dir/artifacts" init
+
+./target/debug/sthira-cli --db "$cli_demo_dir/sthira.db" \
   --vault "$cli_demo_dir/artifacts" capture "Compare approaches for a reading journal."
 
 ./target/debug/sthira-cli --db "$cli_demo_dir/sthira.db" \
@@ -448,6 +465,11 @@ Use the same `--db` and `--vault` before each additional command:
 
 | Command | Purpose |
 | --- | --- |
+| `init` | Explicitly initialize a new workspace; existing commands require an existing vault. |
+| `api schema` / `api call TOOL JSON` | Discover and call scoped JSON tools. |
+| `mcp` | Serve authenticated local stdio MCP. |
+| `access grant` / `list` / `revoke` | Manage external connections as the local owner. |
+| `review show` / `apply` / `dismiss` / `undo` | Inspect and decide saved proposals as the local owner. |
 | `home` | List threads, loose captures, and pending proposal count. |
 | `capture "text"` | Save a user-authored note. |
 | `route "query"` | Classify intent through the read-only router. |
@@ -458,7 +480,7 @@ Use the same `--db` and `--vault` before each additional command:
 | `reconcile` | Reconcile Markdown and database state; this can write/import files. |
 | `audit` | Invoke the separate live Ollama model-audit binary; requires its runtime setup. |
 
-The CLI currently uses a minimal `CliModel` with placeholder JSON generation and deterministic embeddings. It is a storage/routing interface, **not a headless equivalent of the desktop's configured AI workflows**. CLI Resume also differs from the newer desktop factual/extractive implementation. Do not infer live model quality from CLI output.
+The legacy storage/routing commands use deterministic embeddings and report that CLI generation has no configured provider; they are not a headless equivalent of the desktop's configured AI workflows. CLI Resume also differs from the newer desktop factual/extractive implementation. The authenticated JSON API and stdio MCP server accept work from an external agent without dispatching a local model. See [connection setup, tool schemas, examples and owner review](docs/features/cli-and-mcp.md).
 
 ## Architecture and repository map
 
@@ -544,7 +566,7 @@ There is no gate 8 in the current mapping. Generated gate reports and per-run sc
 | Search is blocked or rate-limited | Review the error, use another available provider, or use explicitly labeled local context. |
 | Model returns unreadable output | Retry or choose a model that follows the required format. A failed request is not a completed edit. |
 | `Saved (mirror warning)` | SQLite saved the page but its Markdown mirror/bookkeeping needs repair. Check permissions/disk space and use Retry mirror sync. |
-| CLI and desktop show different notes | Defaults differ. Set both CLI paths to the actual intended vault. |
+| CLI and desktop show different notes | Defaults differ. Use `--workspace` or set both CLI paths to the actual intended vault. |
 | Browser loses notes or shows samples | Fallback APIs are incomplete. Use native execution for persistence and real models. |
 
 ## Current limitations
@@ -563,15 +585,15 @@ The authoritative list is [docs/known-limitations.md](docs/known-limitations.md)
 
 ### Agreed implementation order
 
-These are five new **Agent Extension phases AE1–AE5**, separate from the original phases 1–25. The [extension plan](docs/agent-extension-plan.md) defines scope and acceptance criteria. AE1 has the shared-memory foundation and AE2 has the initial native workspace agent described above; AE3–AE5 remain planned. Native GUI verification limits are tracked separately, and no release dates are promised.
+These are five new **Agent Extension phases AE1–AE5**, separate from the original phases 1–25. The [extension plan](docs/agent-extension-plan.md) defines scope and acceptance criteria. AE1 has the shared-memory foundation, AE2 has the native workspace agent described above, AE3 has a local CLI/MCP adapter foundation, and AE4 has explicit saved handoffs and native continuation; AE5 has a reviewed local-export migration foundation. Native GUI verification limits are tracked separately, and no release dates are promised.
 
 | Phase | Milestone | Intended outcome |
 | --- | --- | --- |
 | AE1 | Shared memory and shared actions | Initial memory UI and shared core actions implemented; scoped context, attribution, history, and source freshness. Native GUI follow-up remains. |
-| AE2 | Native workspace agent | Scoped agent, document chat, follow-ups, background tasks, reviewed pages/edits, cancellation, and undo implemented; native GUI/live-provider follow-up remains. |
-| AE3 | CLI and MCP access | Extend the existing CLI and expose the same supported memory/actions to external agents and applications through MCP. |
-| AE4 | Cross-agent continuity | Continue work inside or outside Sthira with durable handoffs, relevant memory, and preserved artifact identity and history. |
-| AE5 | Migration system and migration agent | Guide imports from Notion, Obsidian, Google Docs, and additional sources, with reviewable mappings, source attribution, and visible import limitations. |
+| AE2 | Native workspace agent | Scoped agent, document chat, follow-ups, background tasks, reviewed pages/edits, Refine/Derive/titles/memory proposals, reviewed memberships/references/project creation/direction/moves, cancellation, and guarded undo implemented; native GUI/live-provider follow-up remains. |
+| AE3 | CLI and MCP access | Local scoped/revocable CLI and stdio MCP adapters, shared proposals and owner review implemented; native GUI/client/platform follow-up remains. |
+| AE4 | Cross-agent continuity | Explicit saved handoffs, scoped external contributions, current source/review state and owner-controlled native continuation implemented; native GUI/live-client follow-up remains. |
+| AE5 | Migration system and agent | Reviewed local Markdown/text export imports, source provenance, retry receipts and guarded rollback implemented; connectors, rich formats and model-led planning remain follow-ups. |
 
 Migration will bring existing knowledge into Sthira while preserving the original source data. Exact supported formats, connector requirements, and content/link/property/media fidelity will be documented as each importer is implemented and verified. Embedded terminals and hosting third-party agent interfaces are outside this sequence.
 
@@ -601,6 +623,11 @@ See [workflow configuration](docs/features/workflow-settings.md) for its feature
 | [Design sources](docs/design/README.md) | Approved visual targets and the design system, separate from running-app screenshots. |
 | [Project overview](docs/design/project-overview.md) / [Connections](docs/design/workspace-connections.md) | Contents browsing and reference semantics. |
 | [Workspace agent](docs/features/workspace-agent.md) / [Conversations and tasks](docs/features/agent-conversations-and-tasks.md) | AE2 goals, document context, follow-ups, background work, review, permissions and recovery. |
+| [Agent organization](docs/features/agent-organization.md) | Project context, reviewed membership/reference changes, scope, stale-state checks and undo. |
+| [Migration assistant](docs/features/migration.md) | Local export preparation, import review, supported mappings, provenance and rollback. |
+| [Cross-agent continuity](docs/features/cross-agent-continuity.md) | Saved handoffs, attributed external contributions, source conflicts and returning to Sthira. |
+| [CLI and MCP access](docs/features/cli-and-mcp.md) | Local connection setup, scoped credentials, JSON tools, stdio MCP, owner review and revocation. |
+| [Agent project workflows](docs/features/agent-project-workflows.md) | Reviewed project creation, AI direction history, atomic moves and guarded recovery. |
 | [Agent Extension plan](docs/agent-extension-plan.md) / [Shared memory](docs/features/shared-memory.md) | Five new phases and the AE1 memory contract, usage, permissions, and limits. |
 | [Workflow settings](docs/features/workflow-settings.md) | Opt-in generation, model resolution, and implementation sequence. |
 | [Resume](docs/features/resume.md) / [Title suggestions](docs/features/title-suggestions.md) | Source packets, pack, cache, naming, and quality limits. |

@@ -374,7 +374,7 @@ fn restart_marks_unfinished_runs_and_disabled_or_missing_models_never_dispatch()
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        22
+        27
     );
 }
 #[tokio::test]
@@ -851,3 +851,429 @@ fn v21_upgrade_preserves_runs_and_legacy_chat_with_repeatable_thread_defaults() 
         );
     }
 }
+
+#[tokio::test]
+async fn reviewed_refine_derive_and_titles_use_domain_history_and_reject_stale_competitors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let project = engine.create_project("Workflow review", None).unwrap();
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Original research"),
+            "# Original research\n\nMaybe ship next year.",
+            None,
+        )
+        .unwrap();
+    engine
+        .attach_artifact(&project.id, &page.id, "user_explicit", None)
+        .unwrap();
+    let (url,server)=fixture(vec![
+        json!({"type":"read_page","artifact_id":page.id}),
+        json!({"type":"propose_refine","artifact_id":page.id,"content_md":"# Original research\n\nShipping next year remains uncertain."}),
+        json!({"type":"propose_derive","artifact_id":page.id,"title":"Research execution plan","content_md":"Validate timing before scheduling.","derivation_type":"plan_from_research"}),
+        json!({"type":"propose_titles","artifact_id":page.id,"titles":["Uncertain release timing","Research release questions"]}),
+        json!({"type":"finish","summary":"Three proposals await review.","handoff":"Timing remains unresolved."}),
+    ]).await;
+    configure(&engine, &url);
+    let run = engine.create_agent_run(goal(Some(&project.id))).unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(run.status, "review");
+    assert_eq!(count(&engine, "artifacts"), 1);
+    assert_eq!(
+        engine.get_artifact(&page.id).unwrap().content_md,
+        page.content_md
+    );
+    let derived = &run.steps[2];
+    let approved = engine
+        .review_agent_step(&run.id, &derived.id, true)
+        .unwrap();
+    let child_id = approved.steps[2].artifact_id.as_ref().unwrap();
+    let child = engine.get_artifact(child_id).unwrap();
+    assert_eq!(
+        child.derived_from_artifact_id.as_deref(),
+        Some(page.id.as_str())
+    );
+    assert_eq!(child.derivation_type.as_deref(), Some("plan_from_research"));
+    assert_eq!(child.authorship, Authorship::AiGenerated);
+    assert!(engine
+        .review_agent_step(&run.id, &derived.id, true)
+        .is_err());
+    assert_eq!(count(&engine, "artifacts"), 2);
+    let refined = engine
+        .review_agent_step(&run.id, &run.steps[1].id, true)
+        .unwrap();
+    assert!(refined.steps[1].change_set_id.is_some());
+    let updated = engine.get_artifact(&page.id).unwrap();
+    assert_eq!(updated.authorship, Authorship::User);
+    assert_eq!(updated.title, page.title);
+    assert!(engine
+        .review_agent_step_with_title(
+            &run.id,
+            &run.steps[3].id,
+            true,
+            Some("Uncertain release timing")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("changed"));
+    let undone = engine.undo_agent_edit(&run.id, &run.steps[1].id).unwrap();
+    assert_eq!(undone.steps[1].state, "reverted");
+    assert_eq!(undone.steps[1].result["undone"], true);
+    assert_eq!(
+        engine.get_artifact(&page.id).unwrap().content_md,
+        page.content_md
+    );
+    assert!(engine.undo_agent_edit(&run.id, &run.steps[1].id).is_err());
+}
+
+#[tokio::test]
+async fn titles_require_an_exact_owner_choice_and_preserve_matching_heading_behavior() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Old research title"),
+            "# Old research title\n\nPossible release, not confirmed.",
+            None,
+        )
+        .unwrap();
+    let (url,server)=fixture(vec![json!({"type":"read_page","artifact_id":page.id}),json!({"type":"propose_titles","artifact_id":page.id,"titles":["Possible release schedule","Open release questions"]}),json!({"type":"finish","summary":"Choose a title.","handoff":"No release confirmed."})]).await;
+    configure(&engine, &url);
+    let run = engine.create_agent_run(goal(None)).unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    let step = &run.steps[1];
+    assert!(engine.review_agent_step(&run.id, &step.id, true).is_err());
+    assert!(engine
+        .review_agent_step_with_title(&run.id, &step.id, true, Some("Forged approved release"))
+        .is_err());
+    assert_eq!(engine.agent_run(&run.id).unwrap().steps[1].state, "pending");
+    let applied = engine
+        .review_agent_step_with_title(&run.id, &step.id, true, Some("Open release questions"))
+        .unwrap();
+    assert_eq!(applied.status, "completed");
+    assert_eq!(
+        applied.steps[1].result["applied_title"],
+        "Open release questions"
+    );
+    let renamed = engine.get_artifact(&page.id).unwrap();
+    assert_eq!(renamed.id, page.id);
+    assert_eq!(renamed.authorship, Authorship::User);
+    assert_eq!(
+        renamed.content_md,
+        "# Open release questions\n\nPossible release, not confirmed."
+    );
+    assert!(engine
+        .review_agent_step_with_title(&run.id, &step.id, true, Some("Possible release schedule"))
+        .is_err());
+}
+
+#[tokio::test]
+async fn reviewed_memory_preserves_original_author_and_records_agent_editor_and_sources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let project = engine.create_project("Memory review", None).unwrap();
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Source context"),
+            "Release date remains uncertain.",
+            None,
+        )
+        .unwrap();
+    engine
+        .attach_artifact(&project.id, &page.id, "user_explicit", None)
+        .unwrap();
+    let original = match engine
+        .execute_memory_action(
+            &MemoryAccess::owner(),
+            MemoryAction::Create {
+                draft: MemoryDraft {
+                    scope: MemoryScope::Project(project.id.clone()),
+                    title: "Open question".into(),
+                    body: "Date undecided.".into(),
+                    source_ids: vec![page.id.clone()],
+                    pinned: true,
+                },
+            },
+        )
+        .unwrap()
+    {
+        MemoryResult::Entry(e) => e,
+        _ => unreachable!(),
+    };
+    let (url,server)=fixture(vec![
+        json!({"type":"read_page","artifact_id":page.id}),
+        json!({"type":"propose_memory_create","scope":"workspace","title":"Invalid scope","body":"Cannot publish beyond grants.","source_ids":[]}),
+        json!({"type":"propose_memory_create","scope":"project","title":"Planning uncertainty","body":"Confirm the release date before planning.","source_ids":[page.id]}),
+        json!({"type":"read_memory","id":original.id}),
+        json!({"type":"propose_memory_update","id":original.id,"expected_version":original.version,"title":"Release question","body":"Release timing remains unresolved."}),
+        json!({"type":"propose_memory_update","id":original.id,"expected_version":original.version,"title":"Competing release question","body":"An obsolete competing revision."}),
+        json!({"type":"finish","summary":"Memory proposals await review.","handoff":"Review before publishing."}),
+    ]).await;
+    configure(&engine, &url);
+    let run = engine.create_agent_run(goal(Some(&project.id))).unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert!(run.steps[1].result.get("error").is_some());
+    assert_eq!(count(&engine, "shared_memories"), 1);
+    let approved = engine
+        .review_agent_step(&run.id, &run.steps[2].id, true)
+        .unwrap();
+    let id = approved.steps[2].result["memory_id"].as_str().unwrap();
+    let created = match engine
+        .execute_memory_action(&MemoryAccess::owner(), MemoryAction::Read { id: id.into() })
+        .unwrap()
+    {
+        MemoryResult::Entry(e) => e,
+        _ => unreachable!(),
+    };
+    assert!(matches!(created.author, MemoryActor::Agent { .. }));
+    assert_eq!(created.sources[0].content_hash, page.content_hash);
+    assert_eq!(created.scope, MemoryScope::Project(project.id.clone()));
+    let approved = engine
+        .review_agent_step(&run.id, &run.steps[4].id, true)
+        .unwrap();
+    assert_eq!(approved.status, "review");
+    assert!(engine
+        .review_agent_step(&run.id, &run.steps[5].id, true)
+        .is_err());
+    assert_eq!(engine.agent_run(&run.id).unwrap().steps[5].state, "pending");
+    assert_eq!(
+        engine
+            .review_agent_step(&run.id, &run.steps[5].id, false)
+            .unwrap()
+            .status,
+        "completed"
+    );
+    let updated = match engine
+        .execute_memory_action(
+            &MemoryAccess::owner(),
+            MemoryAction::Read {
+                id: original.id.clone(),
+            },
+        )
+        .unwrap()
+    {
+        MemoryResult::Entry(e) => e,
+        _ => unreachable!(),
+    };
+    assert_eq!(updated.author, MemoryActor::User);
+    assert_eq!(updated.version, 2);
+    assert!(updated.pinned);
+    assert_eq!(updated.sources[0].content_hash, page.content_hash);
+    let history = match engine
+        .execute_memory_action(
+            &MemoryAccess::owner(),
+            MemoryAction::History {
+                id: original.id.clone(),
+            },
+        )
+        .unwrap()
+    {
+        MemoryResult::History(h) => h,
+        _ => unreachable!(),
+    };
+    assert!(matches!(history[0].editor, MemoryActor::Agent { .. }));
+    assert!(engine
+        .review_agent_step(&run.id, &run.steps[4].id, true)
+        .is_err());
+    assert_eq!(count(&engine, "shared_memories"), 2);
+    drop(engine);
+    let reopened = open(tmp.path());
+    assert_eq!(
+        reopened.agent_run(&run.id).unwrap().steps[4].state,
+        "applied"
+    );
+}
+
+#[tokio::test]
+async fn stale_memory_and_source_changes_cannot_consume_review_receipts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let project = engine.create_project("Scoped evidence", None).unwrap();
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Evidence note"),
+            "Original evidence.",
+            None,
+        )
+        .unwrap();
+    engine
+        .attach_artifact(&project.id, &page.id, "user_explicit", None)
+        .unwrap();
+    let (url,server)=fixture(vec![json!({"type":"read_page","artifact_id":page.id}),json!({"type":"propose_memory_create","scope":"project","title":"Evidence memory","body":"Original evidence only.","source_ids":[page.id]}),json!({"type":"propose_derive","artifact_id":page.id,"title":"Evidence checklist","content_md":"Verify original evidence.","derivation_type":"extract_tasks"}),json!({"type":"finish","summary":"Awaiting review.","handoff":"Check evidence."})]).await;
+    configure(&engine, &url);
+    let run = engine.create_agent_run(goal(Some(&project.id))).unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    engine.db().writer().execute("UPDATE artifacts SET content_md='Changed evidence.',version=version+1,content_hash='changed' WHERE id=?1",[&page.id]).unwrap();
+    assert!(engine
+        .review_agent_step(&run.id, &run.steps[1].id, true)
+        .is_err());
+    assert!(engine
+        .review_agent_step(&run.id, &run.steps[2].id, true)
+        .is_err());
+    assert_eq!(count(&engine, "shared_memories"), 0);
+    assert_eq!(count(&engine, "artifacts"), 1);
+    let saved = engine.agent_run(&run.id).unwrap();
+    assert_eq!(saved.steps[1].state, "pending");
+    assert_eq!(saved.steps[2].state, "pending");
+    engine
+        .review_agent_step(&run.id, &run.steps[1].id, false)
+        .unwrap();
+    assert_eq!(count(&engine, "shared_memories"), 0);
+}
+
+#[tokio::test]
+async fn document_grants_cannot_be_expanded_by_workflow_tool_arguments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Private document"),
+            "Do not change this.",
+            None,
+        )
+        .unwrap();
+    let (url,server)=fixture(vec![json!({"type":"propose_refine","artifact_id":page.id,"content_md":"Forged refinement."}),json!({"type":"propose_titles","artifact_id":page.id,"titles":["Forged new title"]}),json!({"type":"propose_derive","artifact_id":page.id,"title":"Forbidden new page","content_md":"Outside document grant.","derivation_type":"extract_tasks"}),json!({"type":"propose_memory_create","scope":"session","title":"Forbidden memory","body":"Outside document grant.","source_ids":[]}),json!({"type":"finish","summary":"Read-only answer.","handoff":"No changes."})]).await;
+    configure(&engine, &url);
+    engine
+        .db()
+        .writer()
+        .execute(
+            "INSERT INTO workflow_settings(workflow,enabled) VALUES('chat',1)",
+            [],
+        )
+        .unwrap();
+    let run = engine
+        .create_document_agent_run(DocumentAgentGoal {
+            artifact_id: page.id.clone(),
+            text: "Read only".into(),
+            model_id: "fixture-model".into(),
+            propose_edit: false,
+        })
+        .unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    for step in &run.steps[..4] {
+        assert!(step.result.get("error").is_some());
+        assert_eq!(step.state, "done");
+    }
+    assert_eq!(run.status, "completed");
+    assert_eq!(count(&engine, "artifacts"), 1);
+    assert_eq!(count(&engine, "shared_memories"), 0);
+    assert_eq!(
+        engine.get_artifact(&page.id).unwrap().content_md,
+        page.content_md
+    );
+}
+
+#[tokio::test]
+async fn workflow_review_rolls_back_receipts_on_domain_failure_and_consumes_derive_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    let page = engine
+        .create_artifact(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Original research title"),
+            "Original research content.",
+            None,
+        )
+        .unwrap();
+    let (url,server)=fixture(vec![
+        json!({"type":"read_page","artifact_id":page.id}),
+        json!({"type":"propose_refine","artifact_id":page.id,"content_md":"Refined research content."}),
+        json!({"type":"propose_derive","artifact_id":page.id,"title":"Research execution plan","content_md":"Validate evidence.","derivation_type":"plan_from_research"}),
+        json!({"type":"propose_titles","artifact_id":page.id,"titles":["Unresolved research questions"]}),
+        json!({"type":"propose_memory_create","scope":"session","title":"Open research question","body":"Evidence still needs verification.","source_ids":[page.id]}),
+        json!({"type":"finish","summary":"Review the proposals.","handoff":"Keep uncertainty."}),
+    ]).await;
+    configure(&engine, &url);
+    let run = engine.create_agent_run(goal(None)).unwrap();
+    let run = engine
+        .execute_agent_run(&run.id, &CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    engine.db().writer().execute_batch("CREATE TRIGGER reject_workflow_revision BEFORE INSERT ON artifact_revisions BEGIN SELECT RAISE(ABORT,'fixture document failure'); END; CREATE TRIGGER reject_memory_revision BEFORE INSERT ON shared_memory_revisions BEGIN SELECT RAISE(ABORT,'fixture memory failure'); END;").unwrap();
+    for step in &run.steps[1..5] {
+        assert!(engine
+            .review_agent_step_with_title(
+                &run.id,
+                &step.id,
+                true,
+                Some("Unresolved research questions")
+            )
+            .is_err());
+        assert_eq!(
+            engine.agent_run(&run.id).unwrap().steps[step.sequence - 1].state,
+            "pending"
+        );
+    }
+    assert_eq!(
+        engine.get_artifact(&page.id).unwrap().content_md,
+        page.content_md
+    );
+    assert_eq!(count(&engine, "shared_memories"), 0);
+    assert_eq!(count(&engine, "artifacts"), 1);
+    engine
+        .db()
+        .writer()
+        .execute_batch(
+            "DROP TRIGGER reject_workflow_revision; DROP TRIGGER reject_memory_revision;",
+        )
+        .unwrap();
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let engine = engine.clone();
+            let step = run.steps[2].id.clone();
+            let run = run.id.clone();
+            std::thread::spawn(move || engine.review_agent_step(&run, &step, true).is_ok())
+        })
+        .collect();
+    assert_eq!(
+        workers
+            .into_iter()
+            .filter_map(|w| w.join().ok())
+            .filter(|applied| *applied)
+            .count(),
+        1
+    );
+    assert_eq!(count(&engine, "artifacts"), 2);
+}
+
+#[path = "support/agent_organization.rs"]
+mod organization_tests;
+
+#[path = "support/agent_projects.rs"]
+mod project_tests;
+
+#[path = "support/agent_handoffs.rs"]
+mod handoff_tests;

@@ -250,7 +250,7 @@ fn migration_from_v11_is_additive_and_idempotent() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        22
+        27
     );
     drop(engine);
     let engine = open(&tmp);

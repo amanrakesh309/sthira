@@ -354,5 +354,35 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
         tx.commit()?;
     }
+    if user_version < 23 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("workspace_relation_versions.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 23;")?;
+        tx.commit()?;
+    }
+    if user_version < 24 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("workspace_project_versions.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 24;")?;
+        tx.commit()?;
+    }
+    if user_version < 25 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("external_access.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 25;")?;
+        tx.commit()?;
+    }
+    if user_version < 26 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("agent_handoffs.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 26;")?;
+        tx.commit()?;
+    }
+    if user_version < 27 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("migration_imports.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 27;")?;
+        tx.commit()?;
+    }
     Ok(())
 }

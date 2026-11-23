@@ -632,7 +632,7 @@ const WorkspaceApp: React.FC = () => {
           />
         )}
 
-        {currentView === 'agent' && <AgentView initialRunId={agentRunToOpen} onOpenArtifact={handleOpenArtifact} registerBeforeLeave={registerBeforeLeave} />}
+        {currentView === 'agent' && <AgentView initialRunId={agentRunToOpen} onOpenProject={handleOpenProject} onOpenArtifact={handleOpenArtifact} registerBeforeLeave={registerBeforeLeave} />}
         {currentView === 'memory' && <MemoryView onOpenArtifact={handleOpenArtifact} registerBeforeLeave={registerBeforeLeave} />}
 
         {currentView === 'workspace_index' && (

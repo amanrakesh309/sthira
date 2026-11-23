@@ -7,8 +7,10 @@ pub mod history;
 pub mod llm;
 pub mod materiality;
 pub mod memory;
+pub mod migration;
 pub mod models;
 pub mod naming;
+mod project_actions;
 pub mod references;
 pub mod resume;
 pub mod reversibility;
@@ -17,6 +19,7 @@ pub mod search;
 pub mod shared_memory;
 pub mod vault;
 pub mod workspace_agent;
+pub mod workspace_structure;
 
 pub use engines::{
     execute_adaptive_stream, generate_simulated_token_stream, AdaptiveStreamParser,
@@ -304,8 +307,33 @@ impl Engine {
         clock: Arc<dyn Clock>,
         model: Arc<dyn ModelProvider>,
     ) -> Result<Self, CoreError> {
+        Self::open_inner(db_path.as_ref(), vault_dir.as_ref(), clock, model, true)
+    }
+
+    /// Join an existing vault without claiming or recovering desktop-owned work.
+    pub fn attach(
+        db_path: impl AsRef<Path>,
+        vault_dir: impl AsRef<Path>,
+        clock: Arc<dyn Clock>,
+        model: Arc<dyn ModelProvider>,
+    ) -> Result<Self, CoreError> {
+        if !db_path.as_ref().is_file() || !vault_dir.as_ref().is_dir() {
+            return Err(CoreError::NotFound(
+                "Existing vault required. Use explicit init for a new workspace.".into(),
+            ));
+        }
+        Self::open_inner(db_path.as_ref(), vault_dir.as_ref(), clock, model, false)
+    }
+
+    fn open_inner(
+        db_path: &Path,
+        vault_dir: &Path,
+        clock: Arc<dyn Clock>,
+        model: Arc<dyn ModelProvider>,
+        recover: bool,
+    ) -> Result<Self, CoreError> {
         let db = db::Db::open(db_path)?;
-        let vault_dir = vault_dir.as_ref().to_path_buf();
+        let vault_dir = vault_dir.to_path_buf();
         std::fs::create_dir_all(&vault_dir)?;
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
 
@@ -326,18 +354,20 @@ impl Engine {
                 )?;
             }
             let now_ms = clock.now_ms();
-            {
+            if recover {
                 let tx = writer.transaction()?;
                 tx.execute("UPDATE document_conversation_turns SET error='The app stopped before this request finished. Send a follow-up to continue.',proposal_state='dismissed' WHERE reply IS NULL AND id IN (SELECT document_turn_id FROM agent_runs WHERE status IN ('queued','running'))",[])?;
                 tx.execute("UPDATE agent_runs SET revision=revision+1,status='interrupted',error='The app stopped before this run finished. Start a new run to continue.',updated_at=?1 WHERE status IN ('queued','running')", [now_ms])?;
                 tx.commit()?;
             }
-            let _ = db::providers_repo::clean_duplicate_models(&writer);
-            // AI setup is explicit. An empty catalog must stay empty until the user
-            // connects a provider; installed runtimes and models are never assumed.
-            let _ = db::objects_repo::seed_default_object_types_if_empty(&writer, now_ms);
-            let _ = db::search_repo::seed_default_search_providers_if_empty(&writer, now_ms);
-            let _ = db::templates_repo::seed_default_synthesis_templates(&writer, now_ms);
+            if recover {
+                let _ = db::providers_repo::clean_duplicate_models(&writer);
+                // AI setup is explicit. An empty catalog must stay empty until the user
+                // connects a provider; installed runtimes and models are never assumed.
+                let _ = db::objects_repo::seed_default_object_types_if_empty(&writer, now_ms);
+                let _ = db::search_repo::seed_default_search_providers_if_empty(&writer, now_ms);
+                let _ = db::templates_repo::seed_default_synthesis_templates(&writer, now_ms);
+            }
         }
 
         Ok(Self {
@@ -427,12 +457,9 @@ impl Engine {
         let now_ms = self.clock.now_ms();
         let project_id = uuid::Uuid::new_v4().to_string();
 
-        let writer = self.db.writer();
-        writer.execute(
-            "INSERT INTO projects (id, name, origin_artifact_id, status, created_at, last_substantive_at)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?4);",
-            params![project_id, name, origin_artifact_id, now_ms],
-        )?;
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        project_actions::create_tx(&tx, &project_id, name, origin_artifact_id, now_ms)?;
 
         let project = Project {
             id: project_id.clone(),
@@ -444,7 +471,7 @@ impl Engine {
         };
 
         self.log_event_tx(
-            &writer,
+            &tx,
             Some(&project_id),
             None,
             Actor::User,
@@ -455,6 +482,7 @@ impl Engine {
             now_ms,
         )?;
 
+        tx.commit()?;
         Ok(project)
     }
 
@@ -464,17 +492,17 @@ impl Engine {
         purpose: &str,
     ) -> Result<String, CoreError> {
         let now_ms = self.clock.now_ms();
-        let writer = self.db.writer();
-        writer.execute(
-            "UPDATE project_purposes SET superseded_at = ?1 WHERE project_id = ?2 AND superseded_at IS NULL;",
-            params![now_ms, project_id],
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let purpose_id = project_actions::set_purpose_tx(
+            &tx,
+            project_id,
+            purpose,
+            "user_recorded",
+            None,
+            now_ms,
         )?;
-        let purpose_id = uuid::Uuid::new_v4().to_string();
-        writer.execute(
-            "INSERT INTO project_purposes (id, project_id, purpose, origin, set_at)
-             VALUES (?1, ?2, ?3, 'user_recorded', ?4);",
-            params![purpose_id, project_id, purpose, now_ms],
-        )?;
+        tx.commit()?;
         Ok(purpose_id)
     }
 
@@ -555,23 +583,23 @@ impl Engine {
             })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn create_artifact_inner(
+    pub(crate) fn insert_artifact_tx(
         &self,
-        artifact_type: ArtifactType,
-        authorship: Authorship,
-        title: Option<&str>,
-        content_md: &str,
-        source_url: Option<&str>,
+        tx: &rusqlite::Connection,
+        artifact: &Artifact,
         target_project_id: Option<&str>,
-        agent_step_id: Option<&str>,
-    ) -> Result<(Artifact, Option<String>), CoreError> {
-        let now_ms = self.clock.now_ms();
-        let artifact_id = uuid::Uuid::new_v4().to_string();
-        let normalized_body = vault::normalize_content(content_md);
-        let content_hash = vault::compute_content_hash(&normalized_body);
-        let file_path = format!("{}.md", artifact_id);
-
+        actor: Actor,
+    ) -> Result<(), CoreError> {
+        let artifact_id = &artifact.id;
+        let artifact_type = artifact.artifact_type.clone();
+        let authorship = artifact.authorship;
+        let title = artifact.title.as_deref();
+        let source_url = artifact.source_url.as_deref();
+        let normalized_body = &artifact.content_md;
+        let content_hash = &artifact.content_hash;
+        let file_path = artifact.file_path.as_deref();
+        let now_ms = artifact.created_at;
+        let draft_val = i64::from(artifact.is_unfinished_draft);
         let type_str = match artifact_type {
             ArtifactType::Note => "note",
             ArtifactType::Source => "source",
@@ -582,16 +610,6 @@ impl Engine {
             Authorship::AiGenerated => "ai_generated",
             Authorship::External => "external",
         };
-
-        let is_unfinished = epistemic::is_mid_sentence(&normalized_body);
-        let draft_val = if is_unfinished { 1 } else { 0 };
-
-        let mut writer = self.db.writer();
-        let tx = writer.transaction()?;
-
-        if let Some(step_id) = agent_step_id {
-            workspace_agent::claim_creation(&tx, step_id, &artifact_id, target_project_id)?;
-        }
 
         if let Some(pid) = target_project_id {
             let exists: bool = tx.query_row(
@@ -625,18 +643,14 @@ impl Engine {
         tx.execute(
             "INSERT INTO artifact_revisions (id, artifact_id, version, content_md, content_hash, actor, created_at)
              VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6);",
-            params![rev_id, artifact_id, normalized_body, content_hash, if agent_step_id.is_some() { "ai" } else { "user" }, now_ms],
+            params![rev_id, artifact_id, normalized_body, content_hash, if actor==Actor::Ai { "ai" } else { "user" }, now_ms],
         )?;
 
         self.log_event_tx(
-            &tx,
+            tx,
             target_project_id,
-            Some(&artifact_id),
-            if agent_step_id.is_some() {
-                Actor::Ai
-            } else {
-                Actor::User
-            },
+            Some(artifact_id),
+            actor,
             EventType::ArtifactCreated,
             Materiality::Substantive,
             serde_json::json!({ "title": title }),
@@ -652,9 +666,9 @@ impl Engine {
                 params![pid, artifact_id, now_ms],
             )?;
             self.log_event_tx(
-                &tx,
+                tx,
                 Some(pid),
-                Some(&artifact_id),
+                Some(artifact_id),
                 Actor::User,
                 EventType::ArtifactAttached,
                 Materiality::Substantive,
@@ -664,9 +678,26 @@ impl Engine {
             )?;
         }
 
-        tx.commit()?;
-        drop(writer);
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn create_artifact_inner(
+        &self,
+        artifact_type: ArtifactType,
+        authorship: Authorship,
+        title: Option<&str>,
+        content_md: &str,
+        source_url: Option<&str>,
+        target_project_id: Option<&str>,
+        agent_step_id: Option<&str>,
+    ) -> Result<(Artifact, Option<String>), CoreError> {
+        let now_ms = self.clock.now_ms();
+        let artifact_id = uuid::Uuid::new_v4().to_string();
+        let normalized_body = vault::normalize_content(content_md);
+        let content_hash = vault::compute_content_hash(&normalized_body);
+        let file_path = format!("{}.md", artifact_id);
 
+        let is_unfinished = epistemic::is_mid_sentence(&normalized_body);
         let mut artifact = Artifact {
             id: artifact_id.clone(),
             artifact_type,
@@ -685,6 +716,26 @@ impl Engine {
             derived_from_artifact_id: None,
             derivation_type: None,
         };
+
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+
+        if let Some(step_id) = agent_step_id {
+            workspace_agent::claim_creation(&tx, step_id, &artifact_id, target_project_id)?;
+        }
+
+        self.insert_artifact_tx(
+            &tx,
+            &artifact,
+            target_project_id,
+            if agent_step_id.is_some() {
+                Actor::Ai
+            } else {
+                Actor::User
+            },
+        )?;
+        tx.commit()?;
+        drop(writer);
 
         let mirror_error = match vault::write_artifact_mirror(&self.vault_dir, &artifact) {
             Ok(()) => {
@@ -772,6 +823,33 @@ impl Engine {
         target_project_id: Option<&str>,
         cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
     ) -> Result<Artifact, CoreError> {
+        self.create_derived_artifact_inner(
+            artifact_type,
+            authorship,
+            title,
+            body,
+            source_url,
+            derived_from_artifact_id,
+            derivation_type,
+            target_project_id,
+            cancel_token,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_derived_artifact_inner(
+        &self,
+        artifact_type: ArtifactType,
+        authorship: Authorship,
+        title: Option<&str>,
+        body: &str,
+        source_url: Option<&str>,
+        derived_from_artifact_id: Option<&str>,
+        derivation_type: Option<&str>,
+        target_project_id: Option<&str>,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+        agent_step_id: Option<&str>,
+    ) -> Result<Artifact, CoreError> {
         let mut writer = self.db.writer();
 
         if let Some(token) = cancel_token {
@@ -808,6 +886,14 @@ impl Engine {
         let draft_val = if is_unfinished { 1 } else { 0 };
 
         let tx = writer.transaction()?;
+        if let Some(step) = agent_step_id {
+            crate::workspace_agent::claim_workflow_review(
+                &tx,
+                step,
+                "propose_derive",
+                Some(&artifact_id),
+            )?;
+        }
 
         if let Some(pid) = target_project_id {
             let exists: bool = tx.query_row(
@@ -959,6 +1045,24 @@ impl Engine {
         inverse_payload: &serde_json::Value,
         cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
     ) -> Result<(Artifact, String), CoreError> {
+        self.apply_refinement_inner(
+            artifact_id,
+            new_content_md,
+            summary,
+            inverse_payload,
+            cancel_token,
+            None,
+        )
+    }
+    pub(crate) fn apply_refinement_inner(
+        &self,
+        artifact_id: &str,
+        new_content_md: &str,
+        summary: &str,
+        inverse_payload: &serde_json::Value,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+        agent_step_id: Option<&str>,
+    ) -> Result<(Artifact, String), CoreError> {
         let mut writer = self.db.writer();
 
         if let Some(token) = cancel_token {
@@ -980,6 +1084,10 @@ impl Engine {
 
         let tx = writer.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
+        if let Some(step) = agent_step_id {
+            crate::workspace_agent::claim_workflow_review(&tx, step, "propose_refine", None)?;
+            tx.execute("UPDATE agent_steps SET result_json=json_set(result_json,'$.change_set_id',?2) WHERE id=?1",params![step,cs_id])?;
+        }
         // 1. Fetch current persisted artifact atomically under the writer lock
         let existing = Self::get_artifact_tx(&tx, artifact_id)?;
         let current_version = existing.version;
@@ -1122,17 +1230,20 @@ impl Engine {
         proposal_id: Option<&str>,
     ) -> Result<(), CoreError> {
         let now_ms = self.clock.now_ms();
-        let writer = self.db.writer();
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
 
-        writer.execute(
-            "INSERT INTO project_artifacts (project_id, artifact_id, added_at, link_origin, proposal_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(project_id, artifact_id) DO UPDATE SET detached_at = NULL;",
-            params![project_id, artifact_id, now_ms, link_origin, proposal_id],
+        workspace_structure::attach_tx(
+            &tx,
+            project_id,
+            artifact_id,
+            link_origin,
+            proposal_id,
+            now_ms,
         )?;
 
         self.log_event_tx(
-            &writer,
+            &tx,
             Some(project_id),
             Some(artifact_id),
             Actor::User,
@@ -1143,20 +1254,19 @@ impl Engine {
             now_ms,
         )?;
 
+        tx.commit()?;
         Ok(())
     }
 
     pub fn detach_artifact(&self, project_id: &str, artifact_id: &str) -> Result<(), CoreError> {
         let now_ms = self.clock.now_ms();
-        let writer = self.db.writer();
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
 
-        writer.execute(
-            "UPDATE project_artifacts SET detached_at = ?1 WHERE project_id = ?2 AND artifact_id = ?3;",
-            params![now_ms, project_id, artifact_id],
-        )?;
+        workspace_structure::detach_tx(&tx, project_id, artifact_id, now_ms)?;
 
         self.log_event_tx(
-            &writer,
+            &tx,
             Some(project_id),
             Some(artifact_id),
             Actor::User,
@@ -1167,6 +1277,7 @@ impl Engine {
             now_ms,
         )?;
 
+        tx.commit()?;
         Ok(())
     }
 
@@ -1195,13 +1306,8 @@ impl Engine {
         let mut writer = self.db.writer();
         let tx = writer.transaction()?;
 
+        project_actions::move_tx(&tx, artifact_id, from_project_id, to_project_id, now_ms)?;
         if let Some(from) = from_project_id {
-            tx.execute(
-                "UPDATE project_artifacts SET detached_at = ?1
-                 WHERE project_id = ?2 AND artifact_id = ?3 AND detached_at IS NULL;",
-                params![now_ms, from, artifact_id],
-            )?;
-
             self.log_event_tx(
                 &tx,
                 Some(from),
@@ -1218,13 +1324,6 @@ impl Engine {
                 now_ms,
             )?;
         }
-
-        tx.execute(
-            "INSERT INTO project_artifacts (project_id, artifact_id, added_at, link_origin, proposal_id)
-             VALUES (?1, ?2, ?3, 'user_explicit', NULL)
-             ON CONFLICT(project_id, artifact_id) DO UPDATE SET detached_at = NULL;",
-            params![to_project_id, artifact_id, now_ms],
-        )?;
 
         self.log_event_tx(
             &tx,
@@ -1881,6 +1980,8 @@ impl Engine {
 
         let mut restored = Self::get_artifact_tx(&tx, artifact_id).map_err(|e| e.to_string())?;
 
+        tx.execute("UPDATE agent_runs SET revision=revision+1 WHERE id IN (SELECT run_id FROM agent_steps WHERE json_extract(result_json,'$.change_set_id')=?1)",[change_set_id]).map_err(|e|e.to_string())?;
+        tx.execute("UPDATE agent_steps SET state='done',result_json=json_set(result_json,'$.undone',json('true')) WHERE json_extract(result_json,'$.change_set_id')=?1 AND state='applied'",[change_set_id]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         drop(writer);
 

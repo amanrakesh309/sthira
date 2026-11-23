@@ -1,6 +1,6 @@
 # Shared memory
 
-Shared memory is the foundation of [Agent Extension phase AE1](../agent-extension-plan.md#ae1--shared-memory-and-shared-actions). It stores intentional context separately from original pages and factual Resume state. No AI connection is required. Existing Research, Plan, Draft, Resume, and document conversations do not automatically read or write this store.
+Shared memory is the foundation of [Agent Extension phase AE1](../agent-extension-plan.md#ae1--shared-memory-and-shared-actions). It stores intentional context separately from original pages and factual Resume state. No AI connection is required. Research, Plan, Draft and Resume do not automatically read or write this store. Native agent conversations use eligible context within their explicit scope; memory writes require proposal review.
 
 ## Using Memory
 
@@ -17,7 +17,7 @@ Unsaved edits block switching memories or leaving the view. A failed save retain
 
 The additive SQLite **v20** migration creates `shared_memories` and `shared_memory_revisions`. Each successful create/update/archive/restore saves the entry and a full revision in one transaction, then emits `memory_changed`. Original author, scope, and creation time are locked by a database trigger. Expected versions protect updates, archive, and restore against concurrent changes.
 
-Native UI entries are user-authored. The core also supports agent contributions labeled with agent ID, model, and provider supplied by a trusted adapter; this does not yet expose an agent writer in the application. Owner edits retain the original contribution's attribution while revision history records the owner as editor. A memory is a contribution, not independently verified evidence or an automatically adopted decision.
+Native UI entries are user-authored. The core also supports agent contributions labeled with agent ID, model, and provider supplied by a trusted adapter; the native agent now exposes reviewed memory proposals through [AE2 workflow proposals](agent-workflow-proposals.md). Owner edits retain the original contribution's attribution while revision history records the owner as editor. A memory is a contribution, not independently verified evidence or an automatically adopted decision.
 
 Memories live in the vault database, including their history. They have no Markdown mirror and are not ingested as artifacts. Include the database in ordinary vault backups; copying only document Markdown will omit memories. The existing destructive **Clear vault data** operation also removes memories and revisions. There is no individual permanent-delete UI in this phase.
 
@@ -31,7 +31,7 @@ Deleting a project preserves its memory rows and history for the owner in **All 
 
 `Engine::execute_memory_action` supports `list`, `read`, `create`, `update`, `archive`, `restore`, `history`, and `context`. Native `cmd_memory_action` resolves vault-owner access itself. Neither action payloads nor the desktop UI may supply an author or grant themselves access.
 
-`MemoryAccess` is constructed by trusted Rust adapters and is deliberately not deserializable. It separates workspace, project-ID, and session-ID grants from write permission. Reads, searches, history, and context apply scope grants. Non-owner agents may mutate only their own exactly attributed contributions and may cite only saved pages within their project grants. Owners can inspect and edit all memory. This is an internal authorization boundary; external authentication and revocation belong to AE3 and are not present yet.
+`MemoryAccess` is constructed by trusted Rust adapters and is deliberately not deserializable. It separates workspace, project-ID, and session-ID grants from write permission. Reads, searches, history, and context apply scope grants. Non-owner agents may mutate only their own exactly attributed contributions and may cite only saved pages within their project grants. Owners can inspect and edit all memory. This is an internal authorization boundary; external authentication and revocation now have an [AE3 CLI/MCP adapter](cli-and-mcp.md). That adapter exposes reads and reviewed native proposals, not direct external mutation.
 
 Read operations use a SQLite snapshot for consistent records and source freshness. Writes are atomic with revisions; revision failure rolls back the entry and emits no success event. Core timestamps use the injected clock. Source content and memory text are untrusted data, never instructions that confer tool permissions.
 
@@ -55,4 +55,4 @@ Pinned entries receive priority, not guaranteed inclusion. A large entry may be 
 
 Browser preview uses an explicitly labeled in-memory store that resets on reload. It demonstrates UI interactions only. It does not establish native durability, native permissions, or parity of source validation. Engine and desktop handler tests use disposable vaults to exercise actual SQLite migrations, grants, attribution, source invalidation, revisions, reopen, rollback, and reset. UI tests mock the action boundary.
 
-Native Tauri GUI action/restart checks remain outstanding, as tracked in [known limitations](../known-limitations.md). No live-provider check applies to these model-free actions. The [native workspace agent](workspace-agent.md) now reads eligible memory through this boundary and uses its persisted thread ID as session identity across follow-ups. Automatic memory extraction, scheduled consolidation, memory publishing, external CLI/MCP adapters, and cross-agent handoffs remain deferred.
+Native Tauri GUI action/restart checks remain outstanding, as tracked in [known limitations](../known-limitations.md). Owner memory actions are model-free; agent generation requires separate live-provider quality checks. The [native workspace agent](workspace-agent.md) now reads eligible memory through this boundary and uses its persisted thread ID as session identity across follow-ups. Reviewed memory publishing and revisions are available through [agent workflow proposals](agent-workflow-proposals.md). The [AE3 CLI/MCP adapter](cli-and-mcp.md) also reads scoped memory and submits reviewed memory proposals. Automatic extraction, scheduled consolidation, autonomous publishing and cross-agent handoffs remain deferred.

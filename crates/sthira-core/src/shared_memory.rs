@@ -5,7 +5,7 @@ use crate::{CoreError, CoreEvent, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum MemoryScope {
     Workspace,
@@ -91,7 +91,7 @@ pub struct MemoryEntry {
 fn scope_available_default() -> bool {
     true
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryQuery {
     pub scope: Option<MemoryScope>,
@@ -100,7 +100,7 @@ pub struct MemoryQuery {
     #[serde(default)]
     pub include_archived: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryDraft {
     pub scope: MemoryScope,
@@ -129,7 +129,7 @@ pub struct MemoryContext {
     pub candidate_limit: usize,
     pub content_is_untrusted: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MemoryAction {
     List {
@@ -250,7 +250,7 @@ fn hydrate_sources(conn: &Connection, entry: &mut MemoryEntry) -> Result<(), Cor
     }
     Ok(())
 }
-fn read_entry(
+pub(crate) fn read_entry(
     conn: &Connection,
     access: &MemoryAccess,
     id: &str,
@@ -335,7 +335,15 @@ impl Engine {
         access: &MemoryAccess,
         action: MemoryAction,
     ) -> Result<MemoryResult, CoreError> {
-        if access.owner && access.actor != MemoryActor::User {
+        self.execute_memory_action_inner(access, action, None)
+    }
+    pub(crate) fn execute_memory_action_inner(
+        &self,
+        access: &MemoryAccess,
+        action: MemoryAction,
+        agent_step_id: Option<&str>,
+    ) -> Result<MemoryResult, CoreError> {
+        if access.owner && access.actor != MemoryActor::User && agent_step_id.is_none() {
             return Err(invalid("Owner access requires a user identity."));
         }
         if let MemoryActor::Agent {
@@ -439,6 +447,14 @@ impl Engine {
                 let now = self.clock().now_ms();
                 let mut writer = self.db().writer();
                 let tx = writer.transaction()?;
+                if let Some(step) = agent_step_id {
+                    let kind = match mutation {
+                        MemoryAction::Create { .. } => "propose_memory_create",
+                        MemoryAction::Update { .. } => "propose_memory_update",
+                        _ => return Err(invalid("Unsupported reviewed memory action.")),
+                    };
+                    crate::workspace_agent::claim_workflow_review(&tx, step, kind, None)?;
+                }
                 let (entry, operation) = match mutation {
                     MemoryAction::Create { draft } => {
                         validate_text(&draft.title, &draft.body)?;
@@ -560,6 +576,9 @@ impl Engine {
                     }
                 };
                 record_revision(&tx, &entry, &access.actor, operation)?;
+                if let Some(step) = agent_step_id {
+                    tx.execute("UPDATE agent_steps SET result_json=json_set(result_json,'$.memory_id',?2) WHERE id=?1",params![step,entry.id])?;
+                }
                 tx.commit()?;
                 drop(writer);
                 self.emit_event(CoreEvent::MemoryChanged {

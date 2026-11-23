@@ -4,13 +4,18 @@ import userEvent from '@testing-library/user-event';
 import { AgentView } from '../views/AgentView';
 import * as api from '../api/workspaceAgent';
 import { defaultWorkflowSettings } from '../api/workflowSettings';
+import { getWorkspaceTree } from '../api/ipc';
+import { memoryAction } from '../api/sharedMemory';
 import type { AgentRun } from '../api/workspaceAgent';
 vi.mock('../api/workspaceAgent',async original=>({...await original<typeof import('../api/workspaceAgent')>(),listAgentRuns:vi.fn(),getAgentRun:vi.fn(),createAgentRun:vi.fn(),executeAgentRun:vi.fn(),cancelAgentRun:vi.fn(),reviewAgentStep:vi.fn(),undoAgentEdit:vi.fn(),followUpAgentRun:vi.fn()}));
-vi.mock('../api/ipc',()=>({isTauri:true,getWorkspaceTree:vi.fn(async()=>({projects:[{id:'project-a',name:'Reading journal'}]})),getProviderCatalog:vi.fn(async()=>[{id:'p',display_name:'Configured provider',is_enabled:true,models:[{id:'m',provider_id:'p',display_name:'Chosen model',is_enabled:true,is_default:true}]}]),getArtifactContext:vi.fn(async()=>({artifact:{content_md:'Original prose'}}))}));
-const state=vi.hoisted(()=>({enabled:true}));
+vi.mock('../api/ipc',()=>({isTauri:true,getWorkspaceTree:vi.fn(async()=>({projects:[{id:'project-a',name:'Reading journal'}]})),getProviderCatalog:vi.fn(async()=>[{id:'p',display_name:'Configured provider',is_enabled:true,models:[{id:'m',provider_id:'p',display_name:'Chosen model',is_enabled:true,is_default:true}]}]),getArtifactContext:vi.fn(async()=>({artifact:{content_md:'Original prose',title:null,version:1,content_hash:'hash'}}))}));
+vi.mock('../api/agentHandoffs',()=>({listAgentHandoffs:vi.fn(async()=>[]),listHandoffConnections:vi.fn(async()=>[]),getAgentHandoff:vi.fn(),saveAgentHandoff:vi.fn(),closeAgentHandoff:vi.fn(),continueAgentHandoff:vi.fn()}));
+vi.mock('../api/sharedMemory',()=>({memoryAction:vi.fn()}));
+const state=vi.hoisted(()=>({enabled:true,taskRevision:0}));
+vi.mock('../context/AgentTasksContext',()=>({useAgentTasks:()=>({tasks:[],loading:false,error:null,refresh:vi.fn(),revision:state.taskRevision})}));
 vi.mock('../hooks/useWorkflowSettings',()=>({useWorkflowSettings:()=>({settings:{...defaultWorkflowSettings(),agent:{enabled:state.enabled,model_id:'m',templates_enabled:false}},loading:false,error:null})}));
 const saved:AgentRun={id:'run-a',goal:'Review my reading',project_id:'project-a',workspace_memory:false,model_id:'m',model_name:'Chosen model',provider_id:'p',provider_name:'Configured provider',status:'completed',summary:'No changes applied.',handoff:'Check the unresolved question.',error:null,created_at:1000,updated_at:1000,steps:[]};
-beforeEach(()=>{vi.clearAllMocks();state.enabled=true;vi.mocked(api.listAgentRuns).mockResolvedValue([]);vi.mocked(api.createAgentRun).mockResolvedValue({...saved,status:'queued'});vi.mocked(api.executeAgentRun).mockResolvedValue(saved);vi.mocked(api.getAgentRun).mockResolvedValue(saved);});
+beforeEach(()=>{vi.clearAllMocks();state.enabled=true;state.taskRevision=0;vi.mocked(api.listAgentRuns).mockResolvedValue([]);vi.mocked(api.createAgentRun).mockResolvedValue({...saved,status:'queued'});vi.mocked(api.executeAgentRun).mockResolvedValue(saved);vi.mocked(api.getAgentRun).mockResolvedValue(saved);});
 afterEach(cleanup);
 it('keeps the goal editable with honest setup when the agent workflow is disabled',async()=>{
   state.enabled=false;const user=userEvent.setup();render(<AgentView onOpenArtifact={vi.fn()}/>);
@@ -56,4 +61,54 @@ it('sends a follow-up using the selected parent and preserves its draft on failu
 });
 it('opens a task by identity without dispatching inference again',async()=>{
   vi.mocked(api.getAgentRun).mockResolvedValue(saved);render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()}/>);expect(await screen.findByRole('region',{name:'Agent result'})).toHaveTextContent('No changes applied.');expect(api.getAgentRun).toHaveBeenCalledWith('run-a');expect(api.executeAgentRun).not.toHaveBeenCalled();
+});
+
+it('submits the exact reviewed title choice through the native review boundary',async()=>{
+  const proposal={id:'title-a',sequence:1,action:{type:'propose_titles' as const,artifact_id:'page-a',titles:['Open research questions','Uncertain launch timing']},state:'pending',result:{basis:{version:1,title:null,content_hash:'hash'}},artifact_id:'page-a',turn_id:null,change_set_id:null,basis_content_md:null};
+  const run={...saved,status:'review',steps:[proposal]};vi.mocked(api.listAgentRuns).mockResolvedValue([run]);vi.mocked(api.getAgentRun).mockResolvedValue(run);vi.mocked(api.reviewAgentStep).mockResolvedValue({...run,status:'completed',steps:[{...proposal,state:'applied'}]});
+  const user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'Review proposal'}));
+  expect(screen.getByRole('button',{name:'Use title'})).toBeDisabled();await user.click(screen.getByRole('radio',{name:'Uncertain launch timing'}));await user.click(screen.getByRole('button',{name:'Use title'}));
+  await waitFor(()=>expect(api.reviewAgentStep).toHaveBeenCalledWith('run-a','title-a',true,'Uncertain launch timing'));expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+it('reloads current memory before review and blocks acceptance of a changed version',async()=>{
+  const memory={id:'memory-a',scope:{kind:'project' as const,id:'project-a'},title:'Original question',body:'Original uncertainty',version:3,pinned:false,archived:false,author:{kind:'user' as const},sources:[],created_at:1,updated_at:2};
+  vi.mocked(memoryAction).mockResolvedValue({kind:'entry',value:memory});
+  const proposal={id:'memory-step',sequence:1,action:{type:'propose_memory_update' as const,id:'memory-a',expected_version:2,title:'Revised question',body:'Keep uncertainty.'},state:'pending',result:{memory_basis:{...memory,version:2}},artifact_id:null,turn_id:null,change_set_id:null,basis_content_md:null};
+  const run={...saved,status:'review',steps:[proposal]};vi.mocked(api.listAgentRuns).mockResolvedValue([run]);vi.mocked(api.getAgentRun).mockResolvedValue(run);
+  const user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'Review proposal'}));
+  expect(memoryAction).toHaveBeenCalledWith({type:'read',id:'memory-a'});expect(screen.getByRole('button',{name:'Apply memory revision'})).toBeDisabled();expect(screen.getByRole('alert')).toHaveTextContent('changed');expect(api.reviewAgentStep).not.toHaveBeenCalled();
+});
+it('reviews project membership through its own native receipt and exposes guarded organization undo',async()=>{
+  const proposal={id:'organization-a',sequence:1,action:{type:'propose_membership' as const,artifact_id:'page-a',project_id:'project-a',attached:true,reason:'Keep the research together.'},state:'pending',result:{pages:[{id:'page-a',title:'Research page'}],project:{id:'project-a',name:'Reading journal'}},artifact_id:'page-a',turn_id:null,change_set_id:null,basis_content_md:null};
+  const run={...saved,status:'review',steps:[proposal]};vi.mocked(api.getAgentRun).mockResolvedValue(run);vi.mocked(api.reviewAgentStep).mockResolvedValue({...run,status:'completed',steps:[{...proposal,state:'applied',change_set_id:'change-a'}]});vi.mocked(api.undoAgentEdit).mockRejectedValue(new Error('This relationship changed after acceptance.'));
+  const user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'Review proposal'}));expect(screen.getByRole('region',{name:'Proposed relationship'})).toHaveTextContent('Reading journal');expect(api.reviewAgentStep).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Add to project'}));await waitFor(()=>expect(api.reviewAgentStep).toHaveBeenCalledWith('run-a','organization-a',true));await user.click(await screen.findByRole('button',{name:'Undo organization change'}));expect(api.undoAgentEdit).toHaveBeenCalledWith('run-a','organization-a');expect(await screen.findByRole('alert')).toHaveTextContent('changed after acceptance');
+});
+it('reviews project creation, exposes its actual project identity and uses guarded project undo',async()=>{
+  const proposal={id:'project-step',sequence:1,action:{type:'propose_project_create' as const,name:'Release planning',purpose:'Review release uncertainty.',reason:'Keep planning separate.'},state:'pending',result:{same_name_projects:0},artifact_id:null,turn_id:null,change_set_id:null,basis_content_md:null};
+  const run={...saved,project_id:null,status:'review',steps:[proposal]};vi.mocked(api.getAgentRun).mockResolvedValue(run);vi.mocked(api.reviewAgentStep).mockResolvedValue({...run,status:'completed',steps:[{...proposal,state:'applied',change_set_id:'cs-project',result:{...proposal.result,project_id:'created-project'}}]});vi.mocked(api.undoAgentEdit).mockRejectedValue(new Error('This project has been used since creation.'));
+  const open=vi.fn(),user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()} onOpenProject={open}/>);await user.click(await screen.findByRole('button',{name:'Review proposal'}));await user.click(screen.getByRole('button',{name:'Create project'}));await waitFor(()=>expect(api.reviewAgentStep).toHaveBeenCalledWith('run-a','project-step',true));await user.click(await screen.findByRole('button',{name:'Open project'}));expect(open).toHaveBeenCalledWith('created-project');await user.click(screen.getByRole('button',{name:'Undo project change'}));expect(api.undoAgentEdit).toHaveBeenCalledWith('run-a','project-step');expect(await screen.findByRole('alert')).toHaveTextContent('used since creation');
+});
+it('opens saved project citations by identity without dispatching a model',async()=>{
+  const run={...saved,summary:'Continue in [Release planning](sthira://project/project-b).'};vi.mocked(api.getAgentRun).mockResolvedValue(run);const open=vi.fn(),user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()} onOpenProject={open}/>);await user.click(await screen.findByRole('button',{name:'Release planning'}));expect(open).toHaveBeenCalledWith('project-b');expect(api.executeAgentRun).not.toHaveBeenCalled();
+});
+
+it('refreshes the project chooser after project creation and successful undo',async()=>{
+  const proposal={id:'create-refresh',sequence:1,action:{type:'propose_project_create' as const,name:'Newly created project',purpose:'Investigate the open questions.',reason:'Create a project for this context.'},state:'pending',result:{same_name_projects:0},artifact_id:null,turn_id:null,change_set_id:null,basis_content_md:null};
+  const run={...saved,project_id:null,status:'review',steps:[proposal]};vi.mocked(api.getAgentRun).mockResolvedValue(run);vi.mocked(api.reviewAgentStep).mockResolvedValue({...run,status:'completed',steps:[{...proposal,state:'applied',change_set_id:'new-cs',result:{...proposal.result,project_id:'new-project'}}]});
+  const user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'Review proposal'}));
+  vi.mocked(getWorkspaceTree).mockResolvedValue({projects:[{id:'new-project',name:'Newly created project'}],loose_artifacts:[]} as unknown as Awaited<ReturnType<typeof getWorkspaceTree>>);
+  await user.click(screen.getByRole('button',{name:'Create project'}));await screen.findByRole('button',{name:'Undo project change'});await user.click(screen.getByRole('button',{name:'New goal'}));expect(await screen.findByRole('option',{name:'Newly created project'})).toBeInTheDocument();
+  const applied={...run,status:'completed',steps:[{...proposal,state:'applied',change_set_id:'new-cs',result:{...proposal.result,project_id:'new-project'}}]};
+  vi.mocked(api.getAgentRun).mockResolvedValue(applied);vi.mocked(api.undoAgentEdit).mockResolvedValue({...run,status:'completed',steps:[{...proposal,state:'reverted'}]});vi.mocked(getWorkspaceTree).mockResolvedValue({projects:[],loose_artifacts:[]} as unknown as Awaited<ReturnType<typeof getWorkspaceTree>>);
+  await user.click(screen.getByRole('button',{name:/Review my reading/}));await user.click(await screen.findByRole('button',{name:'Undo project change'}));await waitFor(()=>expect(screen.queryByRole('button',{name:'Undo project change'})).not.toBeInTheDocument());await user.click(screen.getByRole('button',{name:'New goal'}));expect(screen.queryByRole('option',{name:'Newly created project'})).not.toBeInTheDocument();
+});
+
+it('discovers an external invocation on task refresh without replacing an unsent goal',async()=>{
+  const view=render(<AgentView onOpenArtifact={vi.fn()}/>);const user=userEvent.setup();await screen.findByRole('textbox',{name:'Agent goal'});await user.type(screen.getByRole('textbox',{name:'Agent goal'}),'Preserve my draft');
+  const external={...saved,id:'external-run',project_id:null,goal:'External review request',model_name:'External: editor · declared model'};vi.mocked(api.listAgentRuns).mockResolvedValue([external]);state.taskRevision++;view.rerender(<AgentView onOpenArtifact={vi.fn()}/>);
+  expect(await screen.findByRole('button',{name:/External review request/})).toBeInTheDocument();expect(screen.getByRole('textbox',{name:'Agent goal'})).toHaveValue('Preserve my draft');expect(api.executeAgentRun).not.toHaveBeenCalled();
+});
+it('guards a handoff draft against switching goals and leaving the Agent view',async()=>{
+ vi.mocked(api.getAgentRun).mockResolvedValue(saved);let guard:(()=>Promise<boolean>)|null=null;const user=userEvent.setup();render(<AgentView initialRunId="run-a" onOpenArtifact={vi.fn()} registerBeforeLeave={value=>{guard=value;}}/>);await user.click(await screen.findByText('Save a new handoff'));await user.type(screen.getByRole('textbox',{name:'Handoff title'}),'Preserve this handoff');await waitFor(()=>expect(screen.getByRole('button',{name:'Discard handoff draft'})).toBeInTheDocument());expect(await guard!()).toBe(false);await user.click(screen.getByRole('button',{name:'New goal'}));expect(screen.getByRole('textbox',{name:'Handoff title'})).toHaveValue('Preserve this handoff');await user.click(screen.getByRole('button',{name:'Discard handoff draft'}));await waitFor(async()=>expect(await guard!()).toBe(true));
 });

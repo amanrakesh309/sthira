@@ -93,6 +93,16 @@ impl crate::Engine {
         basis_hash: &str,
         basis_title: Option<&str>,
     ) -> Result<crate::Artifact, String> {
+        self.apply_suggested_title_inner(artifact_id, title, basis_hash, basis_title, None)
+    }
+    pub(crate) fn apply_suggested_title_inner(
+        &self,
+        artifact_id: &str,
+        title: &str,
+        basis_hash: &str,
+        basis_title: Option<&str>,
+        agent_step_id: Option<&str>,
+    ) -> Result<crate::Artifact, String> {
         use rusqlite::params;
         let title = title.trim();
         validate(&serde_json::json!({"titles":[title]}).to_string()).map_err(|e| e.to_string())?;
@@ -100,7 +110,14 @@ impl crate::Engine {
         let tx = writer
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let original = self.get_artifact(artifact_id).map_err(|e| e.to_string())?;
+        if let Some(step) = agent_step_id {
+            crate::workspace_agent::claim_workflow_review(&tx, step, "propose_titles", None)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(step) = agent_step_id {
+            tx.execute("UPDATE agent_steps SET result_json=json_set(result_json,'$.applied_title',?2) WHERE id=?1",params![step,title]).map_err(|e|e.to_string())?;
+        }
+        let original = Self::get_artifact_tx(&tx, artifact_id).map_err(|e| e.to_string())?;
         if original.deleted_at.is_some()
             || original.content_hash != basis_hash
             || original.title.as_deref().unwrap_or("") != basis_title.unwrap_or("")
@@ -110,6 +127,7 @@ impl crate::Engine {
             );
         }
         if original.title.as_deref() == Some(title) {
+            tx.commit().map_err(|e| e.to_string())?;
             return Ok(original);
         }
         let mut updated = original.clone();

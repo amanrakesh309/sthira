@@ -3,6 +3,7 @@ pub mod commands;
 pub mod connections;
 pub mod conversation;
 pub mod events;
+pub mod migration;
 pub mod naming;
 pub mod projects;
 pub mod resume;
@@ -27,7 +28,19 @@ pub use workspace_session::handle_get_workspace_session_key;
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
         shared_memory::cmd_memory_action,
+        migration::cmd_preview_migration,
+        migration::cmd_apply_migration,
+        migration::cmd_list_migrations,
+        migration::cmd_get_migration,
+        migration::cmd_cancel_migration,
+        migration::cmd_rollback_migration,
         workspace_agent::cmd_create_agent_run,
+        workspace_agent::cmd_list_handoff_connections,
+        workspace_agent::cmd_list_agent_handoffs,
+        workspace_agent::cmd_get_agent_handoff,
+        workspace_agent::cmd_save_agent_handoff,
+        workspace_agent::cmd_close_agent_handoff,
+        workspace_agent::cmd_continue_agent_handoff,
         workspace_agent::cmd_list_agent_runs,
         workspace_agent::cmd_list_agent_tasks,
         workspace_agent::cmd_follow_up_agent_run,

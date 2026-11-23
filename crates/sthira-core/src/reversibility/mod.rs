@@ -98,6 +98,14 @@ pub fn revert_change_set(
         for op in ops {
             let op_type = op.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match op_type {
+                "restore_project_purpose"
+                | "remove_unused_agent_project"
+                | "restore_agent_move" => {
+                    crate::project_actions::restore_tx(&tx, op, now_ms)?;
+                }
+                "restore_workspace_relation" => {
+                    crate::workspace_structure::restore_relation_tx(&tx, op)?;
+                }
                 "restore_artifact" => {
                     let art_id = op.get("artifact_id").and_then(|v| v.as_str()).unwrap();
                     let content_md = op.get("content_md").and_then(|v| v.as_str()).unwrap();
