@@ -1,0 +1,75 @@
+.spatial-canvas {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.spatial-canvas-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px clamp(12px, 2vw, 24px);
+}
+
+.spatial-canvas-header button,
+.spatial-canvas-status button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spatial-canvas-status {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.spatial-canvas-status button { margin-inline-start: 8px; }
+
+.canvas-page-picker {
+  align-self: flex-start;
+  flex-shrink: 0;
+  width: min(460px, calc(100% - 32px));
+  max-height: min(46vh, 330px);
+  overflow: auto;
+  margin: 16px 16px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--sthira-border);
+  border-radius: 12px;
+  background: var(--sthira-surface-raised);
+  font-size: 13px;
+}
+
+.canvas-page-picker h3 { margin: 0 0 8px; font-weight: 600; }
+.canvas-page-picker p { padding: 8px 0; color: var(--sthira-text-muted); }
+.canvas-page-picker [role="alert"] button { text-decoration: underline; }
+.canvas-page-picker ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.canvas-page-picker li + li { border-top: 1px solid var(--sthira-border); }
+.canvas-page-picker li button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 4px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.canvas-page-picker li button:hover { background: var(--sthira-surface-muted); }
+.canvas-page-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--sthira-border);
+  border-radius: 8px;
+}
+.canvas-page-search input { min-width: 0; width: 100%; height: 38px; background: transparent; }
+.spatial-canvas-viewport { flex: 1; min-height: 0; overflow: auto; }
+.spatial-canvas-board { position: relative; user-select: none; }
+.spatial-canvas :is(button, input):focus-visible { outline: 2px solid var(--sthira-primary); outline-offset: 2px; }

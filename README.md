@@ -29,6 +29,7 @@ Built with **Rust, Tauri 2, React 19, TypeScript, TipTap, and SQLite**. The appl
 - [Workspace agent](#workspace-agent)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Storage, privacy, and backups](#storage-privacy-and-backups)
+- [Import existing knowledge](#import-existing-knowledge)
 - [Command-line usage](#command-line-usage)
 - [Architecture and repository map](#architecture-and-repository-map)
 - [Development and verification](#development-and-verification)
@@ -81,6 +82,7 @@ These capabilities have implementations in the repository. Platform coverage and
 | Trust | Separate user/external/AI authorship, verified quotes, evidence attribution, and inspectable organizational proposals. |
 | Storage | Local SQLite, Markdown mirrors, reconciliation, FTS5 indexing, and vector-search infrastructure through sqlite-vec. |
 | Appearance | Light/dark themes, bundled watercolor landscapes, botanical accents, paper grain, contour textures, and neutral return-to-work language. |
+| Migration | Reviewed Markdown/text imports, per-file selection, paginated history, optional agent guidance, provenance and guarded rollback. |
 | CLI and MCP | Scoped JSON tools and local stdio MCP, revocable credentials, reviewed workspace proposals, plus owner storage/routing commands. |
 
 ## Install and run
@@ -248,7 +250,7 @@ Built-in types include **Idea**, **Task**, **Decision**, and **Source**. A type 
 4. Create the type, then create instances from its collection or slash command.
 5. Use **Manage Object Types & Templates** for object schemas and reusable object templates.
 
-Collections provide table/list views and Kanban boards; boards use suitable select properties for grouping. Object templates create independent content. Reusing an existing object across projects preserves its identity. The object-template manager is separate from the planned Research/Plan synthesis-template manager.
+Collections provide table/list views and Kanban boards; boards use suitable select properties for grouping. Object templates create independent content. Reusing an existing object across projects preserves its identity. The object-template manager is separate from **Settings → Templates**, which manages Research/Plan synthesis templates and optional model-free Capture structures. See [synthesis templates](docs/features/synthesis-templates.md).
 
 <details>
 <summary>See the custom object type builder</summary>
@@ -372,7 +374,7 @@ For deliberate task transfers, use **Saved handoffs** in a finished workspace ru
 
 For example, ask “Refine my research note, derive an execution plan, suggest clearer titles, and propose a project memory of the open questions.” Refine retains its guarded restore path; Derive records source lineage; title review requires choosing a saved suggestion; memory changes preserve authorship, source evidence and revision history. All require explicit review. See [workflow proposal usage and recovery](docs/features/agent-workflow-proposals.md).
 
-The initial tool set works with saved local knowledge. It has no live web, shell, or external tools, and uses bounded work rather than unlimited autonomous execution. Browser preview does not simulate successful runs. See [agent setup, scope, limits, and lifecycle](docs/features/workspace-agent.md) and [document conversations/background tasks](docs/features/agent-conversations-and-tasks.md).
+The agent works with saved local knowledge and can now also prepare reviewable Research or Plan pages, using configured templates and an explicit, default-off web-research grant. It has no shell, terminal, or filesystem tools, and uses bounded work rather than unlimited autonomous execution. Generated research/plans are proposals until you apply them; web failures and local-only grounding are labelled honestly. Browser preview does not simulate successful runs. See [agent setup, scope, limits, and lifecycle](docs/features/workspace-agent.md), [synthesis templates and agent Research/Plan](docs/features/synthesis-templates.md), and [document conversations/background tasks](docs/features/agent-conversations-and-tasks.md).
 
 ## Keyboard shortcuts
 
@@ -431,7 +433,7 @@ Tab metadata and some panel/theme preferences use WebView-local storage. A vault
 
 ## Import existing knowledge
 
-Open **Settings → Workspace & Data → Import existing knowledge** to inventory and review local Notion Markdown, Obsidian Markdown, Google Docs Markdown/plain text or other text exports. Source files remain untouched; duplicate and changed-source conflicts stay visible. See [migration formats, limits and recovery](docs/features/migration.md).
+Open **Settings → Workspace & Data → Import existing knowledge** to inventory and review local Notion Markdown, Obsidian Markdown, Google Docs Markdown/plain text or other text exports. Choose individual documents, inspect selection-specific previews and optionally request migration-agent guidance. Source excerpts are opt-in, suggestions require review, and history loads paginated summaries. Source files remain untouched; duplicate and changed-source conflicts stay visible. See [migration formats, limits and recovery](docs/features/migration.md).
 
 ## Command-line usage
 
@@ -575,7 +577,7 @@ The authoritative list is [docs/known-limitations.md](docs/known-limitations.md)
 
 - **Preview versus native:** screenshots and mocked tests do not certify native save/restart behavior. Expanded slash-creation entry points have specific native persistence follow-ups.
 - **Platform scope:** Linux has the most recorded execution coverage. Other native builds and local-pack platform runtimes need validation.
-- **AI quality/grounding:** small models can fail strict formats or suggest poor titles. The local Resume pack is an extractive preview, not a completeness/accuracy guarantee. Successful native interactive research against live external providers remains a separate verification item.
+- **AI quality/grounding:** small models can fail strict formats or suggest poor titles. The local Resume pack is an extractive preview, not a completeness/accuracy guarantee. Native live-provider Research has reached a reviewed, accepted, web-backed page with navigable citations. Deterministic fixtures now cover the wrapped Inkling follow-up action and accepted Research-to-Plan lineage; live ordinary-language Plan generation and direct web Research remain deferred verification items.
 - **Media:** image URLs work; binary clipboard image paste, managed attachments, and automatic offline image caching remain unimplemented.
 - **Session recovery:** tabs exist; split panes, tab groups, and detached windows do not. Edits before the autosave boundary are not crash recovery.
 - **Links/accessibility:** in-app references and keyboard controls have coverage; OS URL registration, external browser launch, and interactive screen-reader speech need separate validation.
@@ -583,9 +585,22 @@ The authoritative list is [docs/known-limitations.md](docs/known-limitations.md)
 
 ## Roadmap
 
-### Agreed implementation order
+### Next implementation phases
 
-These are five new **Agent Extension phases AE1–AE5**, separate from the original phases 1–25. The [extension plan](docs/agent-extension-plan.md) defines scope and acceptance criteria. AE1 has the shared-memory foundation, AE2 has the native workspace agent described above, AE3 has a local CLI/MCP adapter foundation, and AE4 has explicit saved handoffs and native continuation; AE5 has a reviewed local-export migration foundation. Native GUI verification limits are tracked separately, and no release dates are promised.
+The AE5 migration-agent/review completion batch is implemented. Guided onboarding (UX1) is next, followed by coworking. UX/CW capabilities below are **planned, not implemented**; native/live acceptance gaps remain separately tracked. Personal local work will remain available offline without login; shared workspaces will require sign-in and membership. See the [completion, onboarding and coworking plan](docs/onboarding-and-cowork-plan.md).
+
+| Phase | Planned outcome |
+| --- | --- |
+| AE5 completion batch — implemented | Migration-agent guidance, selective per-document review, lightweight/paginated history and synthetic export/recovery tests. |
+| UX1 — Guided onboarding and Help | Optional, replayable application tour; offline searchable documentation, contextual help and a shortcut reference. |
+| CW1 — Accounts and workspace membership | Sign-in/recovery/session management, team workspaces, invitations, members and roles. |
+| CW2 — Shared work and synchronization | Shared projects/pages, comments, attributed activity, reviewed changes and conflict-safe synchronization. |
+
+The owner selected asynchronous shared work for the first coworking release. CW3 adds live co-editing, presence and collaborator cursors afterward; its schedule remains open. Hosting and authentication/synchronization providers will be chosen during the collaboration design.
+
+### Agent Extension foundations
+
+The five **Agent Extension phases AE1–AE5** remain separate from the original phases 1–25 and the new UX/CW phases. The [extension plan](docs/agent-extension-plan.md) defines scope and acceptance criteria. AE1 has the shared-memory foundation, AE2 has the native workspace agent described above, AE3 has a local CLI/MCP adapter foundation, and AE4 has explicit saved handoffs and native continuation; AE5 has a reviewed local-export migration foundation. Native GUI verification limits are tracked separately, and no release dates are promised.
 
 | Phase | Milestone | Intended outcome |
 | --- | --- | --- |
@@ -593,7 +608,7 @@ These are five new **Agent Extension phases AE1–AE5**, separate from the origi
 | AE2 | Native workspace agent | Scoped agent, document chat, follow-ups, background tasks, reviewed pages/edits, Refine/Derive/titles/memory proposals, reviewed memberships/references/project creation/direction/moves, cancellation, and guarded undo implemented; native GUI/live-provider follow-up remains. |
 | AE3 | CLI and MCP access | Local scoped/revocable CLI and stdio MCP adapters, shared proposals and owner review implemented; native GUI/client/platform follow-up remains. |
 | AE4 | Cross-agent continuity | Explicit saved handoffs, scoped external contributions, current source/review state and owner-controlled native continuation implemented; native GUI/live-client follow-up remains. |
-| AE5 | Migration system and agent | Reviewed local Markdown/text export imports, source provenance, retry receipts and guarded rollback implemented; connectors, rich formats and model-led planning remain follow-ups. |
+| AE5 | Migration system and agent | Reviewed local Markdown/text imports, selective previews, scoped model guidance, paginated history, provenance, retry receipts and guarded rollback implemented; connectors and rich formats remain follow-ups. |
 
 Migration will bring existing knowledge into Sthira while preserving the original source data. Exact supported formats, connector requirements, and content/link/property/media fidelity will be documented as each importer is implemented and verified. Embedded terminals and hosting third-party agent interfaces are outside this sequence.
 
@@ -611,7 +626,7 @@ These items remain planned or deferred alongside the five milestones:
 | Platform/integration validation | Broader native lifecycle/live-provider checks, cross-platform local packs, OS links, and assistive technology. |
 | Model quality evaluation | Better evidence for naming, multilingual use, and Resume coverage, preserving factual fallback and review. |
 
-See [workflow configuration](docs/features/workflow-settings.md) for its feature-specific implementation history and follow-ups. The five milestones above define the agreed product order; historical phase plans may not match current policy.
+See [workflow configuration](docs/features/workflow-settings.md) for its feature-specific implementation history and follow-ups. The next-priorities table governs upcoming work; historical phase plans may not match current policy.
 
 ## Documentation and contributing
 
@@ -629,6 +644,7 @@ See [workflow configuration](docs/features/workflow-settings.md) for its feature
 | [CLI and MCP access](docs/features/cli-and-mcp.md) | Local connection setup, scoped credentials, JSON tools, stdio MCP, owner review and revocation. |
 | [Agent project workflows](docs/features/agent-project-workflows.md) | Reviewed project creation, AI direction history, atomic moves and guarded recovery. |
 | [Agent Extension plan](docs/agent-extension-plan.md) / [Shared memory](docs/features/shared-memory.md) | Five new phases and the AE1 memory contract, usage, permissions, and limits. |
+| [Completion, onboarding and coworking plan](docs/onboarding-and-cowork-plan.md) | Remaining AE5 batch, guided tour/Help, accounts, shared collaboration, delivery order and acceptance criteria. |
 | [Workflow settings](docs/features/workflow-settings.md) | Opt-in generation, model resolution, and implementation sequence. |
 | [Resume](docs/features/resume.md) / [Title suggestions](docs/features/title-suggestions.md) | Source packets, pack, cache, naming, and quality limits. |
 | [Document tabs](docs/features/document-tabs.md) / [Internal references](docs/features/internal-references.md) | Session behavior and stable links. |

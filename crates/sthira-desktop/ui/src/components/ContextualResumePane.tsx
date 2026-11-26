@@ -68,7 +68,7 @@ export const ContextualResumePane: React.FC<ContextualResumePaneProps> = ({
   );
 
   return (
-    <section className={`focus-brief ${isExpandedReview ? 'focus-brief-expanded' : ''}`} data-testid="contextual-resume-pane" aria-label={isExpandedReview ? 'Expanded project review' : 'Contextual resume brief'}>
+    <section className={`focus-brief ${isExpandedReview ? 'focus-brief-expanded' : ''}`} data-testid="contextual-resume-pane" data-guide-target="resume-pane" aria-label={isExpandedReview ? 'Expanded project review' : 'Contextual resume brief'}>
       <div className="focus-brief-heading">
         <span className="focus-brief-icon"><Sparkles size={18} /></span>
         <div className="focus-brief-heading-copy">

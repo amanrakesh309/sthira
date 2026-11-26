@@ -1,5 +1,6 @@
 use super::ScrapedWebDocument;
 use regex::Regex;
+use std::net::IpAddr;
 use std::sync::LazyLock;
 
 static SCRIPT_REGEX: LazyLock<Regex> =
@@ -114,8 +115,41 @@ pub fn decode_html_entities(text: &str) -> String {
             .replace("&#8220;", "“")
             .replace("&#8221;", "”")
             .replace("&#8230;", "…");
+        s = decode_numeric_html_entities(&s);
     }
     s
+}
+
+/// Decodes numeric entities, including zero-padded forms such as `&#039;` that
+/// frequently arrive in search-result titles. Unknown or malformed entities are
+/// preserved verbatim.
+fn decode_numeric_html_entities(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("&#") {
+        output.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find(';') else {
+            output.push_str("&#");
+            rest = after;
+            continue;
+        };
+        let code = &after[..end];
+        let parsed = if let Some(hex) = code.strip_prefix('x').or_else(|| code.strip_prefix('X')) {
+            u32::from_str_radix(hex, 16).ok()
+        } else {
+            code.parse::<u32>().ok()
+        };
+        if let Some(character) = parsed.filter(|&code| code > 0).and_then(char::from_u32) {
+            output.push(character);
+            rest = &after[end + 1..];
+        } else {
+            output.push_str("&#");
+            rest = after;
+        }
+    }
+    output.push_str(rest);
+    output
 }
 
 fn extract_readable_text(html_fragment: &str, strip_forms: bool) -> String {
@@ -493,47 +527,353 @@ pub fn clean_html_to_markdown(html: &str, url: &str) -> (String, String) {
     (title, content_md)
 }
 
+/// Explicit trusted transport used by scraper tests and callers that already validated a URL.
+/// Production research goes through [`scrape_and_clean_url`], which enforces destination policy.
 pub async fn fetch_and_clean_url(url: &str) -> Result<ScrapedWebDocument, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    fetch_and_clean_url_inner(url, &[], false).await
+}
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        if super::is_reqwest_timeout(&e) {
-            format!("Request timed out fetching '{}': {e}", url)
-        } else {
-            format!("Network request failed for '{}': {e}", url)
+fn non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.octets()[0] == 0
         }
-    })?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP error {} fetching '{}'", resp.status(), url));
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return non_public_ip(IpAddr::V4(mapped));
+            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
     }
+}
 
-    let html = resp.text().await.map_err(|e| {
-        if super::is_reqwest_timeout(&e) {
-            format!("Response body read timed out for '{}': {e}", url)
-        } else {
-            format!("Failed to read response body from '{}': {e}", url)
+fn parsed_service_origins(db: &crate::db::Db) -> Vec<String> {
+    let Ok(reader) = db.reader() else {
+        return Vec::new();
+    };
+    let mut origins = Vec::new();
+    if let Ok(mut statement) = reader.prepare(
+        "SELECT endpoint_url FROM search_providers WHERE is_enabled=1
+         UNION ALL SELECT base_url FROM providers WHERE is_enabled=1",
+    ) {
+        if let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) {
+            for value in rows.flatten() {
+                if let Ok(parsed) = reqwest::Url::parse(&value) {
+                    if let Some(host) = parsed.host_str() {
+                        origins.push(format!(
+                            "{}://{}:{}",
+                            parsed.scheme(),
+                            host.trim_start_matches('[').trim_end_matches(']'),
+                            parsed.port_or_known_default().unwrap_or(0)
+                        ));
+                    }
+                }
+            }
         }
-    })?;
+    }
+    origins
+}
 
-    if is_challenge_html(&html) {
+fn guard_static_url(url: &str, allowed_origins: &[String]) -> Result<reqwest::Url, String> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| "The fetched URL is not a valid absolute URL.".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http and https source URLs may be fetched.".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("Fetched URLs cannot carry credentials.".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "The fetched URL has no host.".to_string())?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let origin = format!("{}://{}:{}", parsed.scheme(), host, port);
+    let explicitly_configured = allowed_origins.iter().any(|allowed| allowed == &origin);
+    if (host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local"))
+        && !explicitly_configured
+    {
+        return Err("Fetched URLs cannot target local or private hosts.".into());
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if non_public_ip(ip) && !explicitly_configured {
+            return Err("Fetched URLs cannot target private or loopback addresses.".into());
+        }
+    }
+    Ok(parsed)
+}
+
+/// Resolves a hostname for the guarded transport. Tests inject a deterministic
+/// resolver; production uses the system resolver.
+pub trait FetchHostResolver: Send + Sync {
+    fn resolve<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<std::net::SocketAddr>, String>> + Send + 'a,
+        >,
+    >;
+}
+
+pub struct SystemHostResolver;
+
+impl FetchHostResolver for SystemHostResolver {
+    fn resolve<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<std::net::SocketAddr>, String>> + Send + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let addresses = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|_| format!("Could not resolve the fetched host '{host}'."))?
+                .collect::<Vec<_>>();
+            Ok(addresses)
+        })
+    }
+}
+
+struct ResolvedDestination {
+    url: reqwest::Url,
+    addresses: Vec<std::net::SocketAddr>,
+    host: String,
+}
+
+/// Validate a URL and resolve it exactly once. The returned addresses are the only
+/// destinations the transport may connect to.
+async fn resolve_destination(
+    url: &str,
+    allowed_origins: &[String],
+    resolver: &dyn FetchHostResolver,
+) -> Result<ResolvedDestination, String> {
+    let parsed = guard_static_url(url, allowed_origins)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "The fetched URL has no host.".to_string())?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let origin = format!("{}://{}:{}", parsed.scheme(), host, port);
+    let explicitly_configured = allowed_origins.iter().any(|allowed| allowed == &origin);
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if non_public_ip(ip) && !explicitly_configured {
+            return Err("Fetched URLs cannot target private or loopback addresses.".into());
+        }
+        return Ok(ResolvedDestination {
+            url: parsed,
+            addresses: vec![std::net::SocketAddr::new(ip, port)],
+            host,
+        });
+    }
+    let addresses = resolver.resolve(&host, port).await?;
+    if addresses.is_empty() {
+        return Err(format!("The fetched host '{host}' did not resolve."));
+    }
+    if !explicitly_configured {
+        for address in &addresses {
+            if non_public_ip(address.ip()) {
+                return Err("Fetched URLs cannot resolve to private or loopback addresses.".into());
+            }
+        }
+    }
+    Ok(ResolvedDestination {
+        url: parsed,
+        addresses,
+        host,
+    })
+}
+
+fn pinned_client(
+    resolved: &ResolvedDestination,
+    enforce_policy: bool,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        // Never let an environment proxy silently connect outside the validated policy.
+        .no_proxy()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    if enforce_policy && resolved.host.parse::<std::net::IpAddr>().is_err() {
+        builder = builder.resolve_to_addrs(&resolved.host, &resolved.addresses);
+    }
+    builder
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+async fn fetch_and_clean_url_inner(
+    url: &str,
+    allowed_origins: &[String],
+    enforce_policy: bool,
+) -> Result<ScrapedWebDocument, String> {
+    fetch_and_clean_url_with_resolver(url, allowed_origins, enforce_policy, &SystemHostResolver)
+        .await
+}
+
+async fn fetch_and_clean_url_with_resolver(
+    url: &str,
+    allowed_origins: &[String],
+    enforce_policy: bool,
+    resolver: &dyn FetchHostResolver,
+) -> Result<ScrapedWebDocument, String> {
+    let mut destination = if enforce_policy {
+        resolve_destination(url, allowed_origins, resolver).await?
+    } else {
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|_| "The fetched URL is not a valid absolute URL.".to_string())?;
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| "The fetched URL has no host.".to_string())?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_ascii_lowercase();
+        let addresses = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            vec![std::net::SocketAddr::new(ip, port)]
+        } else {
+            resolver.resolve(&host, port).await?
+        };
+        ResolvedDestination {
+            url: parsed,
+            addresses,
+            host,
+        }
+    };
+    let mut client = pinned_client(&destination, enforce_policy)?;
+
+    let mut response = client
+        .get(destination.url.clone())
+        .send()
+        .await
+        .map_err(|e| {
+            if super::is_reqwest_timeout(&e) {
+                format!("Request timed out fetching '{}': {e}", destination.url)
+            } else {
+                format!("Network request failed for '{}': {e}", destination.url)
+            }
+        })?;
+
+    // Follow a bounded number of redirects, re-resolving and re-pinning each destination.
+    for _ in 0..5 {
+        if !response.status().is_redirection() {
+            break;
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| "The source returned a redirect without a destination.".to_string())?;
+        let next = destination
+            .url
+            .join(location)
+            .map_err(|_| "The source returned an invalid redirect destination.".to_string())?;
+        destination = if enforce_policy {
+            resolve_destination(next.as_str(), allowed_origins, resolver).await?
+        } else {
+            let port = next.port_or_known_default().unwrap_or(443);
+            let host = next
+                .host_str()
+                .ok_or_else(|| "The fetched URL has no host.".to_string())?
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_ascii_lowercase();
+            let addresses = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                vec![std::net::SocketAddr::new(ip, port)]
+            } else {
+                resolver.resolve(&host, port).await?
+            };
+            ResolvedDestination {
+                url: next,
+                addresses,
+                host,
+            }
+        };
+        client = pinned_client(&destination, enforce_policy)?;
+        response = client
+            .get(destination.url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("Network request failed for '{}': {e}", destination.url))?;
+    }
+    if !response.status().is_success() {
         return Err(format!(
-            "Fetched URL '{}' returned an anti-bot challenge page",
-            url
+            "HTTP error {} fetching '{}'",
+            response.status(),
+            destination.url
+        ));
+    }
+    let destination_label = destination.url.to_string();
+    if let Some(length) = response.content_length() {
+        if length > 2 * 1024 * 1024 {
+            return Err(format!(
+                "Source '{destination_label}' is larger than the 2 MB fetch limit."
+            ));
+        }
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("text/html")
+        .to_ascii_lowercase();
+    if !(content_type.starts_with("text/html")
+        || content_type.starts_with("application/xhtml+xml")
+        || content_type.starts_with("text/plain"))
+    {
+        return Err(format!(
+            "Source '{destination_label}' returned unsupported content ({content_type}). Only HTML or plain text is supported."
         ));
     }
 
-    let (title, content_md) = clean_html_to_markdown(&html, url);
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("Failed to read response body from '{destination_label}': {e}"))?
+    {
+        if body.len() + chunk.len() > 2 * 1024 * 1024 {
+            return Err(format!(
+                "Source '{destination_label}' exceeded the 2 MB fetch limit."
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&body).into_owned();
+
+    if is_challenge_html(&html) {
+        return Err(format!(
+            "Fetched URL '{destination_label}' returned an anti-bot challenge page"
+        ));
+    }
+
+    let (title, content_md) = clean_html_to_markdown(&html, destination.url.as_str());
 
     Ok(ScrapedWebDocument {
-        url: url.to_string(),
+        url: destination.url.to_string(),
         title,
         content_md,
         published_date: None,
+        fetched_at: None,
+        from_cache: false,
     })
 }
 
@@ -542,6 +882,8 @@ pub async fn scrape_and_clean_url(
     db: Option<&crate::db::Db>,
     now_ms: i64,
 ) -> Result<ScrapedWebDocument, String> {
+    let allowed = db.map(parsed_service_origins).unwrap_or_default();
+    guard_static_url(url, &allowed)?;
     if let Some(database) = db {
         if let Ok(reader) = database.reader() {
             if let Ok(Some(cached)) = crate::db::search_repo::get_cached_web_document(&reader, url)
@@ -551,7 +893,9 @@ pub async fn scrape_and_clean_url(
         }
     }
 
-    let doc = fetch_and_clean_url(url).await?;
+    let mut doc = fetch_and_clean_url_inner(url, &allowed, true).await?;
+    doc.fetched_at = Some(now_ms);
+    doc.from_cache = false;
 
     if let Some(database) = db {
         let writer = database.writer();
@@ -559,4 +903,46 @@ pub async fn scrape_and_clean_url(
     }
 
     Ok(doc)
+}
+
+/// Deterministic test transport. Production callers use `scrape_and_clean_url`, which
+/// uses the system resolver with the same validation and pinning rules.
+#[doc(hidden)]
+pub async fn scrape_and_clean_url_with_resolver(
+    url: &str,
+    db: Option<&crate::db::Db>,
+    now_ms: i64,
+    resolver: &dyn FetchHostResolver,
+) -> Result<ScrapedWebDocument, String> {
+    let allowed = db.map(parsed_service_origins).unwrap_or_default();
+    guard_static_url(url, &allowed)?;
+    let mut doc = fetch_and_clean_url_with_resolver(url, &allowed, true, resolver).await?;
+    doc.fetched_at = Some(now_ms);
+    doc.from_cache = false;
+    if let Some(database) = db {
+        let writer = database.writer();
+        let _ = crate::db::search_repo::save_cached_web_document(&writer, &doc, now_ms);
+    }
+    Ok(doc)
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use super::decode_html_entities;
+
+    #[test]
+    fn decodes_zero_padded_and_hex_numeric_entities_without_double_decoding() {
+        assert_eq!(
+            decode_html_entities("NASA&#039;s Webb &amp; &#x27;first&#x27; image"),
+            "NASA's Webb & 'first' image"
+        );
+        assert_eq!(
+            decode_html_entities("Already decoded: NASA's image"),
+            "Already decoded: NASA's image"
+        );
+        assert_eq!(
+            decode_html_entities("Unknown &#not-a-number; entity"),
+            "Unknown &#not-a-number; entity"
+        );
+    }
 }

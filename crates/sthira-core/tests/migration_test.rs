@@ -520,7 +520,7 @@ fn preview_and_receipts_survive_reopen_and_v26_upgrade_is_additive() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        30
     );
     assert!(serde_json::from_value::<ImportDraft>(json!({"request_id":"x","source":"markdown","collection":"x","project_id":null,"files":[],"owner":true})).is_err());
 }

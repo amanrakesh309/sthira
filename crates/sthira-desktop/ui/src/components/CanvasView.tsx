@@ -1,19 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Maximize2,
   FileText,
   Type,
+  Plus,
+  Search,
 } from 'lucide-react';
 import { canvasOps, revertChangeSet } from '../api/ipc';
 import { UndoToast } from './UndoToast';
-import type { CanvasDataView, CanvasItemView, ArtifactLinkView } from '../types/sthira';
+import type { CanvasDataView, CanvasItemView, ArtifactLinkView, SearchResultItem } from '../types/sthira';
+import '../styles/spatial-canvas.css';
 
 interface CanvasViewProps {
   canvasId?: string;
   projectId?: string;
   onBack: () => void;
-  onOpenArtifact?: (artifactId: string) => void;
+  onOpenArtifact?: (artifactId: string, canvas: CanvasDataView) => void;
 }
 
 export const CanvasView: React.FC<CanvasViewProps> = ({
@@ -30,28 +33,81 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
   // Dragging state
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [pages, setPages] = useState<SearchResultItem[]>([]);
+  const [pagesState, setPagesState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [pickerReload, setPickerReload] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const viewport = useRef<HTMLDivElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const pickerButton = useRef<HTMLButtonElement>(null);
+  const mounted = useRef(false);
+  const canvasLoad = useRef(0);
+  const mutationInProgress = useRef(false);
+  const pickerVisible = !!canvas && (!items.length || pickerOpen);
+  const loadedCanvasId = canvas?.id;
 
   useEffect(() => {
-    loadCanvas();
-  }, [canvasId, projectId]);
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
-  const loadCanvas = async () => {
+  useEffect(() => {
+    if (pickerOpen) searchInput.current?.focus();
+  }, [pickerOpen]);
+
+  const loadCanvas = useCallback(async () => {
+    const request = ++canvasLoad.current;
     try {
       const resp = await canvasOps({
         action: 'GetCanvas',
         payload: { canvas_id: canvasId || null, project_id: projectId || null },
       });
-      if (resp.canvas) {
-        setCanvas(resp.canvas);
-        setItems(resp.canvas.items);
-        setLinks(resp.canvas.links);
-      }
-    } catch (err) {
-      console.error('Failed to load canvas', err);
+      if (request !== canvasLoad.current) return;
+      if (!resp.canvas) throw new Error('The canvas is unavailable.');
+      setCanvas(resp.canvas);
+      setItems(resp.canvas.items);
+      setLinks(resp.canvas.links);
+    } catch {
+      if (request === canvasLoad.current) setError('Could not load this canvas. Try again.');
+    } finally {
+      if (request === canvasLoad.current) setLoading(false);
     }
-  };
+  }, [canvasId, projectId]);
+
+  useEffect(() => {
+    setCanvas(null);
+    setItems([]);
+    setLinks([]);
+    setError('');
+    setLoading(true);
+    void loadCanvas();
+    return () => { canvasLoad.current += 1; };
+  }, [loadCanvas]);
+
+  useEffect(() => {
+    if (!pickerVisible || !loadedCanvasId) return;
+    let cancelled = false;
+    setPagesState('loading');
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await canvasOps({ action: 'ListPages', payload: { canvas_id: loadedCanvasId, query } });
+        if (!cancelled) {
+          setPages(response.pages ?? []);
+          setPagesState('ready');
+        }
+      } catch {
+        if (!cancelled) setPagesState('error');
+      }
+    }, query ? 180 : 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [pickerVisible, loadedCanvasId, query, pickerReload]);
 
   const handleMouseDown = (e: React.MouseEvent, item: CanvasItemView) => {
+    if (busy || (e.target as HTMLElement).closest('button')) return;
     e.stopPropagation();
     setDraggingItemId(item.item_id);
     setDragOffset({
@@ -93,35 +149,62 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
             y: currentItem.y,
           },
         });
-      } catch (err) {
-        console.error('Failed to move canvas item', err);
+      } catch {
+        setError('Could not save this card position. The last saved position was reloaded.');
+        void loadCanvas();
       }
     }
   };
 
-  const handleAddTextCard = async () => {
-    if (!canvas) return;
+  const nextPosition = () => {
+    const columns = Math.max(1, Math.floor(((viewport.current?.clientWidth || 640) - 24) / 304));
+    for (let index = 0; ; index++) {
+      const x = 24 + (index % columns) * 304;
+      const y = 24 + Math.floor(index / columns) * 164;
+      if (!items.some(item => x < item.x + (item.w ?? 280) + 8 && x + 288 > item.x
+        && y < item.y + (item.h ?? 140) + 8 && y + 148 > item.y)) return { x, y };
+    }
+  };
+
+  const changeCards = async (action: 'CreateNote' | 'PlacePage', pageId?: string, placeholderId?: string) => {
+    if (!canvas || mutationInProgress.current) return;
+    mutationInProgress.current = true;
+    setBusy(true);
+    setError('');
     try {
-      await canvasOps({
-        action: 'AddItem',
+      const response = await canvasOps({
+        action,
         payload: {
           canvas_id: canvas.id,
-          item_kind: 'text',
-          artifact_id: null,
-          x: 200 + Math.random() * 80,
-          y: 200 + Math.random() * 80,
-          w: 240,
-          h: 120,
+          ...(action === 'CreateNote' ? { placeholder_id: placeholderId ?? null } : { artifact_id: pageId }),
+          ...nextPosition(),
         },
       });
-      loadCanvas();
+      if (!mounted.current) return;
+      if (!response.success || (action === 'CreateNote' && !response.artifact_id)) {
+        throw new Error('The canvas action could not be completed.');
+      }
+      setPickerOpen(false);
+      if (action === 'PlacePage') {
+        await loadCanvas();
+      } else if (response.artifact_id && onOpenArtifact) {
+        onOpenArtifact(response.artifact_id, canvas);
+      } else {
+        await loadCanvas();
+      }
     } catch (err) {
-      console.error('Failed to add text card', err);
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      mutationInProgress.current = false;
+      if (mounted.current) {
+        setBusy(false);
+        if (action === 'PlacePage') requestAnimationFrame(() => pickerButton.current?.focus());
+      }
     }
   };
 
   const handleBatchAutoAlign = async () => {
-    if (!canvas || items.length === 0) return;
+    if (!canvas || busy || items.length === 0) return;
     // Auto align cards in neat grid
     const updatedPositions = items.map((item, idx) => ({
       item_id: item.item_id,
@@ -151,8 +234,8 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
           changeSetId: resp.change_set_id,
         });
       }
-    } catch (err) {
-      console.error('Failed to batch update positions', err);
+    } catch {
+      setError('Could not save the new layout.');
     }
   };
 
@@ -162,8 +245,8 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
       await revertChangeSet(undoToast.changeSetId);
       setUndoToast(null);
       loadCanvas();
-    } catch (err) {
-      console.error('Failed to undo canvas change set', err);
+    } catch {
+      setError('Could not undo the layout change.');
     }
   };
 
@@ -171,10 +254,10 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
     <div
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      className="min-h-screen canvas-dot-grid relative overflow-hidden select-none flex flex-col bg-[var(--sthira-canvas)] text-[var(--sthira-text)]"
+      className="spatial-canvas canvas-dot-grid bg-[var(--sthira-canvas)] text-[var(--sthira-text)]"
     >
       {/* Top Header Bar */}
-      <header className="w-full bg-[var(--sthira-surface-raised)] backdrop-blur-md border-b border-[var(--sthira-border)] px-6 py-3.5 flex items-center justify-between sticky top-0 z-30">
+      <header className="spatial-canvas-header bg-[var(--sthira-surface-raised)] border-b border-[var(--sthira-border)]">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -187,27 +270,35 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
           <div className="h-4 w-px bg-[var(--sthira-border)]" />
           <div>
             <h2 className="text-sm font-bold text-[var(--sthira-text)]">
-              {canvas?.name || 'Ideas to investigate'}
+              {canvas?.name || 'Spatial canvas'}
             </h2>
-            <p className="text-[12px] text-[var(--sthira-text-muted)]">
-              Spatial Canvas · Coordinates decoupled from semantic links
-            </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            onClick={handleAddTextCard}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sthira-surface-raised)] border border-[var(--sthira-border-strong)] hover:bg-[var(--sthira-surface-muted)] text-xs font-medium text-[var(--sthira-text)] transition-colors"
+            onClick={() => void changeCards('CreateNote')}
+            disabled={!canvas || busy}
+            className="sthira-button-primary"
           >
             <Type className="w-3.5 h-3.5" />
             Add Note
+          </button>
+          <button ref={pickerButton} type="button" className="sthira-button-secondary" disabled={!canvas || busy}
+            aria-expanded={pickerVisible} aria-controls={pickerVisible ? 'canvas-page-picker' : undefined}
+            onClick={() => {
+              if (!items.length) searchInput.current?.focus();
+              else { setQuery(''); setPickerOpen(open => !open); }
+            }}>
+            <Plus size={15} aria-hidden="true" />
+            Add existing page
           </button>
 
           <button
             type="button"
             onClick={handleBatchAutoAlign}
+            disabled={!items.length || busy}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sthira-surface-raised)] border border-[var(--sthira-border-strong)] hover:bg-[var(--sthira-surface-muted)] text-xs font-medium text-[var(--sthira-text)] transition-colors"
           >
             <Maximize2 className="w-3.5 h-3.5" />
@@ -216,8 +307,35 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
         </div>
       </header>
 
-      {/* 2D Canvas Surface */}
-      <div className="flex-1 relative w-full h-[calc(100vh-60px)] overflow-auto p-8">
+      {error && <div className="spatial-canvas-status" role="alert">{error}{!canvas && (
+        <button type="button" className="sthira-button-secondary" onClick={() => { setError(''); setLoading(true); void loadCanvas(); }}>Retry</button>
+      )}</div>}
+      {loading && <p className="spatial-canvas-status" role="status">Loading canvas…</p>}
+      {pickerVisible && (
+        <section id="canvas-page-picker" className="canvas-page-picker" aria-label="Choose a saved page">
+          <h3>Choose a saved page</h3>
+          <label className="canvas-page-search">
+            <Search size={16} aria-hidden="true" />
+            <input ref={searchInput} aria-label="Search saved pages" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search saved pages…" />
+          </label>
+          {pagesState === 'loading' && <p role="status">Loading saved pages…</p>}
+          {pagesState === 'error' && <p role="alert">Could not load saved pages. <button type="button" onClick={() => setPickerReload(n => n + 1)}>Retry</button></p>}
+          {pagesState === 'ready' && (pages.length ? (
+            <ul>
+              {pages.map(page => <li key={page.id}>
+                <button type="button" aria-label={`Add ${page.title} to canvas`} disabled={busy} onClick={() => void changeCards('PlacePage', page.id)}>
+                  <FileText size={15} aria-hidden="true" /><span>{page.title}</span><Plus size={15} aria-hidden="true" />
+                </button>
+              </li>)}
+            </ul>
+          ) : <p>{query.trim() ? 'No matching pages to add.' : 'No saved pages to add. Use Add Note to create one.'}</p>)}
+        </section>
+      )}
+      <div ref={viewport} className="spatial-canvas-viewport">
+        <div className="spatial-canvas-board" style={{
+          minWidth: `max(100%, ${items.reduce((size, item) => Math.max(size, item.x + (item.w ?? 280) + 24), 0)}px)`,
+          minHeight: `max(100%, ${items.reduce((size, item) => Math.max(size, item.y + (item.h ?? 140) + 24), 0)}px)`,
+        }}>
         {/* Render Semantic Links as SVG connector lines */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
           {links.map((link, idx) => {
@@ -225,10 +343,10 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
             const dst = items.find((i) => i.artifact_id === link.target_artifact_id || i.item_id === link.target_artifact_id);
             if (!src || !dst) return null;
 
-            const x1 = src.x + 140;
-            const y1 = src.y + 60;
-            const x2 = dst.x + 140;
-            const y2 = dst.y + 60;
+            const x1 = src.x + (src.w ?? 280) / 2;
+            const y1 = src.y + (src.h ?? 140) / 2;
+            const x2 = dst.x + (dst.w ?? 280) / 2;
+            const y2 = dst.y + (dst.h ?? 140) / 2;
 
             return (
               <g key={idx}>
@@ -301,31 +419,30 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
                 {item.artifact_id && onOpenArtifact && (
                   <button
                     type="button"
+                    aria-label={`Open ${item.title || 'Untitled page'}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpenArtifact(item.artifact_id!);
+                      if (canvas) onOpenArtifact(item.artifact_id!, canvas);
                     }}
                     className="text-[12px] font-semibold text-[var(--sthira-primary)] hover:underline"
                   >
-                    Open →
+                    Open
                   </button>
+                )}
+                {item.item_kind === 'text' && !item.artifact_id && (
+                  <button type="button" disabled={busy} className="text-[12px] font-semibold text-[var(--sthira-primary)] hover:underline"
+                    onClick={() => void changeCards('CreateNote', undefined, item.item_id)}>Open as note</button>
                 )}
               </div>
 
               <h4 className="font-bold text-[var(--sthira-text)] text-sm mb-1.5">
                 {item.title || 'Untitled Card'}
               </h4>
-              <p className="text-xs text-[var(--sthira-text-muted)] leading-relaxed line-clamp-3">
-                {item.excerpt || 'Drag card anywhere on canvas. Spatial movements remain decoupled from semantic links.'}
-              </p>
-            </div>
-
-            <div className="pt-2 text-[11px] text-[var(--sthira-text-muted)] flex items-center justify-between">
-              <span>x: {Math.round(item.x)}, y: {Math.round(item.y)}</span>
-              <span className="font-medium text-[var(--sthira-text)]">Sthira Canvas</span>
+              {item.excerpt && <p className="text-xs text-[var(--sthira-text-muted)] leading-relaxed line-clamp-3">{item.excerpt}</p>}
             </div>
           </div>
         ))}
+        </div>
       </div>
 
       {/* Undo Toast */}

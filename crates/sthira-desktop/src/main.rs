@@ -6,8 +6,9 @@ use std::time::SystemTime;
 use sthira_core::{llm::TieredModelProvider, Clock, Engine};
 use sthira_desktop::{
     register_commands, seed_demo_workspace_if_empty, spawn_event_bridge,
-    spawn_scheduled_topic_scheduler, AppState,
+    spawn_scheduled_topic_scheduler, AppState, CloseGuardState,
 };
+use tauri::{Emitter, Manager};
 
 struct DesktopClock;
 impl Clock for DesktopClock {
@@ -53,6 +54,21 @@ fn main() {
 
     let builder = tauri::Builder::default()
         .manage(app_state)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let guard = window.state::<CloseGuardState>();
+                if guard
+                    .allowing
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
+                if guard.ready.load(std::sync::atomic::Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.app_handle().emit("sthira:close-requested", ());
+                }
+            }
+        })
         .setup(move |app| {
             spawn_event_bridge(app.handle().clone(), engine.clone());
             spawn_scheduled_topic_scheduler(app.handle().clone(), engine);

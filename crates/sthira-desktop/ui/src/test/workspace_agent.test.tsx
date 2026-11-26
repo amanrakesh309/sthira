@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AgentView } from '../views/AgentView';
 import * as api from '../api/workspaceAgent';
@@ -8,7 +8,7 @@ import { getWorkspaceTree } from '../api/ipc';
 import { memoryAction } from '../api/sharedMemory';
 import type { AgentRun } from '../api/workspaceAgent';
 vi.mock('../api/workspaceAgent',async original=>({...await original<typeof import('../api/workspaceAgent')>(),listAgentRuns:vi.fn(),getAgentRun:vi.fn(),createAgentRun:vi.fn(),executeAgentRun:vi.fn(),cancelAgentRun:vi.fn(),reviewAgentStep:vi.fn(),undoAgentEdit:vi.fn(),followUpAgentRun:vi.fn()}));
-vi.mock('../api/ipc',()=>({isTauri:true,getWorkspaceTree:vi.fn(async()=>({projects:[{id:'project-a',name:'Reading journal'}]})),getProviderCatalog:vi.fn(async()=>[{id:'p',display_name:'Configured provider',is_enabled:true,models:[{id:'m',provider_id:'p',display_name:'Chosen model',is_enabled:true,is_default:true}]}]),getArtifactContext:vi.fn(async()=>({artifact:{content_md:'Original prose',title:null,version:1,content_hash:'hash'}}))}));
+vi.mock('../api/ipc',()=>({isTauri:true,getWorkspaceTree:vi.fn(async()=>({projects:[{id:'project-a',name:'Reading journal'}]})),getProviderCatalog:vi.fn(async()=>[{id:'p',display_name:'Configured provider',is_enabled:true,models:[{id:'m',provider_id:'p',display_name:'Chosen model',is_enabled:true,is_default:true}]}]),getArtifactContext:vi.fn(async()=>({artifact:{content_md:'Original prose',title:null,version:1,content_hash:'hash'}})),getSearchProviders:vi.fn(async()=>[])}));
 vi.mock('../api/agentHandoffs',()=>({listAgentHandoffs:vi.fn(async()=>[]),listHandoffConnections:vi.fn(async()=>[]),getAgentHandoff:vi.fn(),saveAgentHandoff:vi.fn(),closeAgentHandoff:vi.fn(),continueAgentHandoff:vi.fn()}));
 vi.mock('../api/sharedMemory',()=>({memoryAction:vi.fn()}));
 const state=vi.hoisted(()=>({enabled:true,taskRevision:0}));
@@ -17,6 +17,36 @@ vi.mock('../hooks/useWorkflowSettings',()=>({useWorkflowSettings:()=>({settings:
 const saved:AgentRun={id:'run-a',goal:'Review my reading',project_id:'project-a',workspace_memory:false,model_id:'m',model_name:'Chosen model',provider_id:'p',provider_name:'Configured provider',status:'completed',summary:'No changes applied.',handoff:'Check the unresolved question.',error:null,created_at:1000,updated_at:1000,steps:[]};
 beforeEach(()=>{vi.clearAllMocks();state.enabled=true;state.taskRevision=0;vi.mocked(api.listAgentRuns).mockResolvedValue([]);vi.mocked(api.createAgentRun).mockResolvedValue({...saved,status:'queued'});vi.mocked(api.executeAgentRun).mockResolvedValue(saved);vi.mocked(api.getAgentRun).mockResolvedValue(saved);});
 afterEach(cleanup);
+it('paginates saved goals and opens the activity details with the mouse and keyboard', async () => {
+  const run: AgentRun = { ...saved, steps: [{
+    id: 'read-a', sequence: 1, action: { type: 'read_page', artifact_id: 'source-a' }, state: 'done',
+    result: { title: 'Experiment log', content_md: '**Saved excerpt** from the experiment.' }, artifact_id: 'source-a',
+    turn_id: null, change_set_id: null, basis_content_md: null,
+  }] };
+  const recent = Array.from({ length: 8 }, (_, index) => ({ ...saved, id: `run-${index}`, goal: `Recent goal ${index}`, updated_at: 2000 - index }));
+  vi.mocked(api.listAgentRuns).mockResolvedValue([...recent, run]);
+  vi.mocked(api.getAgentRun).mockResolvedValue(run);
+  const user = userEvent.setup();
+  render(<AgentView onOpenArtifact={vi.fn()} />);
+
+  const goals = await screen.findByRole('table', { name: 'Recent goals' });
+  expect(within(goals).getAllByRole('row')).toHaveLength(9);
+  await user.click(screen.getByRole('button', { name: 'Next' }));
+  await user.click(within(goals).getByRole('cell', { name: 'Finished' }));
+  expect(api.getAgentRun).toHaveBeenCalledWith(run.id);
+  const activity = await screen.findByRole('table', { name: 'Recorded actions' });
+  const detail = within(activity).getByRole('button', { name: 'Read saved page' });
+  expect(detail).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByText('Saved excerpt')).not.toBeInTheDocument();
+  detail.focus();
+  await user.keyboard('{Enter}');
+  expect(detail).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByText('Saved excerpt')).toBeVisible();
+  await user.click(within(activity).getByRole('cell', { name: 'Completed' }));
+  expect(detail).toHaveFocus();
+  expect(detail).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByText('Saved excerpt')).not.toBeInTheDocument();
+});
 it('keeps the goal editable with honest setup when the agent workflow is disabled',async()=>{
   state.enabled=false;const user=userEvent.setup();render(<AgentView onOpenArtifact={vi.fn()}/>);
   await user.type(screen.getByRole('textbox',{name:'Agent goal'}),'Keep this unsent goal');
@@ -25,7 +55,7 @@ it('keeps the goal editable with honest setup when the agent workflow is disable
 it('dispatches the chosen scope and model, then shows the saved result and handoff',async()=>{
   const user=userEvent.setup();render(<AgentView onOpenArtifact={vi.fn()}/>);
   await screen.findByRole('option',{name:'Reading journal'});await user.type(screen.getByRole('textbox',{name:'Agent goal'}),'Review my reading');await user.selectOptions(screen.getByRole('combobox',{name:'Agent scope'}),'project-a');await user.click(screen.getByRole('button',{name:'Start working'}));
-  await waitFor(()=>expect(api.createAgentRun).toHaveBeenCalledWith({goal:'Review my reading',project_id:'project-a',workspace_memory:false,model_id:'m'}));
+  await waitFor(()=>expect(api.createAgentRun).toHaveBeenCalledWith({goal:'Review my reading',project_id:'project-a',workspace_memory:false,model_id:'m',allow_web:false,research_template_mode:'inherit',research_template_id:null,plan_template_mode:'inherit',plan_template_id:null}));
   expect(await screen.findByRole('region',{name:'Agent result'})).toHaveTextContent('No changes applied.');expect(screen.getByRole('region',{name:'Saved handoff'})).toHaveTextContent('Check the unresolved question.');
 });
 it('retains a failed start and guards the unsent goal against navigation',async()=>{

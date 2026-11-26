@@ -49,7 +49,7 @@ impl RequestRegistry {
     pub fn cancel_agent_tasks(&self) {
         if let Ok(map) = self.tokens.lock() {
             for (id, token) in map.iter() {
-                if id.starts_with("workspace-agent:") {
+                if id.starts_with("workspace-agent:") || id.starts_with("migration-guidance:") {
                     token.cancel();
                 }
             }

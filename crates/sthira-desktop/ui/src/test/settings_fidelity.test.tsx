@@ -75,6 +75,9 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
       if (cmd === 'cmd_get_provider_catalog') {
         return Promise.resolve(sampleProviders);
       }
+      if (cmd === 'cmd_list_synthesis_templates') {
+        return Promise.resolve([]);
+      }
       if (cmd === 'cmd_get_search_providers') {
         return Promise.resolve(sampleSearchProviders);
       }
@@ -103,11 +106,6 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     expect(heading).toBeInTheDocument();
     expect(heading).toHaveClass('settings-title');
 
-    // Subtitle
-    expect(
-      screen.getByText(/Make room for the way you work/i)
-    ).toBeInTheDocument();
-
     // Close button
     const closeBtn = screen.getByRole('button', { name: /Close Settings/i });
     expect(closeBtn).toBeInTheDocument();
@@ -117,7 +115,7 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
   it('uses one navigation for models, workflows, search, appearance and data', async () => {
     render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
     const navigation = screen.getByRole('navigation', { name: 'Settings categories' });
-    expect(navigation.querySelectorAll('button')).toHaveLength(5);
+    expect(navigation.querySelectorAll('button')).toHaveLength(6);
     expect(document.querySelector('.settings-tabs-row')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
@@ -243,9 +241,9 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
 
   it('keeps navigation available across sections and contains destructive actions', () => {
     render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
-    for (const name of ['Workflows', 'Web Search', 'Appearance', 'Workspace & Data', 'AI & Models']) {
+    for (const name of ['Workflows', 'Templates', 'Web Search', 'Appearance', 'Workspace & Data', 'AI & Models']) {
       fireEvent.click(screen.getByRole('button', { name }));
-      expect(screen.getByRole('navigation', { name: 'Settings categories' }).querySelectorAll('button')).toHaveLength(5);
+      expect(screen.getByRole('navigation', { name: 'Settings categories' }).querySelectorAll('button')).toHaveLength(6);
     }
     fireEvent.click(screen.getByRole('button', { name: 'Workspace & Data' }));
     expect(screen.getByText('Delete workspace data').closest('details')).not.toHaveAttribute('open');

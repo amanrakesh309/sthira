@@ -1,8 +1,11 @@
-//! AE5 deterministic, owner-reviewed local export import. Never reads source paths or calls a model.
+//! Owner-reviewed local export import. Deterministic writes; optional scoped guidance is separate.
+pub mod guidance;
+mod review;
 use crate::{
     vault, workspace_structure as structure, Actor, Artifact, ArtifactType, Authorship, CoreError,
     CoreEvent, Engine,
 };
+pub use review::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -446,21 +449,32 @@ impl Engine {
         let conn = self.db().reader()?;
         get(&conn, id)
     }
-    pub fn list_migrations(&self) -> Result<Vec<ImportRun>, CoreError> {
-        let c = self.db().reader()?;
-        let mut st = c.prepare(
-            "SELECT id FROM migration_imports ORDER BY created_at DESC,rowid DESC LIMIT 50",
-        )?;
-        let ids = st
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        ids.iter().map(|id| get(&c, id)).collect()
+    pub fn list_migrations(&self) -> Result<Vec<ImportSummary>, CoreError> {
+        Ok(self.migration_history(50, None)?.items)
     }
     pub fn apply_migration(
         &self,
         id: &str,
         revision: i64,
         paths: Vec<String>,
+    ) -> Result<ImportRun, CoreError> {
+        self.apply_migration_inner(id, revision, paths, None)
+    }
+    pub fn apply_reviewed_migration(
+        &self,
+        id: &str,
+        revision: i64,
+        paths: Vec<String>,
+        basis: &str,
+    ) -> Result<ImportRun, CoreError> {
+        self.apply_migration_inner(id, revision, paths, Some(basis))
+    }
+    fn apply_migration_inner(
+        &self,
+        id: &str,
+        revision: i64,
+        paths: Vec<String>,
+        reviewed_basis: Option<&str>,
     ) -> Result<ImportRun, CoreError> {
         let mut selected = paths;
         selected.sort();
@@ -473,49 +487,23 @@ impl Engine {
         let tx = w.transaction()?;
         let run = get(&tx, id)?;
         if run.status == "applied" {
-            if run
-                .receipt
-                .as_ref()
-                .is_some_and(|r| r["selected"] == json!(selected))
-            {
+            if run.receipt.as_ref().is_some_and(|r| {
+                r["selected"] == json!(selected)
+                    && reviewed_basis.is_none_or(|b| r["review_basis"].as_str() == Some(b))
+            }) {
                 return Ok(run);
             }
             return Err(bad(
                 "This preview was already applied with a different selection.",
             ));
         }
-        if run.status != "preview" || run.revision != revision {
-            return Err(bad("Import preview changed or is no longer available."));
+        let selection = review::selection(&tx, &run, revision, selected.clone())?;
+        if reviewed_basis.is_some_and(|basis| basis != selection.basis) {
+            return Err(bad(
+                "The selected preview changed. Review the selection again before importing.",
+            ));
         }
-        if let Some(p) = &run.plan.project_id {
-            if Some(crate::project_actions::snapshot(&tx, p)?.revision) != run.plan.project_revision
-            {
-                return Err(bad("Destination project changed. Prepare a fresh preview."));
-            }
-        }
-        let mut targets = saved_targets(&tx, &run.plan.source, &run.plan.collection)?;
-        for item in &run.plan.items {
-            if selected.contains(&item.path) {
-                if item.status != "new" || source_state(&tx, &item.source_key)?.is_some() {
-                    return Err(bad("Import selection changed or contains a non-new file. Prepare another preview."));
-                }
-                targets.insert(item.path.clone(), item.artifact_id.clone());
-            } else if item.status == "duplicate"
-                && Self::get_artifact_tx(&tx, &item.artifact_id)?
-                    .deleted_at
-                    .is_none()
-            {
-                targets.insert(item.path.clone(), item.artifact_id.clone());
-            }
-        }
-        if selected.iter().any(|p| {
-            !run.plan
-                .items
-                .iter()
-                .any(|i| &i.path == p && i.status == "new")
-        }) {
-            return Err(bad("Unknown import selection."));
-        }
+        let targets = review::targets(&tx, &run, &selected)?;
         let mut artifacts = vec![];
         let mut converted = vec![];
         for item in run.plan.items.iter().filter(|i| selected.contains(&i.path)) {
@@ -572,14 +560,29 @@ impl Engine {
         // A crash or failed post-commit bookkeeping must leave an honest durable
         // warning, rather than claiming that mirrors were published successfully.
         let pending = artifacts.iter().map(|a| json!({"artifact_id":a.id,"error":"Mirror publication has not yet been confirmed. Inspect or save this existing imported page; do not import it again."})).collect::<Vec<_>>();
-        let receipt = json!({"selected":selected,"pages":rows,"event_seq":event_seq,"mirror_warnings":pending});
+        let receipt = json!({"selected":selected,"review_basis":selection.basis,"pages":rows,"event_seq":event_seq,"mirror_warnings":pending});
         tx.execute("UPDATE migration_imports SET status='applied',revision=revision+1,receipt_json=?2 WHERE id=?1",params![id,receipt.to_string()])?;
+        tx.execute("UPDATE migration_guidance SET status='cancelled',error='Import applied; guidance stopped.' WHERE import_id=?1 AND status IN ('queued','running')",[id])?;
         let mut applied = ImportRun {
             revision: run.revision + 1,
             status: "applied".into(),
             receipt: Some(receipt),
             ..run
         };
+        for item in &mut applied.plan.items {
+            if let Some(reviewed) = selection
+                .items
+                .iter()
+                .find(|selected| selected.path == item.path)
+            {
+                item.preview_content = reviewed.preview_content.clone();
+                item.warnings = reviewed.warnings.clone();
+            }
+        }
+        tx.execute(
+            "UPDATE migration_imports SET plan_json=?2 WHERE id=?1",
+            params![id, serde_json::to_string(&applied.plan)?],
+        )?;
         tx.commit()?;
         drop(w);
         let warnings = self.sync_import_mirrors(id, &artifacts);
@@ -630,8 +633,13 @@ impl Engine {
         warnings
     }
     pub fn cancel_migration(&self, id: &str, revision: i64) -> Result<ImportRun, CoreError> {
-        if self.db().writer().execute("UPDATE migration_imports SET status='cancelled',revision=revision+1 WHERE id=?1 AND revision=?2 AND status='preview'",params![id,revision])?!=1{return Err(bad("Only a current preview can be cancelled."));}
-        self.migration_run(id)
+        let mut writer = self.db().writer();
+        let tx = writer.transaction()?;
+        if tx.execute("UPDATE migration_imports SET status='cancelled',revision=revision+1 WHERE id=?1 AND revision=?2 AND status='preview'",params![id,revision])?!=1{return Err(bad("Only a current preview can be cancelled."));}
+        tx.execute("UPDATE migration_guidance SET status='cancelled',error='Import preview cancelled.' WHERE import_id=?1 AND status IN ('queued','running')",[id])?;
+        let result = get(&tx, id)?;
+        tx.commit()?;
+        Ok(result)
     }
     pub fn rollback_migration(&self, id: &str, revision: i64) -> Result<ImportRun, CoreError> {
         let now = self.clock().now_ms();

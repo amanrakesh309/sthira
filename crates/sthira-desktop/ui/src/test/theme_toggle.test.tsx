@@ -131,8 +131,9 @@ describe('Theme Management & Light/Dark Mode Experience', () => {
     fireEvent.click(appearanceTab);
 
     // Check that theme options are rendered inside Appearance tab
-    expect(screen.getAllByText(/Warm Stone/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Deep Obsidian/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dark' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'System' })).toBeInTheDocument();
 
     // Select Dark mode from selector
     const darkOption = screen.getByTestId('theme-option-dark');

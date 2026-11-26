@@ -1,0 +1,813 @@
+import { invoke } from '@tauri-apps/api/core';
+import { isTauri } from './ipc';
+import type { GoogleSession } from '../components/AccountModal';
+
+export type WorkspaceRole = 'owner' | 'admin' | 'editor' | 'viewer';
+export type InvitationStatus = 'pending' | 'accepted' | 'expired' | 'revoked';
+export type TransferStatus = 'pending' | 'accepted' | 'cancelled';
+
+export interface WorkspaceSummary {
+  workspaceId: string;
+  name: string;
+  myMembershipId: string;
+  myRole: WorkspaceRole;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface CreateWorkspaceOutcome {
+  created: boolean;
+  workspace: WorkspaceSummary;
+}
+
+export interface WorkspaceMemberView {
+  membershipId: string;
+  uid: string;
+  displayName: string;
+  role: WorkspaceRole;
+  joinedAtMs: number;
+  isCurrentUser: boolean;
+}
+
+export interface WorkspaceInvitationView {
+  invitationId: string;
+  workspaceId: string;
+  recipientEmail: string;
+  offeredRole: WorkspaceRole;
+  status: InvitationStatus;
+  invitedByMembershipId: string;
+  invitedByDisplayName: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  acceptedAtMs?: number | null;
+  revokedAtMs?: number | null;
+}
+
+export interface CreatedInvitation {
+  invitation: WorkspaceInvitationView;
+  inviteCode: string;
+}
+
+export interface InvitationPreview {
+  invitationId: string;
+  workspaceId: string;
+  workspaceName: string;
+  offeredRole: WorkspaceRole;
+  expiresAtMs: number;
+  alreadyMember: boolean;
+  existingRole?: WorkspaceRole | null;
+}
+
+export interface AcceptInvitationOutcome {
+  alreadyMember: boolean;
+  workspace: WorkspaceSummary;
+  membership: WorkspaceMemberView;
+}
+
+export interface OwnershipTransferView {
+  transferId: string;
+  workspaceId: string;
+  workspaceName: string;
+  fromMembershipId: string;
+  fromUid: string;
+  fromDisplayName: string;
+  toMembershipId: string;
+  toUid: string;
+  toDisplayName: string;
+  status: TransferStatus;
+  createdAtMs: number;
+}
+
+export interface WorkspaceDetails {
+  workspace: WorkspaceSummary;
+  members: WorkspaceMemberView[];
+  invitations: WorkspaceInvitationView[];
+  pendingTransfer?: OwnershipTransferView | null;
+}
+
+export interface WorkspaceListResponse {
+  workspaces: WorkspaceSummary[];
+  incomingTransfers: OwnershipTransferView[];
+}
+
+export type WorkspaceResponse<T> =
+  | { outcome: 'ok'; data: T }
+  | { outcome: 'sessionUpdated'; session: GoogleSession }
+  | { outcome: 'accessLost'; message: string; workspaces?: WorkspaceListResponse | null }
+  | { outcome: 'error'; code: string; message: string };
+
+export const WORKSPACE_ROLE_LABELS: Record<WorkspaceRole, string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  editor: 'Editor',
+  viewer: 'Viewer',
+};
+
+export function canRenameWorkspace(role: WorkspaceRole): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
+export function grantableInviteRoles(role: WorkspaceRole): WorkspaceRole[] {
+  if (role === 'owner') return ['admin', 'editor', 'viewer'];
+  if (role === 'admin') return ['editor', 'viewer'];
+  return [];
+}
+
+export function editableRolesForTarget(
+  actorRole: WorkspaceRole,
+  targetRole: WorkspaceRole,
+  isSelf: boolean,
+): WorkspaceRole[] {
+  if (isSelf || targetRole === 'owner') return [];
+  if (actorRole === 'owner') return ['admin', 'editor', 'viewer'];
+  if (actorRole === 'admin' && (targetRole === 'editor' || targetRole === 'viewer')) {
+    return ['editor', 'viewer'];
+  }
+  return [];
+}
+
+export function canRemoveTarget(
+  actorRole: WorkspaceRole,
+  targetRole: WorkspaceRole,
+  isSelf: boolean,
+): boolean {
+  if (isSelf || targetRole === 'owner') return false;
+  if (actorRole === 'owner') return true;
+  return actorRole === 'admin' && (targetRole === 'editor' || targetRole === 'viewer');
+}
+
+function previewUnavailable<T>(): WorkspaceResponse<T> {
+  return { outcome: 'sessionUpdated', session: { status: 'unavailable' } };
+}
+
+export async function getActiveWorkspaceId(): Promise<string | null> {
+  if (!isTauri) return null;
+  return invoke<string | null>('cmd_get_active_workspace');
+}
+
+export async function setActiveWorkspaceId(workspaceId: string | null): Promise<void> {
+  if (!isTauri) return;
+  await invoke('cmd_set_active_workspace', { workspaceId });
+}
+
+export async function listWorkspaces(): Promise<WorkspaceResponse<WorkspaceListResponse>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceListResponse>>('cmd_list_workspaces');
+}
+
+export async function createWorkspace(
+  name: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<CreateWorkspaceOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<CreateWorkspaceOutcome>>('cmd_create_workspace', {
+    name,
+    idempotencyKey,
+  });
+}
+
+export async function getWorkspaceDetails(
+  workspaceId: string,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_get_workspace', { workspaceId });
+}
+
+export async function renameWorkspace(
+  workspaceId: string,
+  name: string,
+): Promise<WorkspaceResponse<WorkspaceSummary>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceSummary>>('cmd_rename_workspace', {
+    workspaceId,
+    name,
+  });
+}
+
+export async function createInvitation(
+  workspaceId: string,
+  email: string,
+  role: WorkspaceRole,
+): Promise<WorkspaceResponse<CreatedInvitation>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<CreatedInvitation>>('cmd_create_invitation', {
+    workspaceId,
+    email,
+    role,
+  });
+}
+
+export async function revokeInvitation(
+  workspaceId: string,
+  invitationId: string,
+): Promise<WorkspaceResponse<WorkspaceInvitationView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceInvitationView>>('cmd_revoke_invitation', {
+    workspaceId,
+    invitationId,
+  });
+}
+
+export async function replaceInvitation(
+  workspaceId: string,
+  invitationId: string,
+): Promise<WorkspaceResponse<CreatedInvitation>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<CreatedInvitation>>('cmd_replace_invitation', {
+    workspaceId,
+    invitationId,
+  });
+}
+
+export async function previewInvitation(
+  inviteCode: string,
+): Promise<WorkspaceResponse<InvitationPreview>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<InvitationPreview>>('cmd_preview_invitation', {
+    inviteCode,
+  });
+}
+
+export async function acceptInvitation(
+  inviteCode: string,
+): Promise<WorkspaceResponse<AcceptInvitationOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<AcceptInvitationOutcome>>('cmd_accept_invitation', {
+    inviteCode,
+  });
+}
+
+export async function changeMemberRole(
+  workspaceId: string,
+  membershipId: string,
+  role: WorkspaceRole,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_change_member_role', {
+    workspaceId,
+    membershipId,
+    role,
+  });
+}
+
+export async function removeMember(
+  workspaceId: string,
+  membershipId: string,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_remove_member', {
+    workspaceId,
+    membershipId,
+  });
+}
+
+export async function leaveWorkspace(
+  workspaceId: string,
+): Promise<WorkspaceResponse<{ left: boolean; workspaceId: string }>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<{ left: boolean; workspaceId: string }>>('cmd_leave_workspace', {
+    workspaceId,
+  });
+}
+
+export async function initiateOwnershipTransfer(
+  workspaceId: string,
+  toMembershipId: string,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_initiate_ownership_transfer', {
+    workspaceId,
+    toMembershipId,
+  });
+}
+
+export async function acceptOwnershipTransfer(
+  workspaceId: string,
+  transferId: string,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_accept_ownership_transfer', {
+    workspaceId,
+    transferId,
+  });
+}
+
+export async function cancelOwnershipTransfer(
+  workspaceId: string,
+  transferId: string,
+): Promise<WorkspaceResponse<WorkspaceDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<WorkspaceDetails>>('cmd_cancel_ownership_transfer', {
+    workspaceId,
+    transferId,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CW2 Shared Pages, Comments, Change Review, Activity, and Isolated Drafts
+// ---------------------------------------------------------------------------
+
+export type PageEntryMode = 'new' | 'copyPersonal';
+export type PageOriginKind = 'userAuthored' | 'aiAssisted' | 'externalSource';
+export type ThreadStatus = 'open' | 'resolved';
+export type ProposalStatus = 'pending' | 'changesRequested' | 'rejected' | 'applied' | 'withdrawn';
+export type ProposalReviewAction = 'apply' | 'requestChanges' | 'reject';
+
+export interface ShareableProvenance {
+  originKind: PageOriginKind;
+  originalAuthorLabel?: string | null;
+  aiModelLabel?: string | null;
+  sourceNote?: string | null;
+}
+
+export interface CreateSharedPageInput {
+  title: string;
+  contentMd: string;
+  entryMode: PageEntryMode;
+  provenance: ShareableProvenance;
+  omittedSummary?: string[];
+  idempotencyKey: string;
+}
+
+export interface SharedPageSummary {
+  pageId: string;
+  workspaceId: string;
+  title: string;
+  currentRevisionNumber: number;
+  entryMode: PageEntryMode;
+  provenance: ShareableProvenance;
+  omittedSummary: string[];
+  publisherUid: string;
+  publisherDisplayName: string;
+  lastEditorUid: string;
+  lastEditorDisplayName: string;
+  lastReviewerUid?: string | null;
+  lastReviewerDisplayName?: string | null;
+  archivedAtMs?: number | null;
+  archivedByDisplayName?: string | null;
+  unresolvedThreadCount: number;
+  pendingProposalCount: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface SharedPageRevisionView {
+  revisionId: string;
+  workspaceId: string;
+  pageId: string;
+  revisionNumber: number;
+  title: string;
+  contentMd: string;
+  contentSha256: string;
+  changeSummary: string;
+  authorUid: string;
+  authorDisplayName: string;
+  reviewerUid?: string | null;
+  reviewerDisplayName?: string | null;
+  proposalId?: string | null;
+  createdAtMs: number;
+}
+
+export interface SharedCommentMessageView {
+  messageId: string;
+  threadId: string;
+  authorUid: string;
+  authorDisplayName: string;
+  body: string;
+  createdAtMs: number;
+}
+
+export interface SharedCommentThreadView {
+  threadId: string;
+  workspaceId: string;
+  pageId: string;
+  baseRevisionNumber: number;
+  authorUid: string;
+  authorDisplayName: string;
+  status: ThreadStatus;
+  resolvedAtMs?: number | null;
+  resolvedByDisplayName?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  messages: SharedCommentMessageView[];
+}
+
+export interface ProposalDecisionView {
+  decisionId: string;
+  submissionNumber: number;
+  action: string;
+  actorUid: string;
+  actorDisplayName: string;
+  note?: string | null;
+  baseRevisionNumber: number;
+  submittedTitle: string;
+  submittedContentMd: string;
+  resultingRevisionNumber?: number | null;
+  createdAtMs: number;
+}
+
+export interface SharedProposalSummary {
+  proposalId: string;
+  workspaceId: string;
+  pageId: string;
+  pageTitle: string;
+  baseRevisionNumber: number;
+  summary: string;
+  authorUid: string;
+  authorDisplayName: string;
+  status: ProposalStatus;
+  submissionCount: number;
+  isStale: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+  reviewedAtMs?: number | null;
+  reviewerDisplayName?: string | null;
+  appliedRevisionNumber?: number | null;
+}
+
+export interface SharedProposalDetails {
+  proposal: SharedProposalSummary;
+  baseTitle: string;
+  baseContentMd: string;
+  proposedTitle: string;
+  proposedContentMd: string;
+  currentPageRevisionNumber: number;
+  currentPageTitle: string;
+  currentPageContentMd: string;
+  pageArchived: boolean;
+  canReview: boolean;
+  canAuthorEdit: boolean;
+  decisions: ProposalDecisionView[];
+}
+
+export interface SharedPageDetails {
+  page: SharedPageSummary;
+  currentRevision: SharedPageRevisionView;
+  revisions: SharedPageRevisionView[];
+  revisionsNextCursor?: string | null;
+  threads: SharedCommentThreadView[];
+  threadsNextCursor?: string | null;
+  proposals: SharedProposalSummary[];
+  proposalsNextCursor?: string | null;
+}
+
+export interface CreateSharedPageOutcome {
+  created: boolean;
+  page: SharedPageDetails;
+}
+
+export interface SharedActivityItem {
+  activityId: string;
+  workspaceId: string;
+  actorUid: string;
+  actorDisplayName: string;
+  action: string;
+  targetType: string;
+  pageId?: string | null;
+  pageTitle?: string | null;
+  proposalId?: string | null;
+  threadId?: string | null;
+  detailText: string;
+  createdAtMs: number;
+}
+
+export interface PagedList<T> {
+  items: T[];
+  nextCursor?: string | null;
+}
+
+export interface SharedDraftRecord {
+  accountUid: string;
+  workspaceId: string;
+  draftKey: string;
+  pageId?: string | null;
+  proposalId?: string | null;
+  baseRevisionNumber?: number | null;
+  title: string;
+  contentMd: string;
+  summary: string;
+  updatedAtMs: number;
+}
+
+export function canAuthorSharedContent(role: WorkspaceRole): boolean {
+  return role === 'owner' || role === 'admin' || role === 'editor';
+}
+
+export function canReviewOrArchiveSharedContent(role: WorkspaceRole): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
+export function makeRequestIdempotencyKey(prefix = 'cw2'): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}_${crypto.randomUUID().replace(/-/g, '')}`;
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export async function listSharedPages(
+  workspaceId: string,
+  includeArchived = false,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedPageSummary>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedPageSummary>>>('cmd_list_shared_pages', {
+    workspaceId,
+    includeArchived,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function createSharedPage(
+  workspaceId: string,
+  input: CreateSharedPageInput,
+): Promise<WorkspaceResponse<CreateSharedPageOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<CreateSharedPageOutcome>>('cmd_create_shared_page', {
+    workspaceId,
+    input,
+  });
+}
+
+export async function getSharedPage(
+  workspaceId: string,
+  pageId: string,
+): Promise<WorkspaceResponse<SharedPageDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedPageDetails>>('cmd_get_shared_page', {
+    workspaceId,
+    pageId,
+  });
+}
+
+export async function listSharedRevisions(
+  workspaceId: string,
+  pageId: string,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedPageRevisionView>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedPageRevisionView>>>('cmd_list_shared_revisions', {
+    workspaceId,
+    pageId,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function archiveSharedPage(
+  workspaceId: string,
+  pageId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedPageDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedPageDetails>>('cmd_archive_shared_page', {
+    workspaceId,
+    pageId,
+    idempotencyKey,
+  });
+}
+
+export async function restoreSharedPage(
+  workspaceId: string,
+  pageId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedPageDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedPageDetails>>('cmd_restore_shared_page', {
+    workspaceId,
+    pageId,
+    idempotencyKey,
+  });
+}
+
+export async function listPageThreads(
+  workspaceId: string,
+  pageId: string,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedCommentThreadView>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedCommentThreadView>>>('cmd_list_page_threads', {
+    workspaceId,
+    pageId,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function createPageThread(
+  workspaceId: string,
+  pageId: string,
+  baseRevisionNumber: number,
+  body: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedCommentThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedCommentThreadView>>('cmd_create_page_thread', {
+    workspaceId,
+    pageId,
+    baseRevisionNumber,
+    body,
+    idempotencyKey,
+  });
+}
+
+export async function replyPageThread(
+  workspaceId: string,
+  pageId: string,
+  threadId: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedCommentThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedCommentThreadView>>('cmd_reply_page_thread', {
+    workspaceId,
+    pageId,
+    threadId,
+    body,
+    idempotencyKey,
+  });
+}
+
+export async function resolvePageThread(
+  workspaceId: string,
+  pageId: string,
+  threadId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedCommentThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedCommentThreadView>>('cmd_resolve_page_thread', {
+    workspaceId,
+    pageId,
+    threadId,
+    idempotencyKey,
+  });
+}
+
+export async function reopenPageThread(
+  workspaceId: string,
+  pageId: string,
+  threadId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedCommentThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedCommentThreadView>>('cmd_reopen_page_thread', {
+    workspaceId,
+    pageId,
+    threadId,
+    idempotencyKey,
+  });
+}
+
+export async function getProposalDetails(
+  workspaceId: string,
+  proposalId: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_get_proposal', {
+    workspaceId,
+    proposalId,
+  });
+}
+
+export async function createProposal(
+  workspaceId: string,
+  pageId: string,
+  baseRevisionNumber: number,
+  proposedTitle: string,
+  proposedContentMd: string,
+  summary: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_create_proposal', {
+    workspaceId,
+    pageId,
+    baseRevisionNumber,
+    proposedTitle,
+    proposedContentMd,
+    summary,
+    idempotencyKey,
+  });
+}
+
+export async function resubmitProposal(
+  workspaceId: string,
+  proposalId: string,
+  baseRevisionNumber: number,
+  proposedTitle: string,
+  proposedContentMd: string,
+  summary: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_resubmit_proposal', {
+    workspaceId,
+    proposalId,
+    baseRevisionNumber,
+    proposedTitle,
+    proposedContentMd,
+    summary,
+    idempotencyKey,
+  });
+}
+
+export async function withdrawProposal(
+  workspaceId: string,
+  proposalId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_withdraw_proposal', {
+    workspaceId,
+    proposalId,
+    idempotencyKey,
+  });
+}
+
+export async function reviewProposal(
+  workspaceId: string,
+  proposalId: string,
+  action: ProposalReviewAction,
+  expectedCurrentRevision: number,
+  expectedSubmissionNumber: number,
+  note: string | null,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_review_proposal', {
+    workspaceId,
+    proposalId,
+    action,
+    expectedCurrentRevision,
+    expectedSubmissionNumber,
+    note,
+    idempotencyKey,
+  });
+}
+
+export async function listWorkspaceActivity(
+  workspaceId: string,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedActivityItem>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedActivityItem>>>('cmd_list_workspace_activity', {
+    workspaceId,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function getSharedDraft(
+  workspaceId: string,
+  draftKey: string,
+  accountUid?: string | null,
+): Promise<SharedDraftRecord | null> {
+  if (!isTauri) return null;
+  return invoke<SharedDraftRecord | null>('cmd_get_shared_draft', {
+    workspaceId,
+    draftKey,
+    accountUid: accountUid ?? null,
+  });
+}
+
+export async function saveSharedDraft(params: {
+  workspaceId: string;
+  draftKey: string;
+  pageId?: string | null;
+  proposalId?: string | null;
+  baseRevisionNumber?: number | null;
+  title: string;
+  contentMd: string;
+  summary: string;
+  accountUid?: string | null;
+}): Promise<SharedDraftRecord | null> {
+  if (!isTauri) return null;
+  return invoke<SharedDraftRecord>('cmd_save_shared_draft', {
+    workspaceId: params.workspaceId,
+    draftKey: params.draftKey,
+    pageId: params.pageId ?? null,
+    proposalId: params.proposalId ?? null,
+    baseRevisionNumber: params.baseRevisionNumber ?? null,
+    title: params.title,
+    contentMd: params.contentMd,
+    summary: params.summary,
+    accountUid: params.accountUid ?? null,
+  });
+}
+
+export async function deleteSharedDraft(
+  workspaceId: string,
+  draftKey: string,
+  accountUid?: string | null,
+): Promise<void> {
+  if (!isTauri) return;
+  await invoke('cmd_delete_shared_draft', {
+    workspaceId,
+    draftKey,
+    accountUid: accountUid ?? null,
+  });
+}

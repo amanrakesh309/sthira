@@ -179,7 +179,8 @@ fn model_precedence_and_template_gates_are_explicit() {
     )
     .unwrap();
     assert!(prompt.starts_with("Plan a garden"));
-    assert!(prompt.contains("Scope & Objectives"));
+    assert!(prompt.contains("## Goal and definition of done"));
+    assert!(prompt.contains("subordinate to evidence and review rules"));
     save_workflow_setting(
         &engine,
         "plan",
@@ -209,4 +210,101 @@ fn model_precedence_and_template_gates_are_explicit() {
         )
         .unwrap();
     assert!(workflow_model(&engine, "plan", None).is_err());
+}
+
+#[test]
+fn no_template_and_disabled_templates_never_select_a_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = open(tmp.path());
+    engine
+        .db()
+        .writer()
+        .execute_batch(
+            "INSERT INTO providers(id,display_name,provider_type,base_url,is_enabled,created_at) VALUES('p','P','openai_compatible','http://127.0.0.1:1/v1',1,0);
+             INSERT INTO provider_models(id,provider_id,model_identifier,display_name,is_enabled,is_default,created_at) VALUES('workflow','p','fixture','Fixture',1,1,0);",
+        )
+        .unwrap();
+    save_workflow_setting(
+        &engine,
+        "research",
+        WorkflowSetting {
+            enabled: true,
+            model_id: Some("workflow".into()),
+            templates_enabled: true,
+        },
+    )
+    .unwrap();
+    engine
+        .set_synthesis_template_default("research", "research-deep-dive")
+        .unwrap();
+    assert_eq!(
+        workflow_template(&engine, "research", None).unwrap(),
+        Some("research-deep-dive".to_string())
+    );
+    // Explicit no-template wins over a configured default.
+    assert_eq!(
+        workflow_template(&engine, "research", Some("__none__".into())).unwrap(),
+        None
+    );
+    let prompt = workflow_prompt(
+        &engine,
+        "research",
+        "Research a tradition".into(),
+        Some("__none__".into()),
+    )
+    .unwrap();
+    assert_eq!(prompt, "Research a tradition");
+    // Disabled templates alone also mean no template, not a fallback default.
+    save_workflow_setting(
+        &engine,
+        "research",
+        WorkflowSetting {
+            enabled: true,
+            model_id: Some("workflow".into()),
+            templates_enabled: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(workflow_template(&engine, "research", None).unwrap(), None);
+    assert_eq!(
+        sthira_desktop::workflow_settings::resolve_workflow_template(&engine, "research", None)
+            .unwrap()
+            .mode,
+        "disabled"
+    );
+    // Archived explicit templates fail with a useful error instead of silently switching.
+    let template = engine
+        .get_synthesis_template("research-deep-dive")
+        .unwrap()
+        .unwrap();
+    save_workflow_setting(
+        &engine,
+        "research",
+        WorkflowSetting {
+            enabled: true,
+            model_id: Some("workflow".into()),
+            templates_enabled: true,
+        },
+    )
+    .unwrap();
+    engine
+        .archive_synthesis_template("research-deep-dive", Some(template.version))
+        .unwrap();
+    assert!(workflow_template(&engine, "research", Some("research-deep-dive".into())).is_err());
+    assert_eq!(
+        sthira_desktop::workflow_settings::resolve_workflow_template(
+            &engine,
+            "research",
+            Some("__none__".into())
+        )
+        .unwrap()
+        .mode,
+        "none"
+    );
+    assert_eq!(
+        sthira_desktop::workflow_settings::resolve_workflow_template(&engine, "research", None)
+            .unwrap()
+            .mode,
+        "inherit"
+    );
 }

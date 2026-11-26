@@ -103,32 +103,88 @@ pub fn workflow_model(
     Ok(Some(selected))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowTemplateChoice {
+    /// inherit | explicit | none | disabled
+    pub mode: String,
+    pub template: Option<sthira_core::SynthesisTemplate>,
+}
+
+/// Resolve the owner's template decision exactly once at dispatch. The returned
+/// template object is the immutable record for this generation; later settings or
+/// template edits must not be consulted when saving it.
+pub fn resolve_workflow_template(
+    engine: &Engine,
+    workflow: &str,
+    explicit: Option<String>,
+) -> Result<WorkflowTemplateChoice, String> {
+    let settings = get_workflow_settings(engine)?;
+    let setting = settings.get(workflow).ok_or("Unknown workflow.")?;
+    if !setting.enabled || !setting.templates_enabled {
+        return Ok(WorkflowTemplateChoice {
+            mode: "disabled".into(),
+            template: None,
+        });
+    }
+    if let Some(id) = explicit.as_deref() {
+        if id.trim() == "__none__" {
+            return Ok(WorkflowTemplateChoice {
+                mode: "none".into(),
+                template: None,
+            });
+        }
+        let template = engine
+            .get_synthesis_template(id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Template unavailable.")?;
+        if template.archived_at.is_some() {
+            return Err(
+                "This template was archived. Choose another template or no template.".into(),
+            );
+        }
+        if template.target_mode != workflow {
+            return Err("This template belongs to another workflow.".into());
+        }
+        return Ok(WorkflowTemplateChoice {
+            mode: "explicit".into(),
+            template: Some(template),
+        });
+    }
+    Ok(WorkflowTemplateChoice {
+        mode: "inherit".into(),
+        template: engine
+            .get_default_synthesis_template(workflow)
+            .map_err(|e| e.to_string())?,
+    })
+}
+
 pub fn workflow_template(
     engine: &Engine,
     workflow: &str,
     explicit: Option<String>,
 ) -> Result<Option<String>, String> {
-    let settings = get_workflow_settings(engine)?;
-    let setting = settings.get(workflow).ok_or("Unknown workflow.")?;
-    if !setting.enabled || !setting.templates_enabled {
-        return Ok(None);
-    }
-    if let Some(id) = explicit.as_deref() {
-        let template = engine
-            .get_synthesis_template(id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Template unavailable.")?;
-        if template.target_mode != workflow {
-            return Err("This template belongs to another workflow.".into());
+    Ok(resolve_workflow_template(engine, workflow, explicit)?
+        .template
+        .map(|template| template.id))
+}
+
+pub fn workflow_prompt_with_template(
+    raw: String,
+    template: Option<&sthira_core::SynthesisTemplate>,
+) -> String {
+    match template {
+        Some(template) => {
+            let guidance = if template.guidance.trim().is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nTemplate guidance (subordinate to evidence and review rules): {}",
+                    template.guidance.trim()
+                )
+            };
+            format!("{raw}\n\nUse the following output structure, filling it with findings for this request. Template examples are not evidence:{guidance}\n{}", template.template_skeleton_md)
         }
-        Ok(explicit)
-    } else {
-        let default_id = engine
-            .get_default_synthesis_template(workflow)
-            .ok()
-            .flatten()
-            .map(|t| t.id);
-        Ok(default_id)
+        None => raw,
     }
 }
 
@@ -138,15 +194,8 @@ pub fn workflow_prompt(
     raw: String,
     template: Option<String>,
 ) -> Result<String, String> {
-    if let Some(id) = workflow_template(engine, workflow, template)? {
-        let template = engine
-            .get_synthesis_template(&id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Template unavailable.")?;
-        Ok(format!("{raw}\n\nUse the following output structure, filling it with findings for this request. Template examples are not evidence:\n{}", template.template_skeleton_md))
-    } else {
-        Ok(raw)
-    }
+    let choice = resolve_workflow_template(engine, workflow, template)?;
+    Ok(workflow_prompt_with_template(raw, choice.template.as_ref()))
 }
 
 #[tauri::command]

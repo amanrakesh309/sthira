@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CanvasView } from '../components/CanvasView';
 import * as ipc from '../api/ipc';
+import type { CanvasDataView } from '../types/sthira';
 
 vi.mock('../api/ipc', async (original) => ({
   ...await original<typeof ipc>(),
@@ -91,5 +92,51 @@ describe('CanvasView Spatial Surface', () => {
 
     await user.click(undoBtn);
     expect(ipc.revertChangeSet).toHaveBeenCalledWith('changeset-align-1');
+  });
+
+  it('offers saved pages on an empty canvas, then opens a placed card', async () => {
+    const user = userEvent.setup();
+    const onOpenArtifact = vi.fn();
+    const empty = { ...mockCanvasData, items: [], links: [] };
+    const placed = { ...empty, items: [mockCanvasData.items[0]] };
+    let canvas: CanvasDataView = empty;
+    vi.mocked(ipc.canvasOps).mockImplementation(async request => {
+      switch (request.action) {
+        case 'GetCanvas': return { success: true, canvas };
+        case 'ListPages': return { success: true, pages: [{ id: 'art-1', title: 'Architecture Spec', excerpt: '', kind: 'document' }] };
+        case 'PlacePage':
+          canvas = placed;
+          return { success: true };
+        default: throw new Error('Unexpected canvas action');
+      }
+    });
+    render(<CanvasView canvasId="canvas-1" onBack={vi.fn()} onOpenArtifact={onOpenArtifact} />);
+
+    expect(await screen.findByRole('region', { name: 'Choose a saved page' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Add existing page' }));
+    expect(screen.getByRole('textbox', { name: 'Search saved pages' })).toHaveFocus();
+    await user.click(await screen.findByRole('button', { name: 'Add Architecture Spec to canvas' }));
+    expect(ipc.canvasOps).toHaveBeenCalledWith({ action: 'PlacePage', payload: { canvas_id: 'canvas-1', artifact_id: 'art-1', x: 24, y: 24 } });
+    expect(onOpenArtifact).not.toHaveBeenCalled();
+
+    await user.click(await screen.findByRole('button', { name: 'Open Architecture Spec' }));
+    expect(onOpenArtifact).toHaveBeenCalledWith('art-1', placed);
+  });
+
+  it.each([
+    { button: 'Add Note', placeholderId: null },
+    { button: 'Open as note', placeholderId: 'item-2' },
+  ])('$button opens the real saved page returned by the native command', async ({ button, placeholderId }) => {
+    const user = userEvent.setup();
+    const onOpenArtifact = vi.fn();
+    vi.mocked(ipc.canvasOps).mockImplementation(async request => request.action === 'CreateNote'
+      ? { success: true, artifact_id: 'created-a' }
+      : { success: true, canvas: mockCanvasData });
+    render(<CanvasView canvasId="canvas-1" onBack={vi.fn()} onOpenArtifact={onOpenArtifact} />);
+
+    await screen.findByRole('heading', { name: 'System Concept Map' });
+    await user.click(screen.getByRole('button', { name: button }));
+    expect(ipc.canvasOps).toHaveBeenCalledWith({ action: 'CreateNote', payload: expect.objectContaining({ canvas_id: 'canvas-1', placeholder_id: placeholderId }) });
+    expect(onOpenArtifact).toHaveBeenCalledWith('created-a', mockCanvasData);
   });
 });

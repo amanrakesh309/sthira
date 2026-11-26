@@ -412,7 +412,7 @@ fn a2_v19_migration_and_fts_triggers_exclude_tombstones() {
     let version: i64 = reader
         .query_row("PRAGMA user_version;", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 27);
+    assert_eq!(version, 30);
 
     let active_fts_hits: i64 = reader
         .query_row(

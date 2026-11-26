@@ -450,6 +450,11 @@ impl Engine {
             project_id: parent.project_id.clone(),
             workspace_memory: parent.workspace_memory,
             model_id: input.model_id.clone(),
+            allow_web: false,
+            research_template_mode: Some(parent.research_template_mode.clone()),
+            research_template_id: parent.research_template_id.clone(),
+            plan_template_mode: Some(parent.plan_template_mode.clone()),
+            plan_template_id: parent.plan_template_id.clone(),
         };
         self.insert_agent_run(
             goal,

@@ -1,11 +1,36 @@
 use crate::{
     epistemic::VerifiedQuote,
-    llm::models::WebSearchCapability,
+    llm::{lifecycle::CancellationToken, models::WebSearchCapability},
+    models::synthesis_templates::SynthesisTemplateSnapshot,
     search::{scraper, ScrapedWebDocument, SearchProvider, SearchResultItem},
     vault, ArtifactType, Authorship, CoreError, CoreEvent, Engine, ModelProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Per-document ceiling for quote extraction. Extraction runs before the overall
+/// Research deadline, so one slow page cannot consume the whole run.
+const QUOTE_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(45);
+/// Leave enough of the workflow deadline for one synthesis attempt and finalization.
+const SYNTHESIS_RESERVE: Duration = Duration::from_secs(70);
+/// Do not start another model extraction with less than this remaining after the reserve.
+const MIN_EXTRACTION_BUDGET: Duration = Duration::from_secs(5);
+const RESEARCH_WORKFLOW_BUDGET: Duration = Duration::from_secs(180);
+
+fn extraction_budget(budget: Option<Duration>, sources: usize) -> Duration {
+    let total = budget.unwrap_or(RESEARCH_WORKFLOW_BUDGET);
+    let available = total.saturating_sub(SYNTHESIS_RESERVE);
+    let per_source = available / u32::try_from(sources.max(1)).unwrap_or(u32::MAX);
+    per_source.min(QUOTE_EXTRACTION_TIMEOUT)
+}
+
+/// Bounded, relevance-selected article text sent to quote extraction.
+const EXTRACTION_PASSAGE_BUDGET: usize = 6_000;
+/// Bounded, relevance-selected article text sent to synthesis.
+const SYNTHESIS_PASSAGE_BUDGET: usize = 2_200;
+/// A single selected passage is trimmed to this size before being packed.
+const PASSAGE_BLOCK_BUDGET: usize = 1_200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebResearchFinding {
@@ -40,6 +65,12 @@ pub struct WebResearchResult {
     pub stages: Vec<ResearchStage>,
     /// Numbered citation index backing the `[Source N]` markers in the markdown.
     pub sources: Vec<ResearchSource>,
+    /// Exact template structure this run used. Later template edits never rewrite it.
+    #[serde(default)]
+    pub template_snapshot: Option<SynthesisTemplateSnapshot>,
+    /// Search provider actually used, if any network search was attempted.
+    #[serde(default)]
+    pub search_provider: Option<String>,
 }
 
 fn default_search_status() -> String {
@@ -376,16 +407,27 @@ fn format_partial_search_warning(
     )
 }
 
-pub async fn execute_multi_query_research_with_template(
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_multi_query_research_with_snapshot(
     engine: &Engine,
     inquiry: &str,
     search_provider: &dyn SearchProvider,
     limit_docs: usize,
     capability: WebSearchCapability,
-    template_id: Option<&str>,
+    template_snapshot: Option<&SynthesisTemplateSnapshot>,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
+    cancellation: Option<&CancellationToken>,
+    budget: Option<Duration>,
 ) -> Result<WebResearchResult, CoreError> {
     let now_ms = engine.clock().now_ms();
+    let check_cancelled = || -> Result<(), CoreError> {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
+            return Err(CoreError::Request(
+                crate::llm::lifecycle::RequestErrorKind::Cancelled,
+            ));
+        }
+        Ok(())
+    };
 
     // Ordered progress log, mirrored to `on_stage` at the true moment each step runs so
     // the UI can render a genuine live banner rather than a post-hoc summary.
@@ -406,6 +448,7 @@ pub async fn execute_multi_query_research_with_template(
         "searching",
         format!("Searching web for \"{}\"...", inquiry.trim()),
     );
+    check_cancelled()?;
 
     // 1. Formulate 2-3 precise search queries
     let queries = generate_search_queries(engine, inquiry).await;
@@ -417,6 +460,7 @@ pub async fn execute_multi_query_research_with_template(
     let mut queries_attempted = 0usize;
 
     for q in &queries {
+        check_cancelled()?;
         queries_attempted += 1;
         match search_provider.search(q, 3).await {
             Ok(items) => {
@@ -460,30 +504,32 @@ pub async fn execute_multi_query_research_with_template(
 
     // 3. Scrape top source URLs
     let top_targets: Vec<SearchResultItem> = all_results.into_iter().take(limit_docs).collect();
+    emit(
+        &mut stages,
+        "fetching",
+        format!(
+            "Reading {} retrieved source{}...",
+            top_targets.len(),
+            if top_targets.len() == 1 { "" } else { "s" }
+        ),
+    );
     let mut documents = Vec::new();
+    let mut fetch_failures: Vec<String> = Vec::new();
 
     for item in &top_targets {
-        let res = scraper::scrape_and_clean_url(&item.url, Some(engine.db()), now_ms).await;
-        match res {
+        check_cancelled()?;
+        let fetched = scraper::scrape_and_clean_url(&item.url, Some(engine.db()), now_ms).await;
+        match fetched {
             Ok(doc) => {
                 let trimmed = doc.content_md.trim();
                 if trimmed.len() >= 40 && !scraper::is_blocked_cached_document(&doc.title, trimmed)
                 {
                     documents.push(doc);
                 } else {
-                    eprintln!(
-                        "[execute_multi_query_research] Page {} had insufficient or challenge content (len={})",
-                        item.url,
-                        trimmed.len()
-                    );
+                    fetch_failures.push(format!("{}: insufficient or blocked content", item.url));
                 }
             }
-            Err(err) => {
-                eprintln!(
-                    "[execute_multi_query_research] Scrape warning for {}: {}",
-                    item.url, err
-                );
-            }
+            Err(err) => fetch_failures.push(format!("{}: {err}", item.url)),
         }
     }
 
@@ -493,81 +539,185 @@ pub async fn execute_multi_query_research_with_template(
         ));
     }
 
+    if !fetch_failures.is_empty() {
+        emit(
+            &mut stages,
+            "partial_fetch",
+            format!(
+                "⚠️ Partial article retrieval: {} of {} retrieved page{} could not be used ({}); the proposal keeps only usable sources.",
+                fetch_failures.len(),
+                top_targets.len(),
+                if top_targets.len() == 1 { "" } else { "s" },
+                fetch_failures.join("; ")
+            ),
+        );
+    }
+
     let partial_warning = if !search_errors.is_empty() {
         Some(format_partial_search_warning(
             &search_errors,
             queries_attempted,
         ))
+    } else if !fetch_failures.is_empty() {
+        Some(format!(
+            "Partial article retrieval: {} of {} retrieved pages were unusable; synthesized from the remaining {} usable source{}.",
+            fetch_failures.len(),
+            top_targets.len(),
+            documents.len(),
+            if documents.len() == 1 { "" } else { "s" }
+        ))
     } else {
         None
     };
 
-    // 4. Ground findings using VerifiedQuote::verify() against scraped text
+    // 4. Ground findings using VerifiedQuote::verify() against the complete scraped
+    //    text. The model only sees relevance-selected passages, but verification always
+    //    runs against the whole retrieved document so excerpts keep their provenance.
     let mut findings = Vec::new();
+    let mut extraction_failures: Vec<String> = Vec::new();
+    let mut extraction_warnings: Vec<String> = Vec::new();
 
     for doc in &documents {
+        check_cancelled()?;
         let content_hash = vault::compute_content_hash(&doc.content_md);
         let domain = extract_domain_from_url(&doc.url);
         let favicon = domain_favicon_url(&domain);
+        let title = scraper::decode_html_entities(&doc.title);
+        let passages =
+            select_relevant_passages(inquiry, &doc.content_md, EXTRACTION_PASSAGE_BUDGET);
 
-        // Attempt LLM quote extraction first
+        // Attempt LLM quote extraction first, bounded to the remaining per-document
+        // extraction budget and cancelled cooperatively at the boundary.
         let schema = schemars::schema_for!(GroundedExtractionOutput);
         let schema_val = serde_json::to_value(&schema).unwrap_or_default();
-        let sys_prompt = "You are a factual evidence extractor. Extract 1 to 2 key facts from the document text. The `exact_quote` MUST be an exact character-for-character verbatim snippet from the document.";
+        let sys_prompt = "You are a factual evidence extractor. Extract 2 to 3 key facts from the supplied document passages. The `exact_quote` MUST be an exact character-for-character verbatim snippet from those passages; do not paraphrase, complete, or join text.";
         let usr_prompt = format!(
-            "Document Content:\n{}\nExtract findings with exact quotes:",
-            doc.content_md
+            "Source {}: {}\nURL: {}\n\nSelected document passages (navigation and boilerplate omitted):\n{}\nExtract findings with exact quotes:",
+            documents
+                .iter()
+                .position(|candidate| candidate.url == doc.url)
+                .map(|index| index + 1)
+                .unwrap_or(0),
+            title,
+            doc.url,
+            passages
         );
 
         let mut extracted_for_doc = false;
-        if let Ok(json_str) = engine
-            .model()
-            .generate_json(&schema_val, sys_prompt, &usr_prompt)
-            .await
-        {
-            if let Ok(grounded) = serde_json::from_str::<GroundedExtractionOutput>(&json_str) {
-                for item in grounded.findings {
-                    if let Ok(vq) =
-                        VerifiedQuote::verify(&doc.content_md, &content_hash, &item.exact_quote)
-                    {
-                        findings.push(WebResearchFinding {
-                            statement: item.statement,
-                            quote: vq.text,
-                            source_url: doc.url.clone(),
-                            domain: domain.clone(),
-                            title: doc.title.clone(),
-                            favicon_url: favicon.clone(),
-                            quote_start: Some(vq.start),
-                            quote_end: Some(vq.end),
-                        });
-                        extracted_for_doc = true;
+        let mut extraction_problem: Option<String> = None;
+        let source_extraction_budget = extraction_budget(budget, documents.len());
+        if source_extraction_budget < MIN_EXTRACTION_BUDGET {
+            extraction_problem = Some(format!(
+                "{}: skipped model extraction to preserve synthesis time",
+                doc.url
+            ));
+        } else {
+            let extraction = engine
+                .model()
+                .generate_json(&schema_val, sys_prompt, &usr_prompt);
+            let generated = match cancellation {
+                Some(token) => {
+                    tokio::select! {
+                        biased;
+                        _ = token.wait_for_cancellation() => {
+                            return Err(CoreError::Request(crate::llm::lifecycle::RequestErrorKind::Cancelled));
+                        }
+                        outcome = tokio::time::timeout(source_extraction_budget, extraction) => outcome,
                     }
+                }
+                None => tokio::time::timeout(source_extraction_budget, extraction).await,
+            };
+            match generated {
+                Ok(Ok(json_str)) => {
+                    if let Ok(grounded) =
+                        serde_json::from_str::<GroundedExtractionOutput>(&json_str)
+                    {
+                        for item in grounded.findings {
+                            if let Ok(vq) = VerifiedQuote::verify(
+                                &doc.content_md,
+                                &content_hash,
+                                &item.exact_quote,
+                            ) {
+                                findings.push(WebResearchFinding {
+                                    statement: item.statement,
+                                    quote: vq.text,
+                                    source_url: doc.url.clone(),
+                                    domain: domain.clone(),
+                                    title: title.clone(),
+                                    favicon_url: favicon.clone(),
+                                    quote_start: Some(vq.start),
+                                    quote_end: Some(vq.end),
+                                });
+                                extracted_for_doc = true;
+                            }
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    let problem = format!("{}: {error}", doc.url);
+                    extraction_warnings.push(problem.clone());
+                    extraction_problem = Some(problem);
+                }
+                Err(_) => {
+                    let problem = format!(
+                        "{}: quote extraction exceeded remaining budget of {} seconds",
+                        doc.url,
+                        source_extraction_budget.as_secs()
+                    );
+                    extraction_warnings.push(problem.clone());
+                    extraction_problem = Some(problem);
                 }
             }
         }
 
-        // Deterministic fallback: extract first substantive sentence (>= 15 chars) and verify it
+        // Deterministic fallback: extract a substantive sentence from the selected
+        // passages, then from the full document if selection found no candidate. This
+        // keeps one failed source from discarding useful evidence from the others.
         if !extracted_for_doc {
-            for line in doc.content_md.lines() {
-                let trimmed = line.trim().trim_start_matches('#').trim();
-                if trimmed.len() >= 15 && !trimmed.starts_with("http") && !trimmed.starts_with('[')
-                {
-                    if let Ok(vq) = VerifiedQuote::verify(&doc.content_md, &content_hash, trimmed) {
-                        findings.push(WebResearchFinding {
-                            statement: trimmed.to_string(),
-                            quote: vq.text,
-                            source_url: doc.url.clone(),
-                            domain: domain.clone(),
-                            title: doc.title.clone(),
-                            favicon_url: favicon.clone(),
-                            quote_start: Some(vq.start),
-                            quote_end: Some(vq.end),
-                        });
-                        break;
-                    }
-                }
+            if let Some(finding) = deterministic_finding_from_text(
+                doc,
+                &passages,
+                &content_hash,
+                &domain,
+                &favicon,
+                &title,
+            )
+            .or_else(|| {
+                deterministic_finding_from_text(
+                    doc,
+                    &doc.content_md,
+                    &content_hash,
+                    &domain,
+                    &favicon,
+                    &title,
+                )
+            }) {
+                findings.push(finding);
+                extracted_for_doc = true;
+            }
+            if !extracted_for_doc {
+                extraction_failures.push(
+                    extraction_problem
+                        .unwrap_or_else(|| format!("{}: no verifiable quote found", doc.url)),
+                );
             }
         }
+    }
+
+    if !extraction_warnings.is_empty() || !extraction_failures.is_empty() {
+        let mut notes = extraction_warnings;
+        notes.extend(extraction_failures.iter().cloned());
+        emit(
+            &mut stages,
+            "partial_extraction",
+            format!(
+                "⚠️ Verified evidence extraction was incomplete for {} of {} source{}; usable retrieved evidence was kept, with deterministic verified fallback where possible ({}).",
+                notes.len().min(documents.len()),
+                documents.len(),
+                if documents.len() == 1 { "" } else { "s" },
+                notes.join("; ")
+            ),
+        );
     }
 
     // 5. Build the numbered citation index backing every `[Source N]` marker.
@@ -581,7 +731,7 @@ pub async fn execute_multi_query_research_with_template(
                 url: doc.url.clone(),
                 favicon_url: domain_favicon_url(&domain),
                 domain,
-                title: doc.title.clone(),
+                title: scraper::decode_html_entities(&doc.title),
             }
         })
         .collect();
@@ -611,21 +761,15 @@ pub async fn execute_multi_query_research_with_template(
         "Synthesizing research...".to_string(),
     );
 
-    let template_skeleton = if let Some(tid) = template_id {
-        engine
-            .get_synthesis_template(tid)
-            .ok()
-            .flatten()
-            .map(|t| t.template_skeleton_md)
-    } else {
-        None
-    };
+    let template_skeleton = template_snapshot.map(|t| t.skeleton_md.clone());
+    let template_guidance = template_snapshot.map(|t| t.guidance.clone());
 
     if documents.is_empty() {
         return Err(CoreError::NotFound(
             "Web search returned no usable sources.".into(),
         ));
     }
+    check_cancelled()?;
     let synthesis = synthesize_with_temporal_grounding(
         engine,
         inquiry,
@@ -634,6 +778,8 @@ pub async fn execute_multi_query_research_with_template(
         &findings,
         capability,
         template_skeleton.as_deref(),
+        template_guidance.as_deref(),
+        budget,
     )
     .await?;
 
@@ -641,11 +787,15 @@ pub async fn execute_multi_query_research_with_template(
     let title = generate_smart_title(Some(engine.model().as_ref()), inquiry).await;
     let mut md = format!("# {}\n\n", title);
     md.push_str(&format!("> **Research inquiry:** {}\n", inquiry.trim()));
+    let cached_sources = documents.iter().filter(|doc| doc.from_cache).count();
+    let fresh_sources = documents.len().saturating_sub(cached_sources);
     md.push_str(&format!(
-        "> **Evidence basis:** {} live web source{} · retrieved {}\n",
+        "> **Evidence basis:** {} live web source{} · retrieved {} · {} fetched this run, {} from cache\n",
         documents.len(),
         if documents.len() == 1 { "" } else { "s" },
-        today
+        today,
+        fresh_sources,
+        cached_sources
     ));
     if let Some(ref warn) = partial_warning {
         md.push_str(&format!("> **Partial coverage warning:** {warn}\n"));
@@ -739,15 +889,62 @@ pub async fn execute_multi_query_research_with_template(
         search_status,
         external_sources_count,
         matching_vault_artifacts: Vec::new(),
+        template_snapshot: template_snapshot.cloned(),
+        search_provider: None,
         stages,
         sources,
     })
+}
+
+/// Compatibility wrapper: resolve the explicit template once, then run against that
+/// immutable snapshot. An unknown/archived/wrong-mode selection fails before dispatch.
+pub async fn execute_multi_query_research_with_template(
+    engine: &Engine,
+    inquiry: &str,
+    search_provider: &dyn SearchProvider,
+    limit_docs: usize,
+    capability: WebSearchCapability,
+    template_id: Option<&str>,
+    on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
+) -> Result<WebResearchResult, CoreError> {
+    let snapshot = match template_id {
+        Some(id) => Some(research_template_snapshot(engine, id)?),
+        None => None,
+    };
+    execute_multi_query_research_with_snapshot(
+        engine,
+        inquiry,
+        search_provider,
+        limit_docs,
+        capability,
+        snapshot.as_ref(),
+        on_stage,
+        None,
+        None,
+    )
+    .await
+}
+
+pub(crate) fn research_template_snapshot(
+    engine: &Engine,
+    id: &str,
+) -> Result<SynthesisTemplateSnapshot, CoreError> {
+    let template = engine
+        .require_synthesis_template(id, "research")
+        .map_err(|_| {
+            CoreError::InvariantViolation(
+                "The selected Research template is missing, archived, or belongs to another workflow. Choose another template."
+                    .into(),
+            )
+        })?;
+    Ok(template.snapshot())
 }
 
 /// Runs the grounded narrative synthesis with the explicit temporal instruction.
 ///
 /// Falls back to a deterministic, evidence-only synthesis when the model is
 /// unavailable — the pipeline never fabricates a contradiction list.
+#[allow(clippy::too_many_arguments)]
 async fn synthesize_with_temporal_grounding(
     engine: &Engine,
     inquiry: &str,
@@ -756,15 +953,17 @@ async fn synthesize_with_temporal_grounding(
     findings: &[WebResearchFinding],
     capability: WebSearchCapability,
     template_skeleton: Option<&str>,
+    template_guidance: Option<&str>,
+    budget: Option<Duration>,
 ) -> Result<ResearchSynthesisOutput, CoreError> {
     let mut context = String::new();
     for (i, doc) in documents.iter().enumerate() {
         let domain = extract_domain_from_url(&doc.url);
-        let body: String = doc.content_md.chars().take(1600).collect();
+        let body = select_relevant_passages(inquiry, &doc.content_md, SYNTHESIS_PASSAGE_BUDGET);
         context.push_str(&format!(
             "[Source {}] {} ({})\n{}\n\n",
             i + 1,
-            doc.title,
+            scraper::decode_html_entities(&doc.title),
             domain,
             body
         ));
@@ -773,10 +972,7 @@ async fn synthesize_with_temporal_grounding(
         context.push_str("(no retrieved documents)\n");
     }
 
-    let verified: String = findings
-        .iter()
-        .map(|f| format!("- {}\n", f.statement))
-        .collect();
+    let verified = format_numbered_findings(documents, findings);
 
     let tool_prompt_prefix = if documents.is_empty() {
         "No web or local evidence was retrieved. Give useful guidance from model knowledge, explicitly distinguish assumptions and unverified claims, and do not invent citations or claim to have searched. "
@@ -785,10 +981,13 @@ async fn synthesize_with_temporal_grounding(
     };
 
     let template_instruction = match template_skeleton {
-        Some(skeleton) => format!(
-            "\n\nSynthesize strictly into this markdown skeleton preserving all headers:\n{}\n",
-            skeleton
-        ),
+        Some(skeleton) => {
+            let guidance = template_guidance
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("\nTemplate formatting guidance (subordinate to evidence and review rules): {value}"))
+                .unwrap_or_default();
+            format!("\n\nSynthesize strictly into this markdown skeleton preserving all headers:\n{skeleton}\n{guidance}\n")
+        }
         None => String::new(),
     };
 
@@ -796,7 +995,7 @@ async fn synthesize_with_temporal_grounding(
         "Today is {today}. {tool_prompt_prefix}Use the retrieved web context for current specifications, versions, and \
          benchmarks. If the retrieved context contradicts older conventions, explicitly flag the \
          difference in `contradictions_and_evolution`. Ground every claim in the retrieved context \
-         when evidence is supplied and cite sources as [Source N]. With no retrieved evidence, answer the inquiry from general knowledge, clearly label assumptions and unverified claims, and do not invent citations. Output strictly JSON.{template_instruction}"
+         when evidence is supplied. Use a separate [Source N] marker for each source you cite, for example [Source 1] [Source 2]. When using a verified finding, cite the source number beside that finding. Cite only sources that support the specific claim. Retrieved context contains relevance-selected passages rather than an opening excerpt, so check the later passages for specific dates and events. With no retrieved evidence, answer the inquiry from general knowledge, clearly label assumptions and unverified claims, and do not invent citations. Output strictly JSON.{template_instruction}"
     );
     let system_prompt = format!(
         "{system_prompt}\n{}",
@@ -816,16 +1015,28 @@ async fn synthesize_with_temporal_grounding(
 
     let user_prompt = format!(
         "Research inquiry: {inquiry}\n\n{context_header}\n{context}\n\
-         Verified quotes already extracted from that context:\n{verified}\n\
+         Verified findings with their source numbers and exact quotes:\n{verified}\n\
          Produce the synthesis, the contradictions/evolution list, and remaining open questions."
     );
 
     let schema = schemars::schema_for!(ResearchSynthesisOutput);
     let schema_val = serde_json::to_value(&schema).unwrap_or_default();
     let policy = crate::llm::lifecycle::RequestPolicy::standard();
+    let synthesis_timeout = budget
+        .map(|total| {
+            total
+                .saturating_sub(Duration::from_secs(2))
+                .min(policy.workflow_deadline)
+        })
+        .unwrap_or(policy.workflow_deadline);
+    if synthesis_timeout < Duration::from_secs(2) {
+        return Err(CoreError::Model(
+            "The research deadline expired before synthesis. No generated report was saved.".into(),
+        ));
+    }
 
     match tokio::time::timeout(
-        policy.workflow_deadline,
+        synthesis_timeout,
         engine
             .model()
             .generate_json(&schema_val, &system_prompt, &user_prompt),
@@ -841,9 +1052,241 @@ async fn synthesize_with_temporal_grounding(
             }
         }
         Ok(Err(error)) => return Err(error),
-        Err(_) => return Err(CoreError::Model(format!("The selected model timed out during synthesis after {} seconds. Retrieved evidence was not replaced with template text.", policy.workflow_deadline.as_secs()))),
+        Err(_) => return Err(CoreError::Model(format!("The selected model timed out during synthesis after {} seconds. Retrieved evidence was not replaced with template text.", synthesis_timeout.as_secs()))),
     }
     Err(CoreError::Model("The selected model returned empty or invalid research synthesis. No generated report was saved.".into()))
+}
+
+fn format_numbered_findings(
+    documents: &[ScrapedWebDocument],
+    findings: &[WebResearchFinding],
+) -> String {
+    findings
+        .iter()
+        .filter_map(|finding| {
+            let index = documents
+                .iter()
+                .position(|document| document.url == finding.source_url)?
+                + 1;
+            Some(format!(
+                "- [Source {index}] {}\n  > {}\n",
+                finding.statement, finding.quote
+            ))
+        })
+        .collect()
+}
+
+/// Picks a bounded, inquiry-relevant subset of an article for a model prompt.
+///
+/// Pages routinely open with navigation, cookie banners, and menus. Sending the
+/// opening slice alone loses facts that occur later in the body. This keeps source
+/// identity outside the excerpt, selects passages by inquiry-term overlap, and falls
+/// back to substantive body passages when no term matches. Exact-quote verification
+/// always runs against the complete document, not this excerpt.
+pub(crate) fn select_relevant_passages(inquiry: &str, content: &str, max_chars: usize) -> String {
+    if max_chars == 0 || content.trim().is_empty() {
+        return String::new();
+    }
+    let terms = passage_terms(inquiry);
+    let blocks = document_blocks(content);
+    if blocks.is_empty() {
+        return content.chars().take(max_chars).collect();
+    }
+
+    let scored = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (index, block, passage_score(&terms, block)))
+        .collect::<Vec<_>>();
+    let has_relevant = scored.iter().any(|(_, _, score)| *score > 0);
+
+    let mut ranked: Vec<(usize, usize)> = if has_relevant {
+        scored
+            .iter()
+            .filter(|(_, _, score)| *score > 0)
+            .map(|(index, _, score)| (*index, *score))
+            .collect()
+    } else {
+        // No lexical match: take representative substantive passages distributed
+        // through the body instead of the page's opening navigation.
+        let substantive = scored
+            .iter()
+            .filter(|(_, block, _)| block.chars().count() >= 80 && !looks_like_navigation(block))
+            .map(|(index, block, _)| (*index, block.chars().count()))
+            .collect::<Vec<_>>();
+        if substantive.is_empty() {
+            scored
+                .iter()
+                .map(|(index, block, _)| (*index, block.chars().count()))
+                .collect()
+        } else {
+            let stride = (substantive.len() / 4).max(1);
+            substantive
+                .iter()
+                .step_by(stride)
+                .copied()
+                .take(4)
+                .collect()
+        }
+    };
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Rank decides what fits inside the prompt budget. Only after the subset is
+    // chosen do we restore document order so the selected passages read coherently.
+    let mut chosen = Vec::new();
+    let mut reserved = 0usize;
+    for (index, _) in ranked {
+        let estimate = blocks[index].chars().count().min(PASSAGE_BLOCK_BUDGET) + 6;
+        if !chosen.is_empty() && reserved.saturating_add(estimate) > max_chars {
+            continue;
+        }
+        chosen.push(index);
+        reserved = reserved.saturating_add(estimate);
+        if reserved >= max_chars {
+            break;
+        }
+    }
+    chosen.sort_unstable();
+    let mut selected = String::new();
+    for index in chosen {
+        if selected.chars().count() >= max_chars {
+            break;
+        }
+        let block = blocks[index];
+        let remaining = max_chars.saturating_sub(selected.chars().count());
+        if remaining < 40 {
+            break;
+        }
+        let excerpt = excerpt_around_terms(block, &terms, remaining.min(PASSAGE_BLOCK_BUDGET));
+        if excerpt.trim().is_empty() {
+            continue;
+        }
+        if !selected.is_empty() {
+            selected.push_str("\n\n…\n\n");
+        }
+        selected.push_str(excerpt.trim());
+    }
+    if selected.trim().is_empty() {
+        return content.chars().take(max_chars).collect();
+    }
+    selected.chars().take(max_chars).collect()
+}
+
+fn document_blocks(content: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    for paragraph in content.split("\n\n") {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
+        if paragraph.chars().count() > PASSAGE_BLOCK_BUDGET * 2 || paragraph.lines().count() > 4 {
+            blocks.extend(
+                paragraph
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty()),
+            );
+        } else {
+            blocks.push(paragraph);
+        }
+    }
+    blocks
+}
+
+fn looks_like_navigation(block: &str) -> bool {
+    let lower = block.to_lowercase();
+    let link_heavy = block.matches('[').count() >= 2 || block.matches('|').count() >= 2;
+    link_heavy
+        || lower.starts_with("skip to")
+        || lower.contains("sign in")
+        || lower.contains("cookie")
+        || lower.contains("subscribe")
+        || lower.contains("menu")
+}
+
+fn passage_score(terms: &[String], block: &str) -> usize {
+    let lower = block.to_lowercase();
+    let mut distinct = 0usize;
+    let mut occurrences = 0usize;
+    for term in terms {
+        let count = lower.matches(term).count();
+        if count > 0 {
+            distinct += 1;
+            occurrences += count.min(2);
+        }
+    }
+    // Distinct inquiry terms matter far more than repeated navigation labels.
+    let mut score = distinct * 8 + occurrences * 2;
+    let chars = block.chars().count();
+    if chars >= 120 {
+        score += 2;
+    }
+    if chars < 40 || looks_like_navigation(block) {
+        score = score.saturating_sub(6);
+    }
+    score
+}
+
+fn excerpt_around_terms(block: &str, terms: &[String], max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if block.chars().count() <= max_chars {
+        return block.to_string();
+    }
+    let lower = block.to_lowercase();
+    let first_match = terms.iter().filter_map(|term| lower.find(term)).min();
+    let char_offset = first_match
+        .map(|byte_offset| block[..byte_offset].chars().count())
+        .unwrap_or(0);
+    let lead = max_chars / 4;
+    let start = char_offset.saturating_sub(lead);
+    let excerpt = block
+        .chars()
+        .skip(start)
+        .take(max_chars)
+        .collect::<String>();
+    if start == 0 {
+        format!("{excerpt}…")
+    } else {
+        format!("…{excerpt}…")
+    }
+}
+
+fn deterministic_finding_from_text(
+    doc: &ScrapedWebDocument,
+    text: &str,
+    content_hash: &str,
+    domain: &str,
+    favicon: &str,
+    title: &str,
+) -> Option<WebResearchFinding> {
+    for line in text.lines() {
+        let trimmed = line
+            .trim()
+            .trim_start_matches('#')
+            .trim_start_matches(['-', '*', '>'])
+            .trim();
+        if trimmed.len() >= 15
+            && !trimmed.starts_with("http")
+            && !trimmed.starts_with('[')
+            && !trimmed.ends_with(':')
+        {
+            if let Ok(vq) = VerifiedQuote::verify(&doc.content_md, content_hash, trimmed) {
+                return Some(WebResearchFinding {
+                    statement: trimmed.to_string(),
+                    quote: vq.text,
+                    source_url: doc.url.clone(),
+                    domain: domain.to_string(),
+                    title: title.to_string(),
+                    favicon_url: favicon.to_string(),
+                    quote_start: Some(vq.start),
+                    quote_end: Some(vq.end),
+                });
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -853,19 +1296,28 @@ async fn synthesize_with_temporal_grounding(
 /// Extracts the distinct, meaningful keywords from an inquiry (len >= 4, max 8),
 /// dropping common inquiry stop-words so relevance filtering remains strict.
 pub fn inquiry_keywords(inquiry: &str) -> Vec<String> {
-    const STOP_WORDS: &[&str] = &[
-        "find", "ways", "through", "what", "when", "where", "which", "with", "from", "into",
-        "about", "more", "most", "some", "such", "than", "that", "them", "then", "there", "these",
-        "they", "this", "those", "have", "been", "were", "will", "would", "could", "should",
-        "your", "mine", "ours", "make", "also", "just", "like", "need", "want", "tell", "know",
-        "show", "help", "please", "using", "used", "does", "done", "doing", "each", "many", "much",
-        "very", "every", "over", "under", "both", "only", "other",
-    ];
+    let mut out = passage_terms(inquiry);
+    out.truncate(8);
+    out
+}
 
+const INQUIRY_STOP_WORDS: &[&str] = &[
+    "find", "ways", "through", "what", "when", "where", "which", "with", "from", "into", "about",
+    "more", "most", "some", "such", "than", "that", "them", "then", "there", "these", "they",
+    "this", "those", "have", "been", "were", "will", "would", "could", "should", "your", "mine",
+    "ours", "make", "also", "just", "like", "need", "want", "tell", "know", "show", "help",
+    "please", "using", "used", "does", "done", "doing", "each", "many", "much", "very", "every",
+    "over", "under", "both", "only", "other",
+];
+
+/// All distinct inquiry terms for evidence selection. Unlike the eight-term search
+/// ranking vector, passage selection must retain late qualifiers such as "broadcast"
+/// even when a question also names several entities.
+fn passage_terms(inquiry: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in inquiry.split(|c: char| !c.is_alphanumeric()) {
         let w = raw.trim().to_lowercase();
-        if w.len() >= 4 && !STOP_WORDS.contains(&w.as_str()) && !out.contains(&w) {
+        if w.len() >= 4 && !INQUIRY_STOP_WORDS.contains(&w.as_str()) && !out.contains(&w) {
             out.push(w);
         }
     }
@@ -877,7 +1329,6 @@ pub fn inquiry_keywords(inquiry: &str) -> Vec<String> {
             }
         }
     }
-    out.truncate(8);
     out
 }
 
@@ -946,6 +1397,19 @@ pub fn search_local_vault_excluding(
     limit: usize,
     exclude_artifact_id: Option<&str>,
 ) -> Result<Vec<(String, String, String)>, CoreError> {
+    search_local_vault_excluding_scoped(engine, inquiry, limit, exclude_artifact_id, None)
+}
+
+/// Scope-aware local retrieval. A project-scoped agent may only see pages attached to
+/// that project; workspace scope keeps the existing all-pages behavior. Scope is applied
+/// inside the SQL query so private pages never enter model context, snippets or counts.
+pub fn search_local_vault_excluding_scoped(
+    engine: &Engine,
+    inquiry: &str,
+    limit: usize,
+    exclude_artifact_id: Option<&str>,
+    scope_project_id: Option<&str>,
+) -> Result<Vec<(String, String, String)>, CoreError> {
     let keywords = inquiry_keywords(inquiry);
     if keywords.is_empty() {
         return Ok(Vec::new());
@@ -973,12 +1437,21 @@ pub fn search_local_vault_excluding(
         String::new()
     };
 
+    let scope_clause = if let Some(project) = scope_project_id {
+        let param_idx = bindings.len() + 1;
+        bindings.push(project.to_string());
+        format!(
+            " AND EXISTS(SELECT 1 FROM project_artifacts pa WHERE pa.artifact_id=artifacts.id AND pa.project_id=?{param_idx} AND pa.detached_at IS NULL)"
+        )
+    } else {
+        String::new()
+    };
+
     let sql = format!(
         "SELECT id, COALESCE(title, 'Untitled'), content_md
          FROM artifacts
-         WHERE deleted_at IS NULL AND type = 'note'{} AND ({})
+         WHERE deleted_at IS NULL AND type = 'note'{exclude_clause}{scope_clause} AND ({})
          LIMIT 64;",
-        exclude_clause,
         where_clauses.join(" OR ")
     );
 
@@ -1008,15 +1481,25 @@ pub fn search_local_vault_excluding(
 }
 
 /// Answers an inquiry strictly from artifacts already in the vault — no network access.
+#[allow(clippy::too_many_arguments)]
 async fn execute_local_vault_research(
     engine: &Engine,
     inquiry: &str,
     limit_docs: usize,
     exclude_artifact_id: Option<&str>,
+    scope_project_id: Option<&str>,
+    template_snapshot: Option<&SynthesisTemplateSnapshot>,
     stages: &mut Vec<ResearchStage>,
     on_stage: Option<&(dyn Fn(ResearchStage) + Send + Sync)>,
+    budget: Option<Duration>,
 ) -> Result<WebResearchResult, CoreError> {
-    let hits = search_local_vault_excluding(engine, inquiry, limit_docs, exclude_artifact_id)?;
+    let hits = search_local_vault_excluding_scoped(
+        engine,
+        inquiry,
+        limit_docs,
+        exclude_artifact_id,
+        scope_project_id,
+    )?;
     let matching_vault_artifacts: Vec<String> = hits.iter().map(|(id, _, _)| id.clone()).collect();
 
     stages.push(ResearchStage {
@@ -1039,6 +1522,8 @@ async fn execute_local_vault_research(
             title: title.clone(),
             content_md: content.clone(),
             published_date: None,
+            fetched_at: None,
+            from_cache: false,
         });
 
         sources.push(ResearchSource {
@@ -1097,7 +1582,9 @@ async fn execute_local_vault_research(
         &documents,
         &findings,
         WebSearchCapability::Unsupported,
-        None,
+        template_snapshot.map(|snapshot| snapshot.skeleton_md.as_str()),
+        template_snapshot.map(|snapshot| snapshot.guidance.as_str()),
+        budget,
     )
     .await?;
     md.push_str("## Synthesis\n");
@@ -1176,6 +1663,8 @@ async fn execute_local_vault_research(
         matching_vault_artifacts,
         stages: stages.clone(),
         sources,
+        template_snapshot: template_snapshot.cloned(),
+        search_provider: None,
     })
 }
 
@@ -1244,8 +1733,17 @@ pub struct ResearchRunOptions<'a> {
     pub limit_docs: usize,
     pub capability: Option<WebSearchCapability>,
     pub template_id: Option<&'a str>,
+    /// Pre-resolved immutable template snapshot. Takes precedence over `template_id`
+    /// so agent dispatch cannot re-read a template that changed after review scope began.
+    pub template_snapshot: Option<&'a SynthesisTemplateSnapshot>,
     pub exclude_artifact_id: Option<&'a str>,
+    /// When set, local-vault retrieval is restricted to pages attached to this project.
+    pub scope_project_id: Option<&'a str>,
     pub on_stage: Option<&'a (dyn Fn(ResearchStage) + Send + Sync)>,
+    /// Cooperative cancellation checked between search, fetch, extraction, and synthesis.
+    pub cancellation: Option<&'a CancellationToken>,
+    /// Shared workflow duration budget; extraction reserves time for synthesis and finalization.
+    pub budget: Option<Duration>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1270,8 +1768,12 @@ pub async fn execute_research_with_template(
             limit_docs,
             capability,
             template_id,
+            template_snapshot: None,
             exclude_artifact_id: None,
+            scope_project_id: None,
             on_stage,
+            cancellation: None,
+            budget: None,
         },
     )
     .await
@@ -1288,10 +1790,60 @@ pub async fn execute_research_with_options(
     let limit_docs = options.limit_docs;
     let capability = options.capability;
     let template_id = options.template_id;
+    let explicit_template_snapshot = options.template_snapshot.cloned();
     let exclude_artifact_id = options.exclude_artifact_id;
+    let scope_project_id = options.scope_project_id;
     let on_stage = options.on_stage;
+    let cancellation = options.cancellation;
+    let budget = options.budget;
 
+    let template_snapshot = match explicit_template_snapshot {
+        Some(snapshot) => Some(snapshot),
+        None => match template_id {
+            Some(id) => Some(research_template_snapshot(engine, id)?),
+            None => None,
+        },
+    };
     let mut stages: Vec<ResearchStage> = Vec::new();
+    if let Some(snapshot) = template_snapshot.as_ref() {
+        let message = format!(
+            "Loading template: {} (revision {})...",
+            snapshot.name, snapshot.version
+        );
+        if let Some(callback) = on_stage {
+            callback(ResearchStage {
+                stage: "template".to_string(),
+                message: message.clone(),
+            });
+        }
+        stages.push(ResearchStage {
+            stage: "template".to_string(),
+            message,
+        });
+    }
+    if let Some(project) = scope_project_id {
+        let message = "Reading scoped project context...".to_string();
+        if let Some(callback) = on_stage {
+            callback(ResearchStage {
+                stage: "scope".to_string(),
+                message: message.clone(),
+            });
+        }
+        let available: bool = engine.db().reader()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND deleted_at IS NULL)",
+            [project],
+            |r| r.get(0),
+        )?;
+        if !available {
+            return Err(CoreError::InvariantViolation(
+                "The selected project is no longer available.".into(),
+            ));
+        }
+        stages.push(ResearchStage {
+            stage: "scope".to_string(),
+            message,
+        });
+    }
 
     let resolved_cap = capability.unwrap_or_else(|| {
         let reader_res = engine.db().reader().ok();
@@ -1324,8 +1876,11 @@ pub async fn execute_research_with_options(
             inquiry,
             limit_docs,
             exclude_artifact_id,
+            scope_project_id,
+            template_snapshot.as_ref(),
             &mut stages,
             on_stage,
+            budget,
         )
         .await?;
         res.search_status = "unsupported_model".to_string();
@@ -1337,9 +1892,15 @@ pub async fn execute_research_with_options(
         WebSearchMode::AlwaysSearch => true,
         WebSearchMode::Auto => {
             // Escalate to the web when the vault has thin coverage.
-            let coverage = search_local_vault_excluding(engine, inquiry, 8, exclude_artifact_id)
-                .map(|v| v.len())
-                .unwrap_or(0);
+            let coverage = search_local_vault_excluding_scoped(
+                engine,
+                inquiry,
+                8,
+                exclude_artifact_id,
+                scope_project_id,
+            )
+            .map(|v| v.len())
+            .unwrap_or(0);
             coverage < 2
         }
     };
@@ -1361,8 +1922,11 @@ pub async fn execute_research_with_options(
             inquiry,
             limit_docs,
             exclude_artifact_id,
+            scope_project_id,
+            template_snapshot.as_ref(),
             &mut stages,
             on_stage,
+            budget,
         )
         .await?;
         if mode != WebSearchMode::LocalVaultOnly {
@@ -1377,8 +1941,11 @@ pub async fn execute_research_with_options(
             inquiry,
             limit_docs,
             exclude_artifact_id,
+            scope_project_id,
+            template_snapshot.as_ref(),
             &mut stages,
             on_stage,
+            budget,
         )
         .await;
     }
@@ -1401,20 +1968,23 @@ pub async fn execute_research_with_options(
         }
     };
 
-    let web_res = execute_multi_query_research_with_template(
+    let web_res = execute_multi_query_research_with_snapshot(
         engine,
         inquiry,
         provider,
         limit_docs,
         resolved_cap,
-        template_id,
+        template_snapshot.as_ref(),
         Some(&labelled),
+        cancellation,
+        budget,
     )
     .await;
 
     match web_res {
         Ok(mut result) if !result.documents.is_empty() => {
             result.search_status = "web_search_success".to_string();
+            result.search_provider = Some(provider_label.to_string());
             result.external_sources_count = result.documents.len();
             result.matching_vault_artifacts = Vec::new();
 
@@ -1498,11 +2068,15 @@ pub async fn execute_research_with_options(
                 inquiry,
                 limit_docs,
                 exclude_artifact_id,
+                scope_project_id,
+                template_snapshot.as_ref(),
                 &mut stages,
                 on_stage,
+                budget,
             )
             .await?;
             vault_res.search_status = "web_search_failed".to_string();
+            vault_res.search_provider = Some(provider_label.to_string());
             vault_res.external_sources_count = 0;
             vault_res.mode_used = WebSearchMode::LocalVaultOnly;
 
@@ -1540,11 +2114,15 @@ pub async fn execute_research_with_options(
                 inquiry,
                 limit_docs,
                 exclude_artifact_id,
+                scope_project_id,
+                template_snapshot.as_ref(),
                 &mut stages,
                 on_stage,
+                budget,
             )
             .await?;
             vault_res.search_status = "web_search_failed".to_string();
+            vault_res.search_provider = Some(provider_label.to_string());
             vault_res.external_sources_count = 0;
             vault_res.mode_used = WebSearchMode::LocalVaultOnly;
 
@@ -2300,4 +2878,376 @@ pub async fn derive_artifact_full(
     });
 
     Ok(new_art.id)
+}
+
+/// Non-publishing research generation for the workspace agent. It never creates or
+/// updates pages. Network access is possible only when the owner granted it for the
+/// run and an enabled search provider exists.
+pub struct AgentResearchOptions<'a> {
+    pub allow_web: bool,
+    pub template: Option<&'a SynthesisTemplateSnapshot>,
+    pub scope_project_id: Option<&'a str>,
+    pub exclude_artifact_id: Option<&'a str>,
+    pub limit_docs: usize,
+    /// Genuine per-stage progress for the owning agent run.
+    pub progress: Option<&'a (dyn Fn(ResearchStage) + Send + Sync)>,
+    /// Cooperative cancellation for long search, fetch, and extraction phases.
+    pub cancellation: Option<&'a CancellationToken>,
+    /// Shared Agent Research duration budget, including time reserved for synthesis.
+    pub budget: Option<Duration>,
+}
+
+pub async fn execute_agent_research(
+    engine: &Engine,
+    inquiry: &str,
+    options: AgentResearchOptions<'_>,
+) -> Result<WebResearchResult, CoreError> {
+    let query = inquiry.trim();
+    if query.is_empty() || query.chars().count() > 4000 {
+        return Err(CoreError::InvariantViolation(
+            "The research question must be non-empty and under 4,000 characters.".into(),
+        ));
+    }
+    let limit = options.limit_docs.clamp(1, 8);
+    let (provider_box, label, mode) = if options.allow_web {
+        let entry = {
+            let reader = engine.db().reader()?;
+            crate::db::search_repo::get_default_search_provider(&reader)?
+        }
+        .ok_or_else(|| {
+            CoreError::InvariantViolation(
+                "Web research is allowed for this run, but no enabled search provider is configured."
+                    .into(),
+            )
+        })?;
+        let provider = crate::search::build_search_provider(&entry)
+            .map_err(|error| CoreError::InvariantViolation(error.to_string()))?;
+        (
+            Some(provider),
+            entry.display_name,
+            WebSearchMode::AlwaysSearch,
+        )
+    } else {
+        (
+            None,
+            "Not used (web permission off)".to_string(),
+            WebSearchMode::LocalVaultOnly,
+        )
+    };
+
+    let capability = {
+        let reader = engine.db().reader()?;
+        crate::db::providers_repo::get_model_entry(&reader, engine.model().id())
+            .ok()
+            .flatten()
+            .map(|(model, _, _)| model.web_search_capability)
+            .unwrap_or(WebSearchCapability::EngineAugmentedOnly)
+    };
+
+    execute_research_with_options(
+        engine,
+        query,
+        ResearchRunOptions {
+            mode,
+            search_provider: provider_box.as_deref(),
+            provider_label: &label,
+            limit_docs: limit,
+            capability: Some(capability),
+            template_id: None,
+            template_snapshot: options.template,
+            exclude_artifact_id: options.exclude_artifact_id,
+            scope_project_id: options.scope_project_id,
+            on_stage: options.progress,
+            cancellation: options.cancellation,
+            budget: options.budget,
+        },
+    )
+    .await
+}
+
+/// Validate that every citation/source in a generated packet refers to a supplied
+/// source document. Agent review packets use this before offering the proposal.
+pub fn validate_research_sources(result: &WebResearchResult) -> Result<(), CoreError> {
+    for source in &result.sources {
+        if source.url.trim().is_empty() || source.title.trim().is_empty() {
+            return Err(CoreError::InvariantViolation(
+                "Research returned a source without an identity or title.".into(),
+            ));
+        }
+        let known = result.documents.iter().any(|doc| doc.url == source.url);
+        if !known {
+            return Err(CoreError::InvariantViolation(
+                "Research returned a citation that was not part of the supplied source packet."
+                    .into(),
+            ));
+        }
+    }
+    for finding in &result.findings {
+        let known = result
+            .documents
+            .iter()
+            .any(|doc| doc.url == finding.source_url);
+        if !known || finding.quote.trim().is_empty() {
+            return Err(CoreError::InvariantViolation(
+                "Research returned a finding without a retrieved source or quote.".into(),
+            ));
+        }
+    }
+    validate_numbered_citations(&result.synthesized_markdown, &result.sources)
+}
+
+fn validate_numbered_citations(
+    markdown: &str,
+    sources: &[ResearchSource],
+) -> Result<(), CoreError> {
+    fn parse_number(text: &str) -> Result<usize, CoreError> {
+        let text = text.trim();
+        if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
+            if let Ok(index) = text.parse() {
+                return Ok(index);
+            }
+        }
+        Err(CoreError::InvariantViolation(
+            "Research returned a citation that is not a numbered supplied source.".into(),
+        ))
+    }
+
+    let mut rest = markdown;
+    while let Some(start) = rest.find("[Source") {
+        let suffix = &rest[start + "[Source".len()..];
+        let Some(after) = suffix
+            .strip_prefix(' ')
+            .or_else(|| suffix.strip_prefix("s "))
+        else {
+            rest = suffix;
+            continue;
+        };
+        let Some(end) = after.find(']') else {
+            return Err(CoreError::InvariantViolation(
+                "Research returned a malformed source citation.".into(),
+            ));
+        };
+
+        // Some models put several valid source numbers inside one marker.
+        // Check every member, including every intervening number of a range.
+        for part in after[..end].split([',', ';']) {
+            let part = part.trim();
+            let part = part.strip_prefix("Source ").unwrap_or(part);
+            let (first, last) = if let Some((first, last)) = part.split_once(['-', '–']) {
+                (parse_number(first)?, parse_number(last)?)
+            } else {
+                let number = parse_number(part)?;
+                (number, number)
+            };
+            if first == 0
+                || last < first
+                || last - first >= sources.len()
+                || !(first..=last).all(|number| sources.iter().any(|s| s.index == number))
+            {
+                return Err(CoreError::InvariantViolation(
+                    "Research cited a source number outside the supplied source packet.".into(),
+                ));
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod passage_selection_tests {
+    use super::*;
+
+    #[test]
+    fn late_relevant_facts_reach_the_synthesis_budget_past_navigation() {
+        let navigation = (0..80)
+            .map(|index| format!("- [Section {index}](https://example.test/{index}) | Sign in"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let filler = (0..12)
+            .map(|index| {
+                format!(
+                    "## Archive {index}\n\nThis archived article discusses unrelated mission history and general background."
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let coverage = "## Updated coverage\n\nOn July 11, President Biden will preview one Webb image at the White House.\n\nThe July 12 broadcast begins at 10:30 a.m. and includes the full set of first images.";
+        let content = format!("{navigation}\n\n{filler}\n\n{coverage}");
+        let selected = select_relevant_passages(
+            "When is the July 11 White House preview and the July 12 broadcast?",
+            &content,
+            SYNTHESIS_PASSAGE_BUDGET,
+        );
+
+        assert!(
+            selected.chars().count() <= SYNTHESIS_PASSAGE_BUDGET,
+            "selected passages must respect the synthesis budget"
+        );
+        assert!(selected.contains("July 11"), "{selected}");
+        assert!(selected.contains("July 12"), "{selected}");
+        assert!(selected.contains("White House"), "{selected}");
+        assert!(
+            !selected.contains("Section 0"),
+            "the opening navigation must not consume the synthesis context: {selected}"
+        );
+    }
+
+    #[test]
+    fn selection_without_term_matches_samples_the_body_instead_of_the_opening() {
+        let opening = "Welcome\n\nHome | News | Missions | Multimedia | Contact";
+        let body = (0..8)
+            .map(|index| format!("## Body {index}\n\nA substantive paragraph number {index} explains the retrieved policy in ordinary prose and enough detail to be useful."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let selected = select_relevant_passages(
+            "quantum widget calibration",
+            &format!("{opening}\n\n{body}"),
+            1_200,
+        );
+        assert!(selected.contains("paragraph number 6"), "{selected}");
+        assert!(!selected.contains("Home | News"), "{selected}");
+        assert!(selected.chars().count() <= 1_200);
+    }
+
+    #[test]
+    fn high_scoring_late_passages_outrank_early_partial_matches() {
+        let early = format!(
+            "July archive introduction. {}",
+            "General collection background without the specific event details. ".repeat(8)
+        );
+        let late = "## Coverage\n\nJuly 11 brings a White House preview of the first images.\n\nJuly 12 carries the broadcast of the first images.";
+        let selected = select_relevant_passages(
+            "When is the July 11 White House preview and July 12 broadcast?",
+            &format!("{early}\n\n{late}"),
+            200,
+        );
+        assert!(selected.contains("July 11"));
+        assert!(selected.contains("July 12"));
+        assert!(
+            !selected.contains("July archive introduction"),
+            "{selected}"
+        );
+    }
+
+    #[test]
+    fn deterministic_fallback_quotes_a_selected_passage_verbatim() {
+        let doc = ScrapedWebDocument {
+            url: "https://example.test/article".into(),
+            title: "Article".into(),
+            content_md: "## Coverage\n\nThe July 12 broadcast begins at 10:30 a.m. Eastern.".into(),
+            published_date: None,
+            fetched_at: None,
+            from_cache: false,
+        };
+        let hash = vault::compute_content_hash(&doc.content_md);
+        let finding = deterministic_finding_from_text(
+            &doc,
+            "The July 12 broadcast begins at 10:30 a.m. Eastern.",
+            &hash,
+            "example.test",
+            "",
+            "Article",
+        )
+        .expect("a substantive line is verifiable against the original document");
+        assert!(doc.content_md.contains(&finding.quote));
+        assert_eq!(finding.source_url, doc.url);
+    }
+}
+
+#[cfg(test)]
+mod citation_validation_tests {
+    use super::*;
+
+    fn sources(numbers: &[usize]) -> Vec<ResearchSource> {
+        numbers
+            .iter()
+            .map(|index| ResearchSource {
+                index: *index,
+                url: format!("https://example.test/{index}"),
+                domain: "example.test".into(),
+                title: format!("Article {index}"),
+                favicon_url: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accepts_numbered_citation_groups_for_retrieved_sources() {
+        let sources = sources(&[1, 2, 3]);
+        for text in [
+            "[Source 1] [Source 2]",
+            "[Source 1, Source 3]",
+            "[Sources 1, 3]",
+            "[Source 1; Source 2]",
+            "[Sources 1–3]",
+            "[Source 1](https://example.test/1)",
+        ] {
+            validate_numbered_citations(text, &sources).unwrap();
+        }
+    }
+
+    #[test]
+    fn synthesis_findings_use_document_numbers_and_include_exact_quotes() {
+        let documents = [
+            ScrapedWebDocument {
+                url: "https://example.test/coverage".into(),
+                title: "Coverage".into(),
+                content_md: "The broadcast starts at ten.".into(),
+                published_date: None,
+                fetched_at: None,
+                from_cache: false,
+            },
+            ScrapedWebDocument {
+                url: "https://example.test/release".into(),
+                title: "Release".into(),
+                content_md: "The telescope launched in December.".into(),
+                published_date: None,
+                fetched_at: None,
+                from_cache: false,
+            },
+        ];
+        let findings = documents
+            .iter()
+            .rev()
+            .map(|document| WebResearchFinding {
+                statement: document.title.clone(),
+                quote: document.content_md.clone(),
+                source_url: document.url.clone(),
+                domain: "example.test".into(),
+                title: document.title.clone(),
+                favicon_url: String::new(),
+                quote_start: None,
+                quote_end: None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            format_numbered_findings(&documents, &findings),
+            "- [Source 2] Release\n  > The telescope launched in December.\n\
+             - [Source 1] Coverage\n  > The broadcast starts at ten.\n"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_malformed_and_out_of_range_members() {
+        let sources = sources(&[1, 3, 4]);
+        for text in [
+            "[Source 2]",
+            "[Sources 1–3]",
+            "[Source 1, Source 5]",
+            "[Sources 9223372036854775807–9223372036854775808]",
+            "[Source 3–1]",
+            "[Source 0]",
+            "[Source 1, unknown]",
+            "[Source 1,]",
+            "[Source 1",
+        ] {
+            assert!(
+                validate_numbered_citations(text, &sources).is_err(),
+                "{text}"
+            );
+        }
+        assert!(validate_numbered_citations("[Source 1]", &[]).is_err());
+    }
 }

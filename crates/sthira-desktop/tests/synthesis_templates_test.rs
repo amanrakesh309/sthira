@@ -67,11 +67,11 @@ impl TemplateFixture {
                     let prompt = payload["prompt"].as_str().unwrap_or_default().to_string();
                     prompts_inner.lock().unwrap().push(prompt.clone());
 
-                    let body = if prompt.contains("Scope & Objectives") {
+                    let body = if prompt.contains("Goal and definition of done") {
                         serde_json::json!({
                             "response": serde_json::json!({
                                 "title": "Execution Plan: Database Architecture",
-                                "content_md": "# Execution Plan: Database Architecture\n\n## Scope & Objectives\nObjectives.\n\n## Phase 1: Foundation & Core Setup\nCore setup.\n\n## Phase 2: Feature Implementation\nFeature work.\n\n## Open Decisions & Trade-offs\nTrade-offs.",
+                                "content_md": "# Execution Plan: Database Architecture\n\n## Goal and definition of done\nObjectives.\n\n## Phase 1 — Foundation\nCore setup.\n\n## Phase 2 — Implementation\nFeature work.\n\n## Open decisions and risks\nTrade-offs.",
                                 "page_blocks": []
                             }).to_string(),
                             "done": true
@@ -164,7 +164,7 @@ async fn test_synthesis_templates_seeding_and_filtering() {
     let (_tmp, engine) = setup_test_engine(&fixture.base);
 
     // 1. List all synthesis templates
-    let all_templates = handle_list_synthesis_templates(&engine, None)
+    let all_templates = handle_list_synthesis_templates(&engine, None, None, None, None)
         .expect("Listing all synthesis templates must succeed");
     assert!(
         all_templates.len() >= 4,
@@ -173,8 +173,9 @@ async fn test_synthesis_templates_seeding_and_filtering() {
     );
 
     // 2. Filter by target_mode = "research"
-    let research_templates = handle_list_synthesis_templates(&engine, Some("research".to_string()))
-        .expect("Listing research templates must succeed");
+    let research_templates =
+        handle_list_synthesis_templates(&engine, Some("research".to_string()), None, None, None)
+            .expect("Listing research templates must succeed");
     assert!(
         !research_templates.is_empty(),
         "Must have research templates"
@@ -184,28 +185,40 @@ async fn test_synthesis_templates_seeding_and_filtering() {
     }
     let default_research = research_templates.iter().find(|t| t.is_default);
     assert!(
-        default_research.is_some(),
-        "Default research template must exist"
+        default_research.is_none(),
+        "A built-in template must not become a default without the owner choosing it"
     );
-    let def_res = default_research.unwrap();
-    assert_eq!(def_res.name, "Comparative Tech Evaluation");
-    assert!(def_res
-        .template_skeleton_md
-        .contains("## Comparison Matrix"));
+    assert!(
+        research_templates
+            .iter()
+            .any(|t| t.name == "Research: Deep Dive" && t.is_builtin),
+        "Built-in Research: Deep Dive must be seeded"
+    );
+    assert!(
+        research_templates
+            .iter()
+            .any(|t| t.name == "Research: Cultural Tradition — Four Lenses"),
+        "Four Lenses research template must be available"
+    );
 
     // 3. Filter by target_mode = "plan"
-    let plan_templates = handle_list_synthesis_templates(&engine, Some("plan".to_string()))
-        .expect("Listing plan templates must succeed");
+    let plan_templates =
+        handle_list_synthesis_templates(&engine, Some("plan".to_string()), None, None, None)
+            .expect("Listing plan templates must succeed");
     assert!(!plan_templates.is_empty(), "Must have plan templates");
     for t in &plan_templates {
         assert_eq!(t.target_mode, "plan");
     }
-    let default_plan = plan_templates.iter().find(|t| t.is_default);
-    assert!(default_plan.is_some(), "Default plan template must exist");
-    let def_plan = default_plan.unwrap();
-    assert_eq!(def_plan.name, "Milestone Roadmap");
-    assert!(def_plan.template_skeleton_md.contains("## Phase 1"));
-    assert!(def_plan.template_skeleton_md.contains("## Phase 2"));
+    assert!(
+        plan_templates.iter().find(|t| t.is_default).is_none(),
+        "No plan template becomes a default without an explicit owner choice"
+    );
+    assert!(
+        plan_templates
+            .iter()
+            .any(|t| t.name == "Plan: MVP / Product Roadmap" && t.is_builtin),
+        "Built-in MVP plan template must be seeded"
+    );
 }
 
 #[tokio::test]
@@ -244,19 +257,19 @@ async fn test_derive_artifact_with_template_skeleton_injection() {
         "Outbound prompt must include template synthesis directive"
     );
     assert!(
-        outbound_prompt.contains("## Scope & Objectives"),
+        outbound_prompt.contains("## Goal and definition of done"),
         "Outbound prompt must include skeleton header: Scope & Objectives"
     );
     assert!(
-        outbound_prompt.contains("## Phase 1: Foundation & Core Setup"),
+        outbound_prompt.contains("## Phase 1 — Foundation"),
         "Outbound prompt must include skeleton header: Phase 1"
     );
     assert!(
-        outbound_prompt.contains("## Phase 2: Feature Implementation"),
+        outbound_prompt.contains("## Phase 2 — Implementation"),
         "Outbound prompt must include skeleton header: Phase 2"
     );
     assert!(
-        outbound_prompt.contains("## Open Decisions & Trade-offs"),
+        outbound_prompt.contains("## Open decisions and risks"),
         "Outbound prompt must include skeleton header: Open Decisions & Trade-offs"
     );
 
@@ -277,25 +290,25 @@ async fn test_derive_artifact_with_template_skeleton_injection() {
 
     // Skeleton preservation verification
     assert!(
-        derived_art.content_md.contains("## Scope & Objectives"),
+        derived_art
+            .content_md
+            .contains("## Goal and definition of done"),
         "Derived plan must preserve template skeleton header: Scope & Objectives"
     );
     assert!(
-        derived_art
-            .content_md
-            .contains("## Phase 1: Foundation & Core Setup"),
+        derived_art.content_md.contains("## Phase 1 — Foundation"),
         "Derived plan must preserve template skeleton header: Phase 1"
     );
     assert!(
         derived_art
             .content_md
-            .contains("## Phase 2: Feature Implementation"),
+            .contains("## Phase 2 — Implementation"),
         "Derived plan must preserve template skeleton header: Phase 2"
     );
     assert!(
         derived_art
             .content_md
-            .contains("## Open Decisions & Trade-offs"),
+            .contains("## Open decisions and risks"),
         "Derived plan must preserve template skeleton header: Open Decisions & Trade-offs"
     );
 }
@@ -345,7 +358,7 @@ async fn test_derive_artifact_with_disabled_template_omits_skeleton() {
         "Outbound prompt must NOT contain template skeleton directive when templates are disabled"
     );
     assert!(
-        !outbound_prompt.contains("## Scope & Objectives"),
+        !outbound_prompt.contains("## Goal and definition of done"),
         "Outbound prompt must NOT contain skeleton headers when templates are disabled"
     );
 
@@ -354,7 +367,9 @@ async fn test_derive_artifact_with_disabled_template_omits_skeleton() {
         .expect("Fetch derived artifact");
     assert_eq!(derived_art.derived_from_artifact_id, Some(src_art.id));
     assert!(
-        !derived_art.content_md.contains("## Scope & Objectives"),
+        !derived_art
+            .content_md
+            .contains("## Goal and definition of done"),
         "Derived artifact content must not contain template skeleton when disabled"
     );
     assert!(derived_art.content_md.contains("## Overview"));

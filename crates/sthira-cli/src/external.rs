@@ -209,11 +209,18 @@ pub async fn dispatch(args: &[String]) -> Result<bool> {
             match rest.first().map(String::as_str){
                 Some("preview") if rest.len()==2=>print(json!(engine.preview_migration(serde_json::from_str::<ImportDraft>(&input(&rest[1])?)?)?))?,
                 Some("list") if rest.len()==1=>print(json!(engine.list_migrations()?))?,
+                Some("history") if rest.len()==2 || rest.len()==3=>{let before=rest.get(2).map(|value|input(value).and_then(|text|Ok(serde_json::from_str(&text)?))).transpose()?;print(json!(engine.migration_history(rest[1].parse()?,before)?))?;},
                 Some("read") if rest.len()==2=>print(json!(engine.migration_run(&rest[1])?))?,
+                Some("review") if rest.len()==4=>print(json!(engine.review_migration_selection(&rest[1],rest[2].parse()?,serde_json::from_str(&input(&rest[3])?)?)?))?,
+                Some("apply-selected") if rest.len()==4=>{
+                    #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct Approval {paths:Vec<String>,basis:String}
+                    let approval:Approval=serde_json::from_str(&input(&rest[3])?)?;
+                    print(json!(engine.apply_reviewed_migration(&rest[1],rest[2].parse()?,approval.paths,&approval.basis)?))?;
+                },
                 Some("apply") if rest.len()==3=>{let current=engine.migration_run(&rest[1])?;let paths=current.plan.items.iter().filter(|i|i.status=="new").map(|i|i.path.clone()).collect();print(json!(engine.apply_migration(&rest[1],rest[2].parse()?,paths)?))?;},
                 Some("rollback") if rest.len()==3=>print(json!(engine.rollback_migration(&rest[1],rest[2].parse()?)?))?,
                 Some("cancel") if rest.len()==3=>print(json!(engine.cancel_migration(&rest[1],rest[2].parse()?)?))?,
-                _=>return Err(invalid("Usage: migration preview <JSON|@file> | list | read <id> | apply <id> <revision> | cancel <id> <revision> | rollback <id> <revision>"))
+                _=>return Err(invalid("Usage: migration preview <JSON|@file> | list | history <limit> [cursor JSON] | read <id> | review <id> <revision> <paths JSON> | apply-selected <id> <revision> <approval JSON> | apply <id> <revision> | cancel <id> <revision> | rollback <id> <revision>"))
             }
         },
         "handoff"=>{

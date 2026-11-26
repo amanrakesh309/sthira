@@ -27,9 +27,12 @@ import {
   BookOpen,
   ListTodo,
   HardDrive,
+  CircleHelp,
   ArrowUpRight,
   Info,
   X,
+  Users,
+  Activity,
 } from 'lucide-react';
 import {
   getWorkspaceTree,
@@ -44,6 +47,10 @@ import {
   togglePin,
   getProviderCatalog,
 } from '../api/ipc';
+import type { OwnershipTransferView, WorkspaceSummary } from '../api/workspaces';
+import type { GoogleSession } from './AccountModal';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import type { TeamWorkspaceTab } from './TeamWorkspaceView';
 import { ProjectDeletionModal } from './ProjectDeletionModal';
 import { AddToProjectModal } from './AddToProjectModal';
 import { PageActionMenu } from './PageActionMenu';
@@ -97,11 +104,25 @@ interface LeftSidebarProps {
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onOpenAccount: () => void;
+  onOpenHelp?: () => void;
+  onOpenTour?: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   refreshTrigger?: number;
   realtimeTitleUpdate?: { id: string; title: string } | null;
   onArtifactRenamed?: (id: string, newTitle: string) => void;
+  activeWorkspace?: WorkspaceSummary | null;
+  workspaces?: WorkspaceSummary[];
+  incomingTransfers?: OwnershipTransferView[];
+  googleSession?: GoogleSession | null;
+  workspacesLoading?: boolean;
+  teamWorkspaceTab?: TeamWorkspaceTab;
+  onSelectTeamTab?: (tab: TeamWorkspaceTab) => void;
+  onSelectPersonal?: () => void;
+  onSelectWorkspace?: (workspace: WorkspaceSummary) => void;
+  onOpenCreateWorkspace?: () => void;
+  onOpenJoinWorkspace?: () => void;
+  onRefreshWorkspaces?: () => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -127,11 +148,25 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onOpenSearch,
   onOpenSettings,
   onOpenAccount,
+  onOpenHelp,
+  onOpenTour,
   isCollapsed,
   onToggleCollapse,
   refreshTrigger,
   realtimeTitleUpdate,
   onArtifactRenamed,
+  activeWorkspace = null,
+  workspaces = [],
+  incomingTransfers = [],
+  googleSession = null,
+  workspacesLoading = false,
+  teamWorkspaceTab = 'overview',
+  onSelectTeamTab,
+  onSelectPersonal,
+  onSelectWorkspace,
+  onOpenCreateWorkspace,
+  onOpenJoinWorkspace,
+  onRefreshWorkspaces,
 }) => {
   const {tasks:agentTasks}=useAgentTasks();
   const activeTasks=agentTasks.filter(isAgentActive).length;
@@ -527,6 +562,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           {/* Logo / Home */}
           <button
             type="button"
+            data-guide-target="home"
             onClick={onNavigateHome}
             title="Sthira Home"
             aria-current={currentView === 'home' ? 'page' : undefined}
@@ -549,6 +585,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           {/* Search Trigger */}
           <button
             type="button"
+            data-guide-target="search"
             onClick={onOpenSearch}
             title="Search workspace"
             className="w-8 h-8 rounded-lg text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted flex items-center justify-center transition-colors cursor-pointer"
@@ -559,6 +596,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           {/* 2. All Files Trigger */}
           <button
             type="button"
+            data-guide-target="files"
             data-testid="nav-workspace-index-collapsed"
             aria-current={currentView === 'workspace_index' ? 'page' : undefined}
             onClick={() => onNavigateWorkspaceIndex?.('all')}
@@ -576,6 +614,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           {explorePlanAvailable ? (
             <button
               type="button"
+              data-guide-target="research"
               data-testid="nav-explore-plan-collapsed"
               aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
               onClick={handleExplorePlanClick}
@@ -597,6 +636,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             >
               <button
                 type="button"
+                data-guide-target="research"
                 data-testid="nav-explore-plan-collapsed"
                 disabled
                 aria-disabled="true"
@@ -662,12 +702,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </div>
           )}
 
-          <button type="button" title="Agent" aria-label="Agent" aria-current={currentView === 'agent' ? 'page' : undefined} onClick={onNavigateAgent} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4" /></button>
-          <button type="button" title={tasksLabel} aria-label={tasksLabel} onClick={openAgentTasks} className="w-8 h-8 rounded-lg flex items-center justify-center text-sthira-text-muted hover:bg-sthira-surface-muted"><ListTodo className="w-4 h-4"/>{activeTasks+readyTasks>0&&<small>{activeTasks+readyTasks}</small>}</button>
-          <button type="button" title="Memory" aria-label="Memory" aria-current={currentView === 'memory' ? 'page' : undefined} onClick={onNavigateMemory} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4" /></button>
+          <button type="button" title="Agent" aria-label="Agent" aria-current={currentView === 'agent' ? 'page' : undefined} data-guide-target="agent" onClick={onNavigateAgent} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4" /></button>
+          <button type="button" title={tasksLabel} aria-label={tasksLabel} data-guide-target="tasks" onClick={openAgentTasks} className="w-8 h-8 rounded-lg flex items-center justify-center text-sthira-text-muted hover:bg-sthira-surface-muted"><ListTodo className="w-4 h-4"/>{activeTasks+readyTasks>0&&<small>{activeTasks+readyTasks}</small>}</button>
+          <button type="button" title="Memory" aria-label="Memory" aria-current={currentView === 'memory' ? 'page' : undefined} data-guide-target="memory" onClick={onNavigateMemory} className={`w-8 h-8 rounded-lg flex items-center justify-center ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary' : 'text-sthira-text-muted hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4" /></button>
           {/* 4. Graph Trigger */}
           <button
             type="button"
+            data-guide-target="graph"
             data-testid="nav-knowledge-graph-collapsed"
             aria-current={currentView === 'graph' ? 'page' : undefined}
             onClick={onNavigateGraph}
@@ -684,6 +725,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           {/* 5. Canvas Trigger */}
           <button
             type="button"
+            data-guide-target="canvas"
             data-testid="nav-canvas-collapsed"
             aria-current={currentView === 'canvas' ? 'page' : undefined}
             onClick={() => onOpenCanvas()}
@@ -706,8 +748,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {/* Bottom controls */}
         <div className="flex flex-col items-center gap-2">
           <ThemeToggle />
+          {onOpenTour && <button type="button" className="context-info-button sidebar-help-button" aria-label="Show page tour" title="Show page tour" onClick={onOpenTour}>
+            <Compass size={16} aria-hidden="true" />
+          </button>}
+          {onOpenHelp && <button type="button" className="context-info-button sidebar-help-button" aria-label="Help" title="Help" onClick={onOpenHelp}>
+            <CircleHelp size={16} aria-hidden="true" />
+          </button>}
           <button
             type="button"
+            data-guide-target="settings"
             onClick={onOpenSettings}
             title="Model Settings"
             className="w-8 h-8 rounded-lg text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted flex items-center justify-center transition-colors cursor-pointer"
@@ -738,7 +787,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       <div className="sidebar-brand">
         <button
           type="button"
-          onClick={onNavigateHome}
+          data-guide-target="home"
+          onClick={activeWorkspace && onSelectPersonal ? onSelectPersonal : onNavigateHome}
           className="flex items-center gap-2.5 hover:opacity-85 transition-opacity cursor-pointer group"
         >
           <div className="w-8 h-8 rounded-xl bg-sthira-primary flex items-center justify-center text-sthira-on-primary shadow-xs">
@@ -762,10 +812,97 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         </div>
       </div>
 
+      {onOpenCreateWorkspace && onOpenJoinWorkspace && onSelectPersonal && onSelectWorkspace && (
+        <WorkspaceSwitcher
+          activeWorkspace={activeWorkspace}
+          workspaces={workspaces}
+          incomingTransfers={incomingTransfers}
+          session={googleSession}
+          loading={workspacesLoading}
+          onSelectPersonal={onSelectPersonal}
+          onSelectWorkspace={onSelectWorkspace}
+          onOpenCreate={onOpenCreateWorkspace}
+          onOpenJoin={onOpenJoinWorkspace}
+          onOpenAccount={onOpenAccount}
+          onRefreshWorkspaces={onRefreshWorkspaces}
+        />
+      )}
+
+      {activeWorkspace ? (
+        <>
+          <div className="sidebar-navigation space-y-1">
+            <button
+              type="button"
+              onClick={() => onSelectTeamTab?.('overview')}
+              aria-current={teamWorkspaceTab === 'overview' ? 'page' : undefined}
+              className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                teamWorkspaceTab === 'overview'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                  : 'text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <Home className="w-4 h-4" />
+              <span>Workspace overview</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTeamTab?.('pages')}
+              aria-current={teamWorkspaceTab === 'pages' ? 'page' : undefined}
+              className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                teamWorkspaceTab === 'pages'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                  : 'text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>Pages</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTeamTab?.('activity')}
+              aria-current={teamWorkspaceTab === 'activity' ? 'page' : undefined}
+              className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                teamWorkspaceTab === 'activity'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                  : 'text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <Activity className="w-4 h-4" />
+              <span>Activity</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTeamTab?.('members')}
+              aria-current={teamWorkspaceTab === 'members' ? 'page' : undefined}
+              className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                teamWorkspaceTab === 'members'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                  : 'text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Workspace settings · Members</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectPersonal?.()}
+              className="sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer"
+            >
+              <HardDrive className="w-4 h-4" />
+              <span>Personal workspace</span>
+            </button>
+          </div>
+          <div className="sidebar-tree flex-1 px-4 py-3 text-[11px] text-sthira-text-muted">
+            Team pages, discussions, and reviewed changes are stored separately from your Personal vault.
+          </div>
+        </>
+      ) : (
+        <>
       {/* Quick Search & Main Navigation */}
       <div className="sidebar-navigation">
         <button
           type="button"
+          data-guide-target="search"
           onClick={onOpenSearch}
           className="sidebar-search w-full flex items-center justify-between px-3 py-2 rounded-xl bg-sthira-surface hover:bg-sthira-canvas text-xs text-sthira-text-muted hover:text-sthira-text transition-colors cursor-pointer border border-sthira-border shadow-2xs mb-2"
         >
@@ -782,6 +919,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           data-testid="nav-home"
+          data-guide-target="home"
           onClick={onNavigateHome}
           aria-current={currentView === 'home' ? 'page' : undefined}
           className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
@@ -797,6 +935,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {/* 2. All Files */}
         <button
           type="button"
+          data-guide-target="files"
           data-testid="nav-workspace-index"
           aria-current={currentView === 'workspace_index' ? 'page' : undefined}
           onClick={() => onNavigateWorkspaceIndex?.('all')}
@@ -815,6 +954,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {explorePlanAvailable ? (
           <button
             type="button"
+            data-guide-target="research"
             data-testid="nav-explore-plan"
             aria-current={currentView === 'explore_plan' || currentView === 'scheduled_topics' ? 'page' : undefined}
             onClick={handleExplorePlanClick}
@@ -840,6 +980,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             >
               <button
                 type="button"
+                data-guide-target="research"
                 data-testid="nav-explore-plan"
                 disabled
                 aria-disabled="true"
@@ -911,11 +1052,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         )}
 
-        <div className="sidebar-agent-controls"><button type="button" data-testid="nav-agent" aria-current={currentView === 'agent' ? 'page' : undefined} onClick={onNavigateAgent} className={`sidebar-nav-row flex-1 flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4"/><span>Agent</span></button><button type="button" className="sidebar-agent-tasks" aria-label={tasksLabel} title={tasksLabel} onClick={openAgentTasks}><ListTodo size={16}/>{activeTasks+readyTasks>0&&<span>{activeTasks+readyTasks}</span>}</button></div>
-        <button type="button" data-testid="nav-memory" aria-current={currentView === 'memory' ? 'page' : undefined} onClick={onNavigateMemory} className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4"/><span>Memory</span></button>
+        <div className="sidebar-agent-controls"><button type="button" data-testid="nav-agent" aria-current={currentView === 'agent' ? 'page' : undefined} data-guide-target="agent" onClick={onNavigateAgent} className={`sidebar-nav-row flex-1 flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'agent' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><Compass className="w-4 h-4"/><span>Agent</span></button><button type="button" className="sidebar-agent-tasks" aria-label={tasksLabel} title={tasksLabel} data-guide-target="tasks" onClick={openAgentTasks}><ListTodo size={16}/>{activeTasks+readyTasks>0&&<span>{activeTasks+readyTasks}</span>}</button></div>
+        <button type="button" data-testid="nav-memory" aria-current={currentView === 'memory' ? 'page' : undefined} data-guide-target="memory" onClick={onNavigateMemory} className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${currentView === 'memory' ? 'bg-sthira-primary text-sthira-on-primary font-semibold' : 'text-sthira-text hover:bg-sthira-surface-muted'}`}><BookOpen className="w-4 h-4"/><span>Memory</span></button>
         {/* 4. Knowledge Graph */}
         <button
           type="button"
+          data-guide-target="graph"
           data-testid="nav-knowledge-graph"
           aria-current={currentView === 'graph' ? 'page' : undefined}
           onClick={onNavigateGraph}
@@ -932,6 +1074,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {/* 5. Canvas */}
         <button
           type="button"
+          data-guide-target="canvas"
           data-testid="nav-canvas"
           aria-current={currentView === 'canvas' ? 'page' : undefined}
           onClick={() => onOpenCanvas()}
@@ -1630,12 +1773,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         </div>
       </div>
+        </>
+      )}
 
       {/* Bottom User / Settings Bar */}
       <div className="sidebar-footer">
         <div className="flex items-center gap-1">
           <button
             type="button"
+            data-guide-target="settings"
             onClick={onOpenSettings}
             className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-sthira-text-muted hover:text-sthira-text hover:bg-sthira-surface-muted transition-colors cursor-pointer"
           >
@@ -1651,11 +1797,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <User className="w-3.5 h-3.5" />
             <span>Account</span>
           </button>
+          {onOpenTour && <button type="button" className="context-info-button sidebar-help-button" aria-label="Show page tour" title="Show page tour" onClick={onOpenTour}>
+            <Compass size={16} aria-hidden="true" />
+          </button>}
+          {onOpenHelp && <button type="button" className="context-info-button sidebar-help-button" aria-label="Help" title="Help" onClick={onOpenHelp}>
+            <CircleHelp size={16} aria-hidden="true" />
+          </button>}
         </div>
 
-        <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-sthira-text-muted font-medium select-none" title="Knowledge is stored in the local vault">
-          <HardDrive size={14} />
-          <span className="sidebar-local-label">Local vault</span>
+        <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-sthira-text-muted font-medium select-none" title={activeWorkspace ? 'Team workspace metadata' : 'Knowledge is stored in the local vault'}>
+          {activeWorkspace ? <Users size={14} /> : <HardDrive size={14} />}
+          <span className="sidebar-local-label">
+            {activeWorkspace ? activeWorkspace.name : 'Local vault'}
+          </span>
         </div>
       </div>
       {/* Add To Project Modal */}

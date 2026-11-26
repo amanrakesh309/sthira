@@ -384,5 +384,179 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         tx.execute_batch("PRAGMA user_version = 27;")?;
         tx.commit()?;
     }
+    if user_version < 28 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("migration_review.sql"))?;
+        tx.execute_batch("PRAGMA user_version = 28;")?;
+        tx.commit()?;
+    }
+    if user_version < 29 {
+        let tx = conn.transaction()?;
+        let columns: [(&str, &str, &str); 12] = [
+            (
+                "synthesis_templates",
+                "is_builtin",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "synthesis_templates",
+                "version",
+                "INTEGER NOT NULL DEFAULT 1",
+            ),
+            (
+                "synthesis_templates",
+                "guidance",
+                "TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "synthesis_templates",
+                "updated_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            ("synthesis_templates", "archived_at", "INTEGER"),
+            ("agent_runs", "allow_web", "INTEGER NOT NULL DEFAULT 0"),
+            (
+                "agent_runs",
+                "research_template_mode",
+                "TEXT NOT NULL DEFAULT 'inherit'",
+            ),
+            ("agent_runs", "research_template_id", "TEXT"),
+            (
+                "agent_runs",
+                "plan_template_mode",
+                "TEXT NOT NULL DEFAULT 'inherit'",
+            ),
+            ("agent_runs", "plan_template_id", "TEXT"),
+            ("agent_runs", "search_provider_id", "TEXT"),
+            ("agent_runs", "search_provider_name", "TEXT"),
+        ];
+        for (table, name, definition) in columns {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+                [table, name],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                ))?;
+            }
+        }
+        let synthesis_sql: String = tx.query_row(
+            "SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='synthesis_templates'",
+            [],
+            |r| r.get(0),
+        )?;
+        if !synthesis_sql.contains("capture") || !synthesis_sql.contains("archived_at") {
+            tx.execute_batch(
+                "DROP INDEX IF EXISTS idx_synthesis_templates_mode;
+                 DROP INDEX IF EXISTS idx_synthesis_templates_one_default;
+                 CREATE TABLE synthesis_templates_v29 (
+                     id TEXT PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan', 'capture')),
+                     description TEXT NOT NULL DEFAULT '',
+                     is_default INTEGER NOT NULL DEFAULT 0,
+                     template_skeleton_md TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     is_builtin INTEGER NOT NULL DEFAULT 0,
+                     version INTEGER NOT NULL DEFAULT 1,
+                     guidance TEXT NOT NULL DEFAULT '',
+                     updated_at INTEGER NOT NULL DEFAULT 0,
+                     archived_at INTEGER
+                 );
+                 INSERT INTO synthesis_templates_v29
+                   (id, name, target_mode, description, is_default, template_skeleton_md, created_at, is_builtin, version, guidance, updated_at, archived_at)
+                 SELECT id, name, target_mode, description, is_default, template_skeleton_md, created_at,
+                        COALESCE(is_builtin,0), COALESCE(version,1), COALESCE(guidance,''),
+                        CASE WHEN COALESCE(updated_at,0)=0 THEN created_at ELSE updated_at END, archived_at
+                 FROM synthesis_templates;
+                 DROP TABLE synthesis_templates;
+                 ALTER TABLE synthesis_templates_v29 RENAME TO synthesis_templates;
+                 CREATE INDEX idx_synthesis_templates_mode ON synthesis_templates(target_mode);",
+            )?;
+        }
+        tx.execute_batch(
+            "UPDATE synthesis_templates SET updated_at=created_at WHERE updated_at=0;
+             UPDATE synthesis_templates SET is_default=0
+               WHERE is_default=1 AND rowid NOT IN
+                 (SELECT MIN(rowid) FROM synthesis_templates WHERE is_default=1 GROUP BY target_mode);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_synthesis_templates_one_default
+               ON synthesis_templates(target_mode) WHERE is_default=1;
+             CREATE TABLE IF NOT EXISTS synthesis_template_runs (
+                 id TEXT PRIMARY KEY,
+                 workflow TEXT NOT NULL,
+                 artifact_id TEXT,
+                 template_id TEXT NOT NULL,
+                 template_version INTEGER NOT NULL,
+                 template_name TEXT NOT NULL,
+                 skeleton_md TEXT NOT NULL,
+                 guidance TEXT NOT NULL DEFAULT '',
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_synthesis_template_runs_artifact
+               ON synthesis_template_runs(artifact_id, created_at DESC);
+             PRAGMA user_version = 29;",
+        )?;
+        crate::db::templates_repo::upgrade_legacy_builtin_content(&tx)?;
+        tx.commit()?;
+    }
+    if user_version < 30 {
+        let tx = conn.transaction()?;
+        let columns: [(&str, &str, &str); 7] = [
+            (
+                "synthesis_template_runs",
+                "template_mode",
+                "TEXT NOT NULL DEFAULT 'explicit'",
+            ),
+            ("synthesis_template_runs", "generation_key", "TEXT"),
+            (
+                "synthesis_template_runs",
+                "status",
+                "TEXT NOT NULL DEFAULT 'completed'",
+            ),
+            (
+                "synthesis_template_runs",
+                "model_name",
+                "TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "synthesis_template_runs",
+                "provider_name",
+                "TEXT NOT NULL DEFAULT ''",
+            ),
+            ("agent_runs", "progress_stage", "TEXT"),
+            ("agent_runs", "progress_message", "TEXT"),
+        ];
+        for (table, name, definition) in columns {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+                [table, name],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                ))?;
+            }
+        }
+        tx.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_synthesis_template_runs_generation
+               ON synthesis_template_runs(generation_key) WHERE generation_key IS NOT NULL;
+             CREATE TABLE IF NOT EXISTS agent_progress_events (
+                 id TEXT PRIMARY KEY,
+                 run_id TEXT NOT NULL,
+                 stage TEXT NOT NULL,
+                 message TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_agent_progress_events_run
+               ON agent_progress_events(run_id, created_at DESC);
+             UPDATE synthesis_template_runs SET template_mode='explicit'
+               WHERE template_mode IS NULL OR template_mode='';
+             PRAGMA user_version = 30;",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }

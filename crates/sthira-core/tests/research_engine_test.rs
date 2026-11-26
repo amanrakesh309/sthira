@@ -3,16 +3,154 @@ use std::sync::{Arc, Mutex};
 use sthira_core::{
     db::search_repo,
     engines::research_engine::{
-        clean_smart_title, execute_research, fallback_title_from_query, generate_smart_title,
-        inquiry_keywords, search_local_vault, ResearchStage, WebSearchMode,
+        clean_smart_title, execute_multi_query_research_with_snapshot, execute_research,
+        fallback_title_from_query, generate_smart_title, inquiry_keywords, search_local_vault,
+        ResearchStage, WebSearchMode,
     },
+    llm::models::WebSearchCapability,
     search::{ScrapedWebDocument, SearchError, SearchProvider, SearchResultItem},
     ArtifactType, Authorship, CoreError, Engine,
 };
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
 
+const LATE_NAV_URL: &str = "https://nasa.example.test/coverage-navigation";
+const LATE_BODY_URL: &str = "https://nasa.example.test/coverage-body";
 const NVME_URL: &str = "https://nvme.example.test/pcie-gen5-streaming";
+
+struct CaptureResearchModel {
+    prompts: Mutex<Vec<(String, String)>>,
+    fail_url: Option<String>,
+}
+
+#[async_trait]
+impl sthira_core::ModelProvider for CaptureResearchModel {
+    fn id(&self) -> &str {
+        "capture-research-model"
+    }
+    fn locality(&self) -> sthira_core::Locality {
+        sthira_core::Locality::Local
+    }
+    async fn generate_json(
+        &self,
+        schema: &serde_json::Value,
+        system: &str,
+        user: &str,
+    ) -> Result<String, CoreError> {
+        self.prompts
+            .lock()
+            .unwrap()
+            .push((system.to_string(), user.to_string()));
+        let schema = schema.to_string();
+        if schema.contains("contradictions_and_evolution") {
+            return Ok(serde_json::json!({
+                "synthesis":"The July 11 preview and July 12 broadcast are distinct events [Source 1] [Source 2].",
+                "contradictions_and_evolution":[],
+                "open_questions":[]
+            })
+            .to_string());
+        }
+        if schema.contains("queries") {
+            return Ok(
+                serde_json::json!({"queries":["July 11 preview July 12 broadcast"]}).to_string(),
+            );
+        }
+        if system.contains("Summarize the user's research goal") {
+            return Ok(serde_json::json!({"title":"Webb coverage dates"}).to_string());
+        }
+        if self
+            .fail_url
+            .as_deref()
+            .is_some_and(|url| user.contains(url))
+        {
+            return Err(CoreError::Model("fixture extraction failure".into()));
+        }
+        if user.contains("The July 12 broadcast begins at 10:30 a.m. Eastern.") {
+            return Ok(serde_json::json!({
+                "findings":[{
+                    "statement":"The full broadcast was scheduled for July 12.",
+                    "exact_quote":"The July 12 broadcast begins at 10:30 a.m. Eastern."
+                }]
+            })
+            .to_string());
+        }
+        Ok(serde_json::json!({"findings":[]}).to_string())
+    }
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
+        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("capture-embedding"), texts)
+            .await
+    }
+}
+
+struct SlowExtractionModel {
+    delay: std::time::Duration,
+    synthesis_called: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl sthira_core::ModelProvider for SlowExtractionModel {
+    fn id(&self) -> &str {
+        "slow-extraction-model"
+    }
+    fn locality(&self) -> sthira_core::Locality {
+        sthira_core::Locality::Local
+    }
+    async fn generate_json(
+        &self,
+        schema: &serde_json::Value,
+        system: &str,
+        _user: &str,
+    ) -> Result<String, CoreError> {
+        let schema = schema.to_string();
+        if schema.contains("contradictions_and_evolution") {
+            *self.synthesis_called.lock().unwrap() = true;
+            return Ok(serde_json::json!({
+                "synthesis":"Synthesis ran after bounded extraction.",
+                "contradictions_and_evolution":[],
+                "open_questions":[]
+            })
+            .to_string());
+        }
+        if schema.contains("queries") {
+            return Ok(serde_json::json!({"queries":["slow extraction"]}).to_string());
+        }
+        if system.contains("Summarize the user's research goal") {
+            return Ok(serde_json::json!({"title":"Slow extraction"}).to_string());
+        }
+        tokio::time::sleep(self.delay).await;
+        Ok(serde_json::json!({"findings":[]}).to_string())
+    }
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
+        sthira_core::ModelProvider::embed(&DeterministicFakeModel::new("slow-embedding"), texts)
+            .await
+    }
+}
+
+struct TwoUrlSearchProvider;
+#[async_trait]
+impl SearchProvider for TwoUrlSearchProvider {
+    async fn search(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SearchResultItem>, SearchError> {
+        Ok(vec![
+            SearchResultItem {
+                title: "Coverage page".into(),
+                url: LATE_NAV_URL.into(),
+                snippet: String::new(),
+                score: 1.0,
+            },
+            SearchResultItem {
+                title: "Release page".into(),
+                url: LATE_BODY_URL.into(),
+                snippet: String::new(),
+                score: 0.9,
+            },
+        ])
+    }
+}
+
 const CUDA_URL: &str = "https://graphics.example.test/directstorage-benchmarks";
 
 const NVME_BODY: &str = "# PCIe Gen5 NVMe Streaming\n\n\
@@ -87,6 +225,8 @@ fn seed_scrape_cache(engine: &Engine) {
                 title: title.to_string(),
                 content_md: body.to_string(),
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             now,
         )
@@ -195,7 +335,7 @@ async fn test_query_without_url_drives_autonomous_search_and_grounded_citations(
     let stage_names: Vec<&str> = stages.iter().map(|s| s.stage.as_str()).collect();
     assert_eq!(
         stage_names,
-        vec!["searching", "scraped", "synthesizing"],
+        vec!["searching", "fetching", "scraped", "synthesizing"],
         "stages must be emitted at their true moments"
     );
     assert!(
@@ -204,11 +344,11 @@ async fn test_query_without_url_drives_autonomous_search_and_grounded_citations(
         stages[0].message
     );
     assert!(
-        stages[1].message.contains("Scraped 2 sources"),
+        stages[2].message.contains("Scraped 2 sources"),
         "scrape banner must report the count: {}",
-        stages[1].message
+        stages[2].message
     );
-    assert!(stages[2].message.contains("Synthesizing"));
+    assert!(stages[3].message.contains("Synthesizing"));
 
     // 3. Grounded evidence with numbered [Source N] citations + favicons.
     let md = &result.synthesized_markdown;
@@ -827,6 +967,147 @@ fn test_update_model_search_capability_updates_db() {
 }
 
 #[tokio::test]
+async fn late_body_evidence_reaches_the_synthesis_prompt_within_the_input_budget() {
+    let tmp = tempdir().unwrap();
+    let model = Arc::new(CaptureResearchModel {
+        prompts: Mutex::new(Vec::new()),
+        fail_url: None,
+    });
+    let engine = Engine::open(
+        tmp.path().join("late.db"),
+        tmp.path().join("vault"),
+        Arc::new(FakeClock::new(1_700_000_000_000)),
+        Arc::clone(&model) as _,
+    )
+    .unwrap();
+    let navigation = (0..90)
+        .map(|index| format!("- [Section {index}](https://nasa.example.test/{index}) | Sign in"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let body = format!(
+        "{navigation}\n\n## Updated coverage\n\nOn July 11, President Biden previews one image at the White House.\n\nThe July 12 broadcast begins at 10:30 a.m. Eastern."
+    );
+    for (url, title, content) in [
+        (LATE_NAV_URL, "Coverage page", body.as_str()),
+        (
+            LATE_BODY_URL,
+            "Release &#039;page&#039;",
+            "# Release\n\nThe July 12 broadcast begins at 10:30 a.m. Eastern.",
+        ),
+    ] {
+        search_repo::save_cached_web_document(
+            &engine.db().writer(),
+            &ScrapedWebDocument {
+                url: url.into(),
+                title: title.into(),
+                content_md: content.into(),
+                published_date: None,
+                fetched_at: None,
+                from_cache: false,
+            },
+            1_700_000_000_000,
+        )
+        .unwrap();
+    }
+
+    let result = execute_multi_query_research_with_snapshot(
+        &engine,
+        "When are the July 11 White House preview and the July 12 broadcast?",
+        &TwoUrlSearchProvider,
+        4,
+        WebSearchCapability::EngineAugmentedOnly,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("research with late body evidence succeeds");
+
+    assert_eq!(result.external_sources_count, 2);
+    assert_eq!(result.sources[1].title, "Release 'page'");
+    let prompts = model.prompts.lock().unwrap();
+    let synthesis = prompts
+        .iter()
+        .find(|(_, user)| user.contains("Research inquiry:"))
+        .map(|(_, user)| user.clone())
+        .expect("synthesis prompt was captured");
+    assert!(synthesis.contains("July 11"), "{synthesis}");
+    assert!(synthesis.contains("July 12"), "{synthesis}");
+    assert!(synthesis.contains("White House"), "{synthesis}");
+    assert!(
+        synthesis.chars().count() < 12_000,
+        "synthesis context should stay bounded: {} chars",
+        synthesis.chars().count()
+    );
+}
+
+#[tokio::test]
+async fn one_failed_source_keeps_partial_extraction_and_its_stable_source_number() {
+    let tmp = tempdir().unwrap();
+    let model = Arc::new(CaptureResearchModel {
+        prompts: Mutex::new(Vec::new()),
+        fail_url: Some(LATE_NAV_URL.into()),
+    });
+    let engine = Engine::open(
+        tmp.path().join("partial.db"),
+        tmp.path().join("vault"),
+        Arc::new(FakeClock::new(1_700_000_000_000)),
+        Arc::clone(&model) as _,
+    )
+    .unwrap();
+    let navigation = (0..90)
+        .map(|index| format!("- [Section {index}](https://nasa.example.test/{index}) | Sign in"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    for (url, title, content) in [
+        (LATE_NAV_URL, "Unusable navigation", navigation.as_str()),
+        (
+            LATE_BODY_URL,
+            "Release page",
+            "# Release\n\nThe July 12 broadcast begins at 10:30 a.m. Eastern.",
+        ),
+    ] {
+        search_repo::save_cached_web_document(
+            &engine.db().writer(),
+            &ScrapedWebDocument {
+                url: url.into(),
+                title: title.into(),
+                content_md: content.into(),
+                published_date: None,
+                fetched_at: None,
+                from_cache: false,
+            },
+            1_700_000_000_000,
+        )
+        .unwrap();
+    }
+    let result = execute_multi_query_research_with_snapshot(
+        &engine,
+        "When is the July 12 broadcast?",
+        &TwoUrlSearchProvider,
+        4,
+        WebSearchCapability::EngineAugmentedOnly,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("a usable second source keeps the research proposal");
+
+    assert!(result
+        .stages
+        .iter()
+        .any(|stage| stage.stage == "partial_extraction"));
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(result.findings[0].source_url, LATE_BODY_URL);
+    assert_eq!(result.sources[1].index, 2);
+    assert!(result.synthesized_markdown.contains("[Source 2]"));
+    assert!(result.synthesized_markdown.contains(LATE_BODY_URL));
+}
+
+#[tokio::test]
 async fn failed_model_synthesis_is_an_error_not_a_successful_template_report() {
     let (_tmp, engine) = setup();
     let failing = engine.with_model(Arc::new(DeterministicFakeModel::new(
@@ -988,6 +1269,8 @@ async fn test_research_engine_blocked_scrape_page_does_not_inflate_sources_or_fa
                     "cf-browser-verification please complete the security check to continue"
                         .to_string(),
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             now,
         )
@@ -1000,6 +1283,8 @@ async fn test_research_engine_blocked_scrape_page_does_not_inflate_sources_or_fa
                 title: "Short".to_string(),
                 content_md: "Too short".to_string(), // < 40 chars
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             now,
         )
@@ -1158,6 +1443,8 @@ async fn test_research_engine_retains_cached_article_discussing_captchas() {
                 content_md: "# How Anti-Bot CAPTCHA Systems Work\n\nModern web gateways explain challenge-form workflows, g-recaptcha comment widgets, hcaptcha tokens, and cf-browser-verification headers in engineering guides."
                     .to_string(),
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             now,
         )
@@ -1271,6 +1558,8 @@ async fn test_research_engine_excludes_verbose_active_and_cached_block_pages() {
                 title: gate_title,
                 content_md: gate_md,
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             engine.clock().now_ms(),
         )
@@ -1432,6 +1721,8 @@ async fn test_research_engine_retains_troubleshooting_articles_with_delimited_ga
                     title: clean_title,
                     content_md: clean_md,
                     published_date: None,
+                    fetched_at: None,
+                    from_cache: false,
                 },
                 engine.clock().now_ms(),
             )
@@ -1480,6 +1771,16 @@ async fn test_research_engine_retains_troubleshooting_articles_with_delimited_ga
     };
 
     let (_tmp, engine) = setup();
+    // Explicit loopback fixture configuration: allow only this mock origin as a local service.
+    let live_origin = live_article_url.trim_end_matches("/s3-guide").to_string();
+    engine
+        .db()
+        .writer()
+        .execute(
+            "INSERT INTO providers(id,display_name,provider_type,base_url,is_enabled,created_at) VALUES('loopback-fixture','Loopback fixture','openai_compatible',?1,1,0)",
+            [&live_origin],
+        )
+        .unwrap();
     let blocked_url = "https://waf.example.test/blocked".to_string();
     let true_waf_html = r#"<html><head><title>Access Denied | Gateway</title></head><body><h1>Access Denied</h1><p>You don't have permission to access this endpoint on this server. Reference #18.2349a1. Please contact your administrator to report this security block.</p></body></html>"#;
     let (gate_title, gate_md) =
@@ -1493,6 +1794,8 @@ async fn test_research_engine_retains_troubleshooting_articles_with_delimited_ga
                 title: gate_title,
                 content_md: gate_md,
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             engine.clock().now_ms(),
         )
@@ -1592,7 +1895,11 @@ async fn test_a4_draft_artifact_excluded_from_local_search_auto_escalation_and_c
             capability: None,
             template_id: None,
             exclude_artifact_id: Some(&draft.id),
+            template_snapshot: None,
+            scope_project_id: None,
             on_stage: None,
+            cancellation: None,
+            budget: None,
         },
     )
     .await
@@ -1636,7 +1943,11 @@ async fn test_a4_draft_artifact_excluded_from_local_search_auto_escalation_and_c
             capability: None,
             template_id: None,
             exclude_artifact_id: Some(&draft.id),
+            template_snapshot: None,
+            scope_project_id: None,
             on_stage: None,
+            cancellation: None,
+            budget: None,
         },
     )
     .await
@@ -1677,7 +1988,11 @@ async fn test_a4_draft_artifact_excluded_from_local_search_auto_escalation_and_c
             capability: None,
             template_id: None,
             exclude_artifact_id: Some(&draft.id),
+            template_snapshot: None,
+            scope_project_id: None,
             on_stage: None,
+            cancellation: None,
+            budget: None,
         },
     )
     .await
@@ -1694,4 +2009,144 @@ async fn test_a4_draft_artifact_excluded_from_local_search_auto_escalation_and_c
     assert!(auto_local
         .matching_vault_artifacts
         .contains(&real_note_2.id));
+}
+
+struct CachedAndBlockedSearchProvider;
+#[async_trait]
+impl SearchProvider for CachedAndBlockedSearchProvider {
+    async fn search(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SearchResultItem>, SearchError> {
+        Ok(vec![
+            SearchResultItem {
+                title: "Cached release".into(),
+                url: LATE_NAV_URL.into(),
+                snippet: String::new(),
+                score: 1.0,
+            },
+            SearchResultItem {
+                title: "Blocked page".into(),
+                url: "http://127.0.0.1:9/blocked".into(),
+                snippet: String::new(),
+                score: 0.9,
+            },
+        ])
+    }
+}
+
+fn seed_doc(engine: &Engine, url: &str, title: &str, body: &str) {
+    search_repo::save_cached_web_document(
+        &engine.db().writer(),
+        &ScrapedWebDocument {
+            url: url.into(),
+            title: title.into(),
+            content_md: body.into(),
+            published_date: None,
+            fetched_at: None,
+            from_cache: false,
+        },
+        1_700_000_000_000,
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn slow_extraction_reserves_deadline_time_for_synthesis() {
+    let tmp = tempdir().unwrap();
+    let synthesis_called = Arc::new(Mutex::new(false));
+    let model = Arc::new(SlowExtractionModel {
+        delay: std::time::Duration::from_secs(8),
+        synthesis_called: Arc::clone(&synthesis_called),
+    });
+    let engine = Engine::open(
+        tmp.path().join("deadline.db"),
+        tmp.path().join("vault"),
+        Arc::new(FakeClock::new(1_700_000_000_000)),
+        Arc::clone(&model) as _,
+    )
+    .unwrap();
+    seed_doc(
+        &engine,
+        LATE_NAV_URL,
+        "Coverage",
+        "# Coverage\n\nThe July 11 preview is scheduled for 5 p.m. and the July 12 broadcast for 10:30 a.m.",
+    );
+    seed_doc(
+        &engine,
+        LATE_BODY_URL,
+        "Release",
+        "# Release\n\nThe July 12 broadcast begins at 10:30 a.m. Eastern.",
+    );
+    let budget = Some(std::time::Duration::from_secs(82));
+    let result = execute_multi_query_research_with_snapshot(
+        &engine,
+        "July 11 preview July 12 broadcast",
+        &TwoUrlSearchProvider,
+        4,
+        WebSearchCapability::EngineAugmentedOnly,
+        None,
+        None,
+        None,
+        budget,
+    )
+    .await
+    .expect("extraction timeout must not consume the synthesis reserve");
+    assert!(*synthesis_called.lock().unwrap());
+    assert!(result
+        .stages
+        .iter()
+        .any(|stage| stage.stage == "partial_extraction"));
+    assert_eq!(result.documents.len(), 2);
+}
+
+#[tokio::test]
+async fn one_failed_fetch_is_reported_while_cached_source_and_provenance_survive() {
+    let tmp = tempdir().unwrap();
+    let model = Arc::new(CaptureResearchModel {
+        prompts: Mutex::new(Vec::new()),
+        fail_url: None,
+    });
+    let engine = Engine::open(
+        tmp.path().join("partial-fetch.db"),
+        tmp.path().join("vault"),
+        Arc::new(FakeClock::new(1_700_000_000_000)),
+        Arc::clone(&model) as _,
+    )
+    .unwrap();
+    seed_doc(
+        &engine,
+        LATE_NAV_URL,
+        "Cached release",
+        "# Cached release\n\nThe July 11 preview is scheduled for 5 p.m. at the White House.",
+    );
+    let result = execute_multi_query_research_with_snapshot(
+        &engine,
+        "July 11 preview",
+        &CachedAndBlockedSearchProvider,
+        4,
+        WebSearchCapability::EngineAugmentedOnly,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("one usable source keeps the proposal");
+    assert_eq!(result.external_sources_count, 1);
+    assert_eq!(result.sources.len(), 1);
+    assert_eq!(result.sources[0].index, 1);
+    assert!(result.documents[0].from_cache);
+    assert_eq!(result.documents[0].fetched_at, Some(1_700_000_000_000));
+    assert!(result
+        .stages
+        .iter()
+        .any(|stage| stage.stage == "partial_fetch"));
+    assert!(result
+        .synthesized_markdown
+        .contains("Partial coverage warning"));
+    assert!(result
+        .synthesized_markdown
+        .contains("0 fetched this run, 1 from cache"));
 }

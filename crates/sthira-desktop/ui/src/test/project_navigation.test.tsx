@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../App';
 import * as ipc from '../api/ipc';
@@ -69,6 +69,24 @@ describe('Project overview routing', () => {
     await user.click(screen.getByRole('button', { name: 'Project' }));
     await screen.findByRole('heading', { name: 'Knowledge platform' });
     expect(ipc.saveArtifact).toHaveBeenCalledWith('own', expect.stringContaining('Edited project content'), expect.anything(), 'p');
+  });
+
+  it('opens offline Help over a dirty page and keeps the editor and its draft', async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.saveArtifact).mockRejectedValue(new Error('Cannot save QA draft'));
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: 'Open project: Knowledge platform' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Architecture notes' }));
+    const editor = await screen.findByRole('textbox', { name: 'Document content' });
+    setEditorMarkdown(editor, 'Keep this draft during Help.');
+    const help = screen.getByRole('button', { name: 'Help' });
+    await user.click(help);
+    const dialog = screen.getByRole('dialog', { name: 'Workspace help' });
+    await user.click(within(dialog).getByRole('button', { name: 'Workspace basics' }));
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('textbox', { name: 'Document content' })).toBe(editor);
+    expect(editor).toHaveTextContent('Keep this draft during Help.');
+    expect(help).toHaveFocus();
   });
 
   it('opens the selected project canvas in the center and returns to project contents', async () => {

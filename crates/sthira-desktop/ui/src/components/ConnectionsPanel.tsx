@@ -1,3 +1,4 @@
+import { HelpTopicButton } from './HelpTopicButton';
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowDownLeft, ArrowUpRight, Check, ChevronRight, FileText, Folder, Link2, Loader2, Plus, Search, Unlink, X } from 'lucide-react';
 import type { EntityRef, WorkspaceConnection, WorkspaceEntity, WorkspaceEntityDetail } from '../types/sthira';
@@ -162,7 +163,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
     </section>
   );
 
-  return <aside className={`connections-panel ${preview ? 'connections-preview' : ''}`} id="workspace-connections" aria-label="Connections" onKeyDown={(event) => {
+  return <aside className={`connections-panel ${preview ? 'connections-preview' : ''}`} id="workspace-connections" data-guide-target="connection-panel" aria-label="Connections" onKeyDown={(event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault(); event.stopPropagation();
     if (busy) return;
@@ -170,7 +171,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ entity, title, project, scop
   }}>
     <header className="connections-heading">
       {preview ? <button ref={backButton} type="button" className="connection-back" onClick={back}><ArrowLeft size={16} />{trail.length > 1 ? 'Back' : 'Connections'}</button> : <span><Link2 size={16} />Connections</span>}
-      <button type="button" className="focus-icon-button" aria-label="Close connections" onClick={onClose}><X size={17} /></button>
+      <div className="context-info-heading">
+        <HelpTopicButton article="connections" label="Connections help" />
+        <button type="button" className="focus-icon-button" aria-label="Close connections" onClick={onClose}><X size={17} /></button>
+      </div>
     </header>
     {!preview && project && <div className="connections-scope" role="group" aria-label="Connection scope">
       <button type="button" aria-pressed={scope === 'page'} onClick={() => onScopeChange('page')}>This page</button>

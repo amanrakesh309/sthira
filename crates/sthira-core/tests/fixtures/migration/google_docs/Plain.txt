@@ -1,0 +1,2 @@
+[[This stays literal]]
+A plain-text export does not declare a page reference.

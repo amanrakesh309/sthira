@@ -472,7 +472,7 @@ fn v25_upgrade_preserves_external_receipts_and_handoff_context() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        30
     );
 }
 #[test]

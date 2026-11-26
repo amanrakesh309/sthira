@@ -22,6 +22,11 @@ fn agent_workflow_is_opt_in_and_reset_removes_saved_runs() {
         project_id: None,
         workspace_memory: false,
         model_id: "model".into(),
+        allow_web: false,
+        research_template_mode: None,
+        research_template_id: None,
+        plan_template_mode: None,
+        plan_template_id: None,
     };
     assert!(engine.create_agent_run(goal()).is_err());
     save_workflow_setting(

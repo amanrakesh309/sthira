@@ -1,3 +1,5 @@
+import { HelpTopicButton } from '../components/HelpTopicButton';
+import { ContextInfo } from '../components/ContextInfo';
 import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
 import {
   openWorkflowSettings,
@@ -38,9 +40,12 @@ import {
   createResearchPage,
   createPage,
   saveArtifact,
-  listSynthesisTemplates,
 } from '../api/ipc';
 import { PageActionMenu } from '../components/PageActionMenu';
+import {
+  INHERIT_DEFAULT, NO_TEMPLATE, SYNTHESIS_TEMPLATES_CHANGED, listSynthesisTemplates, openTemplateManager,
+  type SynthesisTemplate,
+} from '../api/synthesisTemplates';
 import {
   generateSmartGoalTitle,
   type ExplorePlanTab,
@@ -51,7 +56,6 @@ import {
   type ProviderEntry,
   type WebSearchMode,
   type WorkspaceIndexItem,
-  type SynthesisTemplateView,
 } from '../types/sthira';
 
 export interface ExplorePlanViewProps {
@@ -74,45 +78,6 @@ export interface ExplorePlanViewProps {
   onBack?: () => void;
   onWorkspaceMutated?: () => void;
 }
-
-const DEFAULT_SYNTHESIS_TEMPLATES: SynthesisTemplateView[] = [
-  {
-    id: 'research-comparative-tech',
-    name: 'Comparative Tech Evaluation',
-    target_mode: 'research',
-    description: 'Systematic architectural comparison matrix evaluating tradeoffs, throughput, memory bounds, and operational invariants.',
-    is_default: true,
-    template_skeleton_md: '## Executive Summary & Recommendation\n\n## Contenders & Key Criteria\n\n## Comparison Matrix\n| Criteria | Option A | Option B |\n|---|---|---|\n| Architecture | | |\n| Throughput / Latency | | |\n| Operational Invariants | | |\n\n## Grounded Sources & Verifications\n\n## Final Recommendation\n',
-    created_at: 1700000000000,
-  },
-  {
-    id: 'research-deep-dive',
-    name: 'Deep Dive Investigation',
-    target_mode: 'research',
-    description: 'Exhaustive thematic breakdown with historical context and contradictions.',
-    is_default: false,
-    template_skeleton_md: '## Problem Formulation\n\n## In-Depth Analysis\n\n## Contradictions & Historical Evolution\n\n## Empirical Findings\n\n## Conclusion & Open Questions\n',
-    created_at: 1700000000000,
-  },
-  {
-    id: 'plan-milestone-roadmap',
-    name: 'Milestone Roadmap',
-    target_mode: 'plan',
-    description: 'Phased milestone breakdown with explicit risk boundaries and action items.',
-    is_default: true,
-    template_skeleton_md: '## Scope & Invariants\n\n## Phase 1: Foundation & Data Contracts\n- [ ] \n\n## Phase 2: Engine Implementation & Safety Bounds\n- [ ] \n\n## Phase 3: Integration & Verifications\n- [ ] \n\n## Open Decisions & Risks\n',
-    created_at: 1700000000000,
-  },
-  {
-    id: 'plan-fast-sprint',
-    name: 'Fast Iteration Sprint',
-    target_mode: 'plan',
-    description: 'Lean 2-stage execution checklist designed for rapid prototypes and tactical fixes.',
-    is_default: false,
-    template_skeleton_md: '## Objective & Non-Goals\n\n## Stage 1: Quick Wins & Prototyping\n- [ ] \n\n## Stage 2: Hardening & Sanity Checks\n- [ ] \n\n## Verification Criteria\n',
-    created_at: 1700000000000,
-  },
-];
 
 export interface DigestItem {
   id: string;
@@ -177,18 +142,18 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   const planModelChosen = useRef(false);
   const [selectedResearchModel, setSelectedResearchModel] = useState<string>('');
   const [selectedResearchProject, setSelectedResearchProject] = useState<string | null>(null);
-  const [selectedResearchTemplate, setSelectedResearchTemplate] = useState<string>('research-comparative-tech');
+  const [selectedResearchTemplate, setSelectedResearchTemplate] = useState<string>(INHERIT_DEFAULT);
   const [isSubmittingResearch, setIsSubmittingResearch] = useState(false);
 
   // Tab 2: Plan state
   const [planGoal, setPlanGoal] = useState('');
   const [selectedPlanModel, setSelectedPlanModel] = useState<string>('');
   const [selectedPlanProject, setSelectedPlanProject] = useState<string | null>(null);
-  const [selectedPlanTemplate, setSelectedPlanTemplate] = useState<string>('plan-milestone-roadmap');
+  const [selectedPlanTemplate, setSelectedPlanTemplate] = useState<string>(INHERIT_DEFAULT);
   const [isSubmittingPlan, setIsSubmittingPlan] = useState(false);
 
   // Synthesis Templates state
-  const [templates, setTemplates] = useState<SynthesisTemplateView[]>(DEFAULT_SYNTHESIS_TEMPLATES);
+  const [templates, setTemplates] = useState<SynthesisTemplate[]>([]);
 
   // Tab 3: Trackers state
   const [topics, setTopics] = useState<ScheduledTopicView[]>([]);
@@ -322,13 +287,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
       setProjects(treeRes.projects.map((p) => ({ id: p.id, name: p.name })));
       setNotes(indexRes.items || []);
 
-      if (synthesisTemplates && synthesisTemplates.length > 0) {
-        setTemplates(synthesisTemplates);
-        const defRes = synthesisTemplates.find((t) => t.target_mode === 'research' && t.is_default);
-        if (defRes) setSelectedResearchTemplate(defRes.id);
-        const defPlan = synthesisTemplates.find((t) => t.target_mode === 'plan' && t.is_default);
-        if (defPlan) setSelectedPlanTemplate(defPlan.id);
-      }
+      if (synthesisTemplates) setTemplates(synthesisTemplates);
 
       setCatalog(catalogRes);
       setCatalogLoaded(true);
@@ -358,6 +317,15 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Refresh picker options after a template is created, edited, archived, or made default.
+  useEffect(() => {
+    const refresh = () => {
+      void listSynthesisTemplates().then(rows => setTemplates(rows)).catch(() => undefined);
+    };
+    window.addEventListener(SYNTHESIS_TEMPLATES_CHANGED, refresh);
+    return () => window.removeEventListener(SYNTHESIS_TEMPLATES_CHANGED, refresh);
+  }, []);
 
   // Subscribe to background scheduled topic ready events
   useEffect(() => {
@@ -476,7 +444,12 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
     setIsSubmittingResearch(true);
     try {
       if (onStartResearch) {
-        await onStartResearch(q, webSearchMode, selectedResearchProject, workflows.settings.research.templates_enabled ? selectedResearchTemplate : null, selectedResearchModel || undefined);
+        const researchTemplate = !workflows.settings.research.templates_enabled
+          ? null
+          : selectedResearchTemplate === INHERIT_DEFAULT
+            ? null
+            : selectedResearchTemplate;
+        await onStartResearch(q, webSearchMode, selectedResearchProject, researchTemplate, selectedResearchModel || undefined);
       } else {
         const artifactId = await createResearchPage(q, selectedResearchProject);
         onOpenArtifact?.(artifactId, selectedResearchProject);
@@ -495,7 +468,12 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
     setIsSubmittingPlan(true);
     try {
       if (onStartPlan) {
-        await onStartPlan(g, selectedPlanProject, workflows.settings.plan.templates_enabled ? selectedPlanTemplate : null, selectedPlanModel || undefined);
+        const planTemplate = !workflows.settings.plan.templates_enabled
+          ? null
+          : selectedPlanTemplate === INHERIT_DEFAULT
+            ? null
+            : selectedPlanTemplate;
+        await onStartPlan(g, selectedPlanProject, planTemplate, selectedPlanModel || undefined);
       } else {
         const title = generateSmartGoalTitle(g);
         const draft = await createPage(selectedPlanProject, title);
@@ -633,13 +611,10 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               <span>/</span>
               <span className="text-[var(--sthira-text)]">Explore &amp; Plan</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[var(--sthira-text)] flex items-center gap-2.5">
-              <span>🧭 Explore &amp; Plan</span>
-            </h1>
-            <p className="text-xs text-[var(--sthira-text-muted)]">
-              Unified workspace for deep research, milestone planning, continuous background
-              trackers, and generated digests.
-            </p>
+            <div className="context-info-heading">
+              <h1 className="text-2xl sm:text-3xl font-bold font-editorial tracking-tight text-[var(--sthira-text)]">Explore &amp; Plan</h1>
+              <ContextInfo title="Explore and Plan">Use Research for questions, Plan for next steps, and Trackers for recurring research. Digests collect the results of tracker runs.</ContextInfo>
+            </div>
           </div>
         </div>
 
@@ -839,22 +814,37 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   </select>
 
                   {/* Synthesis Template Selector */}
-                  <select
-                    data-testid="select-synthesis-template"
-                    value={selectedResearchTemplate}
-                    disabled={!researchReady || !workflows.settings.research.templates_enabled}
-                    onChange={(e) => setSelectedResearchTemplate(e.target.value)}
-                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
-                    title="Select synthesis markdown skeleton template"
-                  >
-                    {templates
-                      .filter((t) => t.target_mode === 'research')
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          📑 Template: {t.name}
-                        </option>
-                      ))}
-                  </select>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      data-testid="select-synthesis-template"
+                      aria-label="Research template"
+                      value={selectedResearchTemplate}
+                      disabled={!researchReady || !workflows.settings.research.templates_enabled}
+                      onChange={(e) => setSelectedResearchTemplate(e.target.value)}
+                      className="max-w-[220px] px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
+                      title="Choose a Research template, inherit the workflow default, or use no template"
+                    >
+                      <option value={INHERIT_DEFAULT}>
+                        Inherit default{templates.find((t) => t.target_mode === 'research' && t.is_default) ? ` · ${templates.find((t) => t.target_mode === 'research' && t.is_default)!.name}` : ' (none set)'}
+                      </option>
+                      <option value={NO_TEMPLATE}>No template</option>
+                      {templates
+                        .filter((t) => t.target_mode === 'research')
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.is_builtin ? '📑' : '✳️'} {t.name} · r{t.version}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      data-testid="btn-manage-research-templates"
+                      onClick={() => openTemplateManager('research')}
+                      className="text-[11px] text-[var(--sthira-text-muted)] hover:text-[var(--sthira-primary)] underline decoration-dotted whitespace-nowrap"
+                    >
+                      Manage
+                    </button>
+                  </div>
                 </div>
 
                 {/* Submit Action */}
@@ -883,6 +873,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               >
                 <p className="text-xs text-[var(--sthira-text-muted)]">
                   Enable this workflow and select a model in Settings.
+                  <HelpTopicButton article="troubleshooting" label="Setup help" />
                 </p>
                 <button
                   type="button"
@@ -1029,22 +1020,37 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   </select>
 
                   {/* Synthesis Template Selector */}
-                  <select
-                    data-testid="select-synthesis-template"
-                    value={selectedPlanTemplate}
-                    disabled={!planReady || !workflows.settings.plan.templates_enabled}
-                    onChange={(e) => setSelectedPlanTemplate(e.target.value)}
-                    className="px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
-                    title="Select synthesis markdown skeleton template"
-                  >
-                    {templates
-                      .filter((t) => t.target_mode === 'plan')
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          📑 Template: {t.name}
-                        </option>
-                      ))}
-                  </select>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      data-testid="select-plan-synthesis-template"
+                      aria-label="Plan template"
+                      value={selectedPlanTemplate}
+                      disabled={!planReady || !workflows.settings.plan.templates_enabled}
+                      onChange={(e) => setSelectedPlanTemplate(e.target.value)}
+                      className="max-w-[220px] px-2.5 py-1.5 bg-[var(--sthira-canvas)] border border-[var(--sthira-border)] rounded-xl text-xs text-[var(--sthira-text)] outline-none cursor-pointer"
+                      title="Choose a Plan template, inherit the workflow default, or use no template"
+                    >
+                      <option value={INHERIT_DEFAULT}>
+                        Inherit default{templates.find((t) => t.target_mode === 'plan' && t.is_default) ? ` · ${templates.find((t) => t.target_mode === 'plan' && t.is_default)!.name}` : ' (none set)'}
+                      </option>
+                      <option value={NO_TEMPLATE}>No template</option>
+                      {templates
+                        .filter((t) => t.target_mode === 'plan')
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.is_builtin ? '📑' : '✳️'} {t.name} · r{t.version}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      data-testid="btn-manage-plan-templates"
+                      onClick={() => openTemplateManager('plan')}
+                      className="text-[11px] text-[var(--sthira-text-muted)] hover:text-[var(--sthira-primary)] underline decoration-dotted whitespace-nowrap"
+                    >
+                      Manage
+                    </button>
+                  </div>
                 </div>
 
                 {/* Submit Action */}
@@ -1073,6 +1079,7 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
               >
                 <p className="text-xs text-[var(--sthira-text-muted)]">
                   Enable this workflow and select a model in Settings.
+                  <HelpTopicButton article="troubleshooting" label="Setup help" />
                 </p>
                 <button
                   type="button"
@@ -1165,10 +1172,6 @@ export const ExplorePlanView: React.FC<ExplorePlanViewProps> = ({
                   <span>Active Background Trackers</span>
                   <span className="text-xs text-[#8C8A81] font-normal">({topics.length} total)</span>
                 </h2>
-                <p className="text-xs text-[var(--sthira-text-muted)]">
-                  Recurring investigations that autonomously gather new developments and generate
-                  digests.
-                </p>
               </div>
               <button
                 type="button"

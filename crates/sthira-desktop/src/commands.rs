@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sthira_core::{
     history::ProjectHistory,
@@ -203,6 +203,22 @@ pub enum CanvasOpsRequest {
         w: Option<f64>,
         h: Option<f64>,
     },
+    ListPages {
+        canvas_id: String,
+        query: String,
+    },
+    PlacePage {
+        canvas_id: String,
+        artifact_id: String,
+        x: f64,
+        y: f64,
+    },
+    CreateNote {
+        canvas_id: String,
+        placeholder_id: Option<String>,
+        x: f64,
+        y: f64,
+    },
     BatchUpdatePositions {
         canvas_id: String,
         positions: Vec<CanvasItemPosition>,
@@ -250,6 +266,10 @@ pub struct CanvasOpsResponse {
     pub canvas: Option<CanvasDataView>,
     pub change_set_id: Option<String>,
     pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<Vec<SearchResultItem>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -886,39 +906,36 @@ pub fn handle_canvas_ops(
             canvas_id,
             project_id,
         } => {
-            let reader = engine.db().reader().map_err(|e| e.to_string())?;
             let cid = if let Some(id) = canvas_id {
                 id
-            } else if let Some(ref pid) = project_id {
-                reader
-                    .query_row(
-                        "SELECT c.id FROM canvases c
-                         JOIN projects p ON p.id = c.project_id
-                         WHERE c.project_id = ?1 AND p.deleted_at IS NULL
-                         ORDER BY c.created_at DESC LIMIT 1;",
-                        params![pid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or_else(|_| {
-                        drop(reader);
-                        engine
-                            .create_canvas(project_id.as_deref(), "Workspace Canvas")
-                            .unwrap()
-                    })
             } else {
-                reader
+                let reader = engine.db().reader().map_err(|e| e.to_string())?;
+                let existing = reader
                     .query_row(
                         "SELECT c.id FROM canvases c
                          LEFT JOIN projects p ON p.id = c.project_id
-                         WHERE c.project_id IS NULL OR p.deleted_at IS NULL
-                         ORDER BY c.created_at DESC LIMIT 1;",
-                        [],
+                         WHERE (?1 IS NULL OR c.project_id = ?1)
+                           AND (c.project_id IS NULL OR (p.id IS NOT NULL AND p.deleted_at IS NULL))
+                         ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1;",
+                        params![project_id],
                         |r| r.get(0),
                     )
-                    .unwrap_or_else(|_| {
-                        drop(reader);
-                        engine.create_canvas(None, "General Canvas").unwrap()
-                    })
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                drop(reader);
+                match existing {
+                    Some(id) => id,
+                    None => engine
+                        .create_canvas(
+                            project_id.as_deref(),
+                            if project_id.is_some() {
+                                "Workspace Canvas"
+                            } else {
+                                "General Canvas"
+                            },
+                        )
+                        .map_err(|e| e.to_string())?,
+                }
             };
 
             let reader = engine.db().reader().map_err(|e| e.to_string())?;
@@ -996,6 +1013,8 @@ pub fn handle_canvas_ops(
                 }),
                 change_set_id: None,
                 success: true,
+                artifact_id: None,
+                pages: None,
             })
         }
         CanvasOpsRequest::MoveItem {
@@ -1011,6 +1030,8 @@ pub fn handle_canvas_ops(
                 canvas: None,
                 change_set_id: None,
                 success: true,
+                artifact_id: None,
+                pages: None,
             })
         }
         CanvasOpsRequest::AddItem {
@@ -1045,6 +1066,75 @@ pub fn handle_canvas_ops(
                 canvas: None,
                 change_set_id: None,
                 success: true,
+                artifact_id: None,
+                pages: None,
+            })
+        }
+        CanvasOpsRequest::ListPages { canvas_id, query } => {
+            let reader = engine.db().reader().map_err(|e| e.to_string())?;
+            let mut stmt = reader.prepare(
+                "SELECT a.id, COALESCE(NULLIF(TRIM(a.title), ''), 'Untitled page'), SUBSTR(a.content_md, 1, 100)
+                 FROM artifacts a
+                 WHERE a.deleted_at IS NULL
+                   AND (?2 = '' OR instr(lower(COALESCE(a.title, '') || char(10) || a.content_md), lower(?2)) > 0)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM canvas_items ci WHERE ci.canvas_id = ?1 AND ci.artifact_id = a.id
+                   )
+                 ORDER BY a.updated_at DESC, a.id LIMIT 30;",
+            ).map_err(|e| e.to_string())?;
+            let pages = stmt
+                .query_map(params![canvas_id, query.trim()], |row| {
+                    Ok(SearchResultItem {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        excerpt: row.get(2)?,
+                        kind: "document".into(),
+                        project_id: None,
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            Ok(CanvasOpsResponse {
+                canvas: None,
+                change_set_id: None,
+                success: true,
+                artifact_id: None,
+                pages: Some(pages),
+            })
+        }
+        CanvasOpsRequest::PlacePage {
+            canvas_id,
+            artifact_id,
+            x,
+            y,
+        } => {
+            engine
+                .place_page_on_canvas(&canvas_id, &artifact_id, x, y)
+                .map_err(|e| e.to_string())?;
+            Ok(CanvasOpsResponse {
+                canvas: None,
+                change_set_id: None,
+                success: true,
+                artifact_id: None,
+                pages: None,
+            })
+        }
+        CanvasOpsRequest::CreateNote {
+            canvas_id,
+            placeholder_id,
+            x,
+            y,
+        } => {
+            let artifact = engine
+                .create_canvas_note(&canvas_id, placeholder_id.as_deref(), x, y)
+                .map_err(|e| e.to_string())?;
+            Ok(CanvasOpsResponse {
+                canvas: None,
+                change_set_id: None,
+                success: true,
+                artifact_id: Some(artifact.id),
+                pages: None,
             })
         }
         CanvasOpsRequest::BatchUpdatePositions {
@@ -1116,6 +1206,8 @@ pub fn handle_canvas_ops(
                 canvas: None,
                 change_set_id: Some(cs_id),
                 success: true,
+                artifact_id: None,
+                pages: None,
             })
         }
         CanvasOpsRequest::CreateLink {
@@ -1137,6 +1229,8 @@ pub fn handle_canvas_ops(
                 canvas: None,
                 change_set_id: None,
                 success: true,
+                artifact_id: None,
+                pages: None,
             })
         }
     }
@@ -1338,6 +1432,8 @@ pub fn handle_clear_vault_data(engine: &Engine) -> Result<(), String> {
                 .collect()
         };
 
+        tx.execute("DELETE FROM migration_guidance;", [])
+            .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM migration_sources;", [])
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM migration_imports;", [])
@@ -3901,6 +3997,38 @@ pub fn handle_save_generated_artifact(
     Ok(outcome.artifact)
 }
 
+pub fn handle_save_generated_artifact_with_generation(
+    engine: &Engine,
+    artifact_id: String,
+    content_md: String,
+    title: String,
+    project_id: Option<String>,
+    generation: Option<&GenerationReceipt>,
+) -> Result<Artifact, String> {
+    let artifact =
+        handle_save_generated_artifact(engine, artifact_id, content_md, title, project_id)?;
+    if let Some(receipt) = generation {
+        // The document save is already committed. Record the dispatch-time decision
+        // idempotently; a bookkeeping failure must not report the saved page as failed.
+        let record = sthira_core::db::templates_repo::GenerationRecord {
+            workflow: &receipt.workflow,
+            artifact_id: Some(&artifact.id),
+            snapshot: receipt.template.as_ref(),
+            template_mode: &receipt.template_mode,
+            generation_key: &receipt.generation_key,
+            model_name: &receipt.model_name,
+            provider_name: &receipt.provider_name,
+            status: "completed",
+        };
+        if let Err(error) = engine.record_generation_run(&record) {
+            eprintln!(
+                "[cmd_save_generated_artifact] Saved the page but could not record generation history: {error}"
+            );
+        }
+    }
+    Ok(artifact)
+}
+
 #[tauri::command]
 pub fn cmd_save_generated_artifact(
     state: State<'_, AppState>,
@@ -3908,8 +4036,16 @@ pub fn cmd_save_generated_artifact(
     content_md: String,
     title: String,
     project_id: Option<String>,
+    generation: Option<GenerationReceipt>,
 ) -> Result<Artifact, String> {
-    handle_save_generated_artifact(&state.engine, artifact_id, content_md, title, project_id)
+    handle_save_generated_artifact_with_generation(
+        &state.engine,
+        artifact_id,
+        content_md,
+        title,
+        project_id,
+        generation.as_ref(),
+    )
 }
 
 pub async fn handle_run_research_into_page(
@@ -3926,7 +4062,12 @@ pub async fn handle_run_research_into_page(
         execute_research_with_options, ResearchRunOptions, WebSearchMode,
     };
 
-    let template_id = crate::workflow_settings::workflow_template(engine, "research", template_id)?;
+    let template_choice =
+        crate::workflow_settings::resolve_workflow_template(engine, "research", template_id)?;
+    let template_snapshot = template_choice
+        .template
+        .as_ref()
+        .map(|template| template.snapshot());
     let resolved = {
         let reader = engine.db().reader().map_err(|e| e.to_string())?;
         sthira_core::llm::resolve_model_provider(&reader, model_id.as_deref(), engine.model())
@@ -3976,6 +4117,8 @@ pub async fn handle_run_research_into_page(
         let _ = on_progress.send(stage);
     };
 
+    let research_budget =
+        Some(sthira_core::llm::lifecycle::RequestPolicy::standard().workflow_deadline);
     let result = execute_research_with_options(
         &run_engine,
         query.trim(),
@@ -3985,9 +4128,13 @@ pub async fn handle_run_research_into_page(
             provider_label: &provider_label,
             limit_docs: 4,
             capability: Some(capability),
-            template_id: template_id.as_deref(),
+            template_id: None,
+            template_snapshot: template_snapshot.as_ref(),
             exclude_artifact_id: Some(artifact_id.as_str()),
+            scope_project_id: None,
             on_stage: Some(&progress),
+            cancellation: None,
+            budget: research_budget,
         },
     )
     .await
@@ -3995,11 +4142,35 @@ pub async fn handle_run_research_into_page(
 
     handle_save_generated_artifact(
         engine,
-        artifact_id,
+        artifact_id.clone(),
         result.synthesized_markdown.clone(),
         result.title.clone(),
         None,
     )?;
+    let provider_name = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        reader
+            .query_row(
+                "SELECT display_name FROM providers WHERE id=?1",
+                [&resolved.provider_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| resolved.provider_id.clone())
+    };
+    let generation_key = format!("research:{}:{}", artifact_id, uuid::Uuid::new_v4());
+    let record = sthira_core::db::templates_repo::GenerationRecord {
+        workflow: "research",
+        artifact_id: Some(artifact_id.as_str()),
+        snapshot: result.template_snapshot.as_ref(),
+        template_mode: &template_choice.mode,
+        generation_key: &generation_key,
+        model_name: &resolved.display_name,
+        provider_name: &provider_name,
+        status: "completed",
+    };
+    if let Err(error) = engine.record_generation_run(&record) {
+        eprintln!("[handle_run_research_into_page] Saved research but could not record template history: {error}");
+    }
 
     Ok(result)
 }
@@ -4030,15 +4201,9 @@ pub async fn handle_stream_adaptive_run(
     engine: &Engine,
     raw_input: String,
     mode: OperationalMode,
-    model_id: Option<String>,
+    model_id: String,
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
 ) -> Result<(), String> {
-    let workflow = match mode {
-        OperationalMode::Research => "research",
-        OperationalMode::Plan => "plan",
-        _ => "draft",
-    };
-    let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ProgressiveStreamChunk>(64);
     let engine_clone = engine.clone();
 
@@ -4047,7 +4212,7 @@ pub async fn handle_stream_adaptive_run(
             &engine_clone,
             &raw_input,
             mode,
-            model_id,
+            Some(model_id),
             tx,
         )
         .await
@@ -4068,6 +4233,58 @@ pub async fn handle_stream_adaptive_run(
         .map_err(|e| format!("Streaming task join error: {e}"))?
 }
 
+/// Dispatch-time identity for a directly streamed generation. The snapshot is captured
+/// before streaming and must be saved with the completed document, never re-resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationReceipt {
+    pub generation_key: String,
+    pub workflow: String,
+    pub template_mode: String,
+    pub template: Option<sthira_core::SynthesisTemplateSnapshot>,
+    pub model_id: String,
+    pub model_name: String,
+    pub provider_name: String,
+}
+
+/// Prepare a directly streamed generation exactly once: model resolution, template
+/// decision, prompt, and the dispatch-time receipt used later at save time.
+pub fn prepare_stream_generation(
+    engine: &Engine,
+    workflow: &str,
+    model_id: Option<String>,
+    raw_input: String,
+    template_id: Option<String>,
+) -> Result<(String, GenerationReceipt), String> {
+    let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?
+        .ok_or("Choose an available model before generating.")?;
+    let (model_name, provider_name) = {
+        let reader = engine.db().reader().map_err(|e| e.to_string())?;
+        let (model, provider, _) =
+            sthira_core::db::providers_repo::get_model_entry(&reader, &model_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("The selected model is unavailable.")?;
+        (model.display_name, provider.display_name)
+    };
+    let choice =
+        crate::workflow_settings::resolve_workflow_template(engine, workflow, template_id)?;
+    let prompt = crate::workflow_settings::workflow_prompt_with_template(
+        raw_input,
+        choice.template.as_ref(),
+    );
+    Ok((
+        prompt,
+        GenerationReceipt {
+            generation_key: uuid::Uuid::new_v4().to_string(),
+            workflow: workflow.to_string(),
+            template_mode: choice.mode,
+            template: choice.template.as_ref().map(|template| template.snapshot()),
+            model_id,
+            model_name,
+            provider_name,
+        },
+    ))
+}
+
 #[tauri::command]
 pub async fn cmd_stream_adaptive_run(
     raw_input: String,
@@ -4076,15 +4293,23 @@ pub async fn cmd_stream_adaptive_run(
     template_id: Option<String>,
     on_chunk: tauri::ipc::Channel<ProgressiveStreamChunk>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<GenerationReceipt, String> {
     let workflow = match mode {
         OperationalMode::Research => "research",
         OperationalMode::Plan => "plan",
         _ => "draft",
     };
-    let raw_input =
-        crate::workflow_settings::workflow_prompt(&state.engine, workflow, raw_input, template_id)?;
-    handle_stream_adaptive_run(&state.engine, raw_input, mode, model_id, on_chunk).await
+    let (prompt, receipt) =
+        prepare_stream_generation(&state.engine, workflow, model_id, raw_input, template_id)?;
+    handle_stream_adaptive_run(
+        &state.engine,
+        prompt,
+        mode,
+        receipt.model_id.clone(),
+        on_chunk,
+    )
+    .await?;
+    Ok(receipt)
 }
 
 // ============================================================================
@@ -5266,8 +5491,13 @@ pub async fn handle_derive_artifact_with_cancellation(
         "draft"
     };
     let model_id = crate::workflow_settings::workflow_model(engine, workflow, model_id)?;
-    let template_id = crate::workflow_settings::workflow_template(engine, workflow, template_id)?;
-    engine
+    let template_choice =
+        crate::workflow_settings::resolve_workflow_template(engine, workflow, template_id)?;
+    let template_id = template_choice
+        .template
+        .as_ref()
+        .map(|template| template.id.clone());
+    let artifact_id = engine
         .derive_artifact_with_policy_and_cancellation(
             &source_artifact_id,
             &derivation_type,
@@ -5277,7 +5507,40 @@ pub async fn handle_derive_artifact_with_cancellation(
             sthira_core::llm::lifecycle::RequestPolicy::standard(),
             cancel_token,
         )
-        .await
+        .await?;
+    if matches!(workflow, "research" | "plan") {
+        let (model_name, provider_name) = {
+            let reader = engine.db().reader().map_err(|e| e.to_string())?;
+            model_id
+                .as_deref()
+                .and_then(|id| {
+                    sthira_core::db::providers_repo::get_model_entry(&reader, id)
+                        .ok()
+                        .flatten()
+                })
+                .map(|(model, provider, _)| (model.display_name, provider.display_name))
+                .unwrap_or_else(|| ("Unknown model".into(), "Unknown provider".into()))
+        };
+        let template_snapshot = template_choice
+            .template
+            .as_ref()
+            .map(|template| template.snapshot());
+        let generation_key = format!("derive:{}:{}", artifact_id, uuid::Uuid::new_v4());
+        let record = sthira_core::db::templates_repo::GenerationRecord {
+            workflow,
+            artifact_id: Some(&artifact_id),
+            snapshot: template_snapshot.as_ref(),
+            template_mode: &template_choice.mode,
+            generation_key: &generation_key,
+            model_name: &model_name,
+            provider_name: &provider_name,
+            status: "completed",
+        };
+        if let Err(error) = engine.record_generation_run(&record) {
+            eprintln!("[handle_derive_artifact] Saved derivation but could not record template history: {error}");
+        }
+    }
+    Ok(artifact_id)
 }
 
 pub async fn handle_derive_artifact(
@@ -5374,18 +5637,16 @@ pub struct SynthesisTemplateView {
     pub is_default: bool,
     pub template_skeleton_md: String,
     pub created_at: i64,
+    pub is_builtin: bool,
+    pub version: i64,
+    pub guidance: String,
+    pub updated_at: i64,
+    pub archived_at: Option<i64>,
 }
 
-pub fn handle_list_synthesis_templates(
-    engine: &Engine,
-    target_mode: Option<String>,
-) -> Result<Vec<SynthesisTemplateView>, String> {
-    let templates = engine
-        .list_synthesis_templates(target_mode.as_deref().filter(|s| !s.trim().is_empty()))
-        .map_err(|e| e.to_string())?;
-    Ok(templates
-        .into_iter()
-        .map(|t| SynthesisTemplateView {
+impl From<sthira_core::SynthesisTemplate> for SynthesisTemplateView {
+    fn from(t: sthira_core::SynthesisTemplate) -> Self {
+        Self {
             id: t.id,
             name: t.name,
             target_mode: t.target_mode,
@@ -5393,14 +5654,147 @@ pub fn handle_list_synthesis_templates(
             is_default: t.is_default,
             template_skeleton_md: t.template_skeleton_md,
             created_at: t.created_at,
-        })
-        .collect())
+            is_builtin: t.is_builtin,
+            version: t.version,
+            guidance: t.guidance,
+            updated_at: t.updated_at,
+            archived_at: t.archived_at,
+        }
+    }
+}
+
+pub fn handle_list_synthesis_templates(
+    engine: &Engine,
+    target_mode: Option<String>,
+    include_archived: Option<bool>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<SynthesisTemplateView>, String> {
+    let page = sthira_core::db::templates_repo::TemplatePage {
+        limit: limit.unwrap_or(100),
+        offset: offset.unwrap_or(0),
+    };
+    let templates = engine
+        .list_synthesis_templates_page(
+            target_mode.as_deref().filter(|s| !s.trim().is_empty()),
+            include_archived.unwrap_or(false),
+            page,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(templates.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]
 pub fn cmd_list_synthesis_templates(
     target_mode: Option<String>,
+    include_archived: Option<bool>,
+    limit: Option<usize>,
+    offset: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SynthesisTemplateView>, String> {
-    handle_list_synthesis_templates(&state.engine, target_mode)
+    handle_list_synthesis_templates(&state.engine, target_mode, include_archived, limit, offset)
+}
+
+#[tauri::command]
+pub fn cmd_get_synthesis_template(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<SynthesisTemplateView>, String> {
+    state
+        .engine
+        .get_synthesis_template(&id)
+        .map(|value| value.map(Into::into))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_create_synthesis_template(
+    draft: sthira_core::SynthesisTemplateDraft,
+    state: State<'_, AppState>,
+) -> Result<SynthesisTemplateView, String> {
+    state
+        .engine
+        .create_synthesis_template(&draft)
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_update_synthesis_template(
+    draft: sthira_core::SynthesisTemplateDraft,
+    state: State<'_, AppState>,
+) -> Result<SynthesisTemplateView, String> {
+    state
+        .engine
+        .update_synthesis_template(&draft)
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_duplicate_synthesis_template(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SynthesisTemplateView, String> {
+    state
+        .engine
+        .duplicate_synthesis_template(&id)
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_set_synthesis_template_default(
+    target_mode: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_synthesis_template_default(&target_mode, &id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_clear_synthesis_template_default(
+    target_mode: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .engine
+        .clear_synthesis_template_default(&target_mode)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_archive_synthesis_template(
+    id: String,
+    expected_version: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<SynthesisTemplateView, String> {
+    state
+        .engine
+        .archive_synthesis_template(&id, expected_version)
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_restore_synthesis_template(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<SynthesisTemplateView, String> {
+    state
+        .engine
+        .restore_synthesis_template(&id)
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_delete_synthesis_template(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .delete_synthesis_template(&id)
+        .map_err(|e| e.to_string())
 }

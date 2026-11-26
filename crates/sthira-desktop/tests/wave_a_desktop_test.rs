@@ -487,6 +487,8 @@ async fn a4_run_research_into_page_excludes_target_draft_and_escalates() {
                 title: "Consensus Spec".into(),
                 content_md: "# Consensus Spec\n\nExternal specification evidence on quorum intersection prevents split-brain commits.".into(),
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             1_700_000_000_000,
         )

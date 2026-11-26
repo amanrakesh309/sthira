@@ -182,7 +182,7 @@ pub fn get_cached_web_document(
 ) -> Result<Option<ScrapedWebDocument>, CoreError> {
     let hash = hash_url(url);
     let mut stmt = conn.prepare(
-        "SELECT url, title, extracted_text_md
+        "SELECT url, title, extracted_text_md, fetched_at
          FROM web_research_cache
          WHERE url_hash = ?1;",
     )?;
@@ -194,6 +194,8 @@ pub fn get_cached_web_document(
             title: r.get(1)?,
             content_md: r.get(2)?,
             published_date: None,
+            fetched_at: Some(r.get(3)?),
+            from_cache: true,
         }))
     } else {
         Ok(None)

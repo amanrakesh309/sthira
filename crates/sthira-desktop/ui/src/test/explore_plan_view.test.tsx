@@ -142,6 +142,13 @@ function installMocks() {
       case 'cmd_list_object_types':
       case 'cmd_get_object_type_counts':
         return [];
+      case 'cmd_list_synthesis_templates':
+        return [
+          { id: 'research-deep-dive', name: 'Research: Deep Dive', target_mode: 'research', description: '', is_default: false, template_skeleton_md: '# {{title}}', created_at: 0, is_builtin: true, version: 1, guidance: '', updated_at: 0, archived_at: null },
+          { id: 'research-evidence-comparison', name: 'Research: Evidence Comparison', target_mode: 'research', description: '', is_default: false, template_skeleton_md: '# {{title}}', created_at: 0, is_builtin: true, version: 1, guidance: '', updated_at: 0, archived_at: null },
+          { id: 'plan-mvp-roadmap', name: 'Plan: MVP / Product Roadmap', target_mode: 'plan', description: '', is_default: false, template_skeleton_md: '# {{title}}', created_at: 0, is_builtin: true, version: 1, guidance: '', updated_at: 0, archived_at: null },
+          { id: 'plan-editorial-launch', name: 'Plan: Editorial Launch Plan', target_mode: 'plan', description: '', is_default: false, template_skeleton_md: '# {{title}}', created_at: 0, is_builtin: true, version: 1, guidance: '', updated_at: 0, archived_at: null },
+        ];
       case 'cmd_get_workflow_settings':
         return Object.fromEntries(
           ['research', 'plan', 'draft', 'chat', 'resume'].map((id) => [
@@ -365,7 +372,7 @@ describe('🧭 Explore & Plan Hub', () => {
       'Speculative Decoding Algorithms',
       'always_search',
       null,
-      'research-comparative-tech', 'm1'
+      null, 'm1'
     );
   });
 
@@ -391,9 +398,9 @@ describe('🧭 Explore & Plan Hub', () => {
     });
 
     const researchTemplateSelect = screen.getByTestId('select-synthesis-template') as HTMLSelectElement;
-    expect(researchTemplateSelect.value).toBe('research-comparative-tech');
-    expect(screen.getByRole('option', { name: /Comparative Tech Evaluation/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Deep Dive Investigation/i })).toBeInTheDocument();
+    expect(researchTemplateSelect.value).toBe('__inherit__');
+    expect(screen.getByRole('option', { name: /Inherit default/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Research: Deep Dive/i })).toBeInTheDocument();
 
     // Select alternative template: Deep Dive Investigation
     await user.selectOptions(researchTemplateSelect, 'research-deep-dive');
@@ -417,14 +424,14 @@ describe('🧭 Explore & Plan Hub', () => {
       expect(screen.getByTestId('tab-content-plan')).toBeInTheDocument();
     });
 
-    const planTemplateSelect = screen.getByTestId('select-synthesis-template') as HTMLSelectElement;
-    expect(planTemplateSelect.value).toBe('plan-milestone-roadmap');
-    expect(screen.getByRole('option', { name: /Milestone Roadmap/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Fast Iteration Sprint/i })).toBeInTheDocument();
+    const planTemplateSelect = screen.getByTestId('select-plan-synthesis-template') as HTMLSelectElement;
+    expect(planTemplateSelect.value).toBe('__inherit__');
+    expect(screen.getByRole('option', { name: /Plan: MVP \/ Product Roadmap/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Plan: Editorial Launch Plan/i })).toBeInTheDocument();
 
     // Select alternative plan template: Fast Iteration Sprint
-    await user.selectOptions(planTemplateSelect, 'plan-fast-sprint');
-    expect(planTemplateSelect.value).toBe('plan-fast-sprint');
+    await user.selectOptions(planTemplateSelect, 'plan-mvp-roadmap');
+    expect(planTemplateSelect.value).toBe('plan-mvp-roadmap');
 
     // Submit plan with selected template
     await user.type(screen.getByTestId('input-plan-goal'), 'Ship SQLite v2 schema');
@@ -433,7 +440,7 @@ describe('🧭 Explore & Plan Hub', () => {
     expect(onStartPlan).toHaveBeenCalledWith(
       'Ship SQLite v2 schema',
       null,
-      'plan-fast-sprint', 'm1'
+      'plan-mvp-roadmap', 'm1'
     );
   });
 

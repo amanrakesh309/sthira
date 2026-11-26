@@ -27,12 +27,56 @@ interface SimNode extends GraphNode {
   radius: number;
   cardWidth?: number;
   cardHeight?: number;
-  isDragging?: boolean;
 }
 
 interface SimEdge extends GraphEdge {
-  sourceNode?: SimNode;
-  targetNode?: SimNode;
+  sourceNode: SimNode;
+  targetNode: SimNode;
+}
+
+function settleLayout(nodes: SimNode[], edges: SimEdge[], centerX: number, centerY: number) {
+  if (nodes.length === 0) return;
+  // Bound the pairwise work for large graphs and finish before drawing the first frame.
+  const iterations = Math.min(100, Math.floor(1_500_000 / (nodes.length ** 2 + edges.length * 2)));
+  for (let step = 0; step < iterations; step++) {
+    for (let i = 0; i < nodes.length; i++) {
+      const first = nodes[i];
+      const gravity = first.kind === 'project' ? 0.0007 : 0.0004;
+      first.vx += (centerX - first.x) * gravity;
+      first.vy += (centerY - first.y) * gravity;
+      for (let j = i + 1; j < nodes.length; j++) {
+        const second = nodes[j];
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        const distanceSquared = dx * dx + dy * dy + 1;
+        if (distanceSquared >= 450 ** 2) continue;
+        const projectGap = first.kind === 'project' || second.kind === 'project';
+        const minimumDistance = first.radius + second.radius + (projectGap ? 76 : 35);
+        const force = minimumDistance * 45 / (distanceSquared * Math.sqrt(distanceSquared));
+        first.vx -= dx * force;
+        first.vy -= dy * force;
+        second.vx += dx * force;
+        second.vy += dy * force;
+      }
+    }
+    for (const { sourceNode: source, targetNode: target, relationship } of edges) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      const desiredDistance = relationship === 'belongs_to' ? 140 : 180;
+      const force = (distance - desiredDistance) * 0.007 / distance;
+      source.vx += dx * force;
+      source.vy += dy * force;
+      target.vx -= dx * force;
+      target.vy -= dy * force;
+    }
+    for (const node of nodes) {
+      node.vx *= 0.86;
+      node.vy *= 0.86;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
 }
 
 export const GraphView: React.FC<GraphViewProps> = ({
@@ -65,7 +109,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
   const simNodesRef = useRef<SimNode[]>([]);
   const simEdgesRef = useRef<SimEdge[]>([]);
-  const animFrameIdRef = useRef<number | null>(null);
+  const layoutRef = useRef<{ nodes: SimNode[]; edges: SimEdge[] }>({ nodes: [], edges: [] });
+  const redrawRef = useRef(() => {});
 
   // Viewport transform
   const transformRef = useRef({ x: 0, y: 0, scale: 1 });
@@ -140,40 +185,30 @@ export const GraphView: React.FC<GraphViewProps> = ({
     [showProjects, showPages, showIdeas, showTasks, showSources, selectedCustomTypes]
   );
 
-  // Initialize or update simulation nodes & edges when graphData or filters change
+  // Lay out the complete graph once per load so filters only affect visibility.
   useEffect(() => {
     const canvas = canvasRef.current;
-    const width = canvas ? canvas.clientWidth : 900;
-    const height = canvas ? canvas.clientHeight : 650;
+    const width = canvas?.clientWidth || 900;
+    const height = canvas?.clientHeight || 650;
 
-    const visibleNodesMap = new Map<string, SimNode>();
-    const existingNodesMap = new Map<string, SimNode>(
-      simNodesRef.current.map((n) => [n.id, n])
-    );
-
-    const filteredNodes = graphData.nodes.filter(isNodeVisible);
+    const nodesById = new Map<string, SimNode>();
+    const graphNodes = [...graphData.nodes].sort((a, b) => a.id.localeCompare(b.id));
+    const spread = Math.max(1, Math.sqrt(graphNodes.length / 30));
 
     // Group items around their projects if possible
     const projectPositions = new Map<string, { x: number; y: number }>();
-    const projectNodes = filteredNodes.filter((n) => n.kind === 'project');
+    const projectNodes = graphNodes.filter((n) => n.kind === 'project');
 
     projectNodes.forEach((pNode, pIdx) => {
-      const existing = existingNodesMap.get(pNode.id);
-      if (existing) {
-        projectPositions.set(pNode.id, { x: existing.x, y: existing.y });
-      } else {
-        const angle = (pIdx / Math.max(1, projectNodes.length)) * 2 * Math.PI - Math.PI / 4;
-        const dist = 180 + (pIdx % 3) * 60;
-        projectPositions.set(pNode.id, {
-          x: width / 2 + Math.cos(angle) * dist,
-          y: height / 2 + Math.sin(angle) * dist,
-        });
-      }
+      const angle = (pIdx / projectNodes.length) * 2 * Math.PI - Math.PI / 4;
+      const dist = (180 + (pIdx % 3) * 60) * spread;
+      projectPositions.set(pNode.id, {
+        x: width / 2 + Math.cos(angle) * dist,
+        y: height / 2 + Math.sin(angle) * dist,
+      });
     });
 
-    filteredNodes.forEach((node, idx) => {
-      const existing = existingNodesMap.get(node.id);
-
+    graphNodes.forEach((node, idx) => {
       let radius = 24;
       let cardWidth = 180;
       const cardHeight = 42;
@@ -190,10 +225,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       let initX = width / 2;
       let initY = height / 2;
 
-      if (existing) {
-        initX = existing.x;
-        initY = existing.y;
-      } else if (node.kind === 'project') {
+      if (node.kind === 'project') {
         const pos = projectPositions.get(node.id);
         if (pos) {
           initX = pos.x;
@@ -202,14 +234,14 @@ export const GraphView: React.FC<GraphViewProps> = ({
       } else if (node.project_id && projectPositions.has(node.project_id)) {
         const parentPos = projectPositions.get(node.project_id)!;
         const angle = (idx * 1.37) % (2 * Math.PI);
-        const dist = 130 + (idx % 3) * 40;
-        initX = parentPos.x + Math.cos(angle) * dist + (Math.random() - 0.5) * 30;
-        initY = parentPos.y + Math.sin(angle) * dist + (Math.random() - 0.5) * 30;
+        const dist = (130 + (idx % 3) * 40) * spread;
+        initX = parentPos.x + Math.cos(angle) * dist;
+        initY = parentPos.y + Math.sin(angle) * dist;
       } else {
-        const angle = (idx / Math.max(1, filteredNodes.length)) * 2 * Math.PI;
-        const dist = 220 + (idx % 4) * 50;
-        initX = width / 2 + Math.cos(angle) * dist + (Math.random() - 0.5) * 40;
-        initY = height / 2 + Math.sin(angle) * dist + (Math.random() - 0.5) * 40;
+        const angle = (idx / graphNodes.length) * 2 * Math.PI;
+        const dist = (220 + (idx % 4) * 50) * spread;
+        initX = width / 2 + Math.cos(angle) * dist;
+        initY = height / 2 + Math.sin(angle) * dist;
       }
 
       const simNode: SimNode = {
@@ -219,33 +251,33 @@ export const GraphView: React.FC<GraphViewProps> = ({
         cardHeight,
         x: initX,
         y: initY,
-        vx: existing ? existing.vx : 0,
-        vy: existing ? existing.vy : 0,
+        vx: 0,
+        vy: 0,
       };
 
-      visibleNodesMap.set(node.id, simNode);
+      nodesById.set(node.id, simNode);
     });
 
-    const simNodes = Array.from(visibleNodesMap.values());
-    simNodesRef.current = simNodes;
+    const nodes = Array.from(nodesById.values());
+    const edges = graphData.edges.flatMap(edge => {
+      const sourceNode = nodesById.get(edge.source);
+      const targetNode = nodesById.get(edge.target);
+      return sourceNode && targetNode ? [{ ...edge, sourceNode, targetNode }] : [];
+    });
+    settleLayout(nodes, edges, width / 2, height / 2);
+    layoutRef.current = { nodes, edges };
+  }, [graphData]);
 
-    // Build visible edges
-    const simEdges: SimEdge[] = [];
-    for (const edge of graphData.edges) {
-      const sourceNode = visibleNodesMap.get(edge.source);
-      const targetNode = visibleNodesMap.get(edge.target);
-      if (sourceNode && targetNode) {
-        simEdges.push({
-          ...edge,
-          sourceNode,
-          targetNode,
-        });
-      }
-    }
-    simEdgesRef.current = simEdges;
+  useEffect(() => {
+    simNodesRef.current = layoutRef.current.nodes.filter(isNodeVisible);
+    const visibleIds = new Set(simNodesRef.current.map(node => node.id));
+    simEdgesRef.current = layoutRef.current.edges.filter(edge =>
+      visibleIds.has(edge.source) && visibleIds.has(edge.target),
+    );
+    redrawRef.current();
   }, [graphData, isNodeVisible]);
 
-  // Canvas render loop & Physics step
+  // Redraw when the graph or viewport changes. An idle graph needs no frames.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -253,7 +285,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let isRunning = true;
+    let frameId: number | null = null;
 
     // Helper for rounded rect on canvas with jsdom test environment compatibility
     const drawRoundRect = (
@@ -293,8 +325,6 @@ export const GraphView: React.FC<GraphViewProps> = ({
     };
 
     const render = () => {
-      if (!isRunning) return;
-
       const isDark = document.documentElement.classList.contains('dark');
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
@@ -320,88 +350,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
       ctx.translate(transform.x, transform.y);
       ctx.scale(transform.scale, transform.scale);
 
-      // --- Force Simulation Step ---
       const nodes = simNodesRef.current;
       const edges = simEdgesRef.current;
-      const centerX = rectWidth / 2;
-      const centerY = rectHeight / 2;
-
-      // 1. Center gravity & Node repulsion
-      for (let i = 0; i < nodes.length; i++) {
-        const n1 = nodes[i];
-        if (n1.isDragging) continue;
-
-        // Subtle pull toward center
-        const gravityWeight = n1.kind === 'project' ? 0.0007 : 0.0004;
-        n1.vx += (centerX - n1.x) * gravityWeight;
-        n1.vy += (centerY - n1.y) * gravityWeight;
-
-        // Repulsion from other nodes
-        for (let j = i + 1; j < nodes.length; j++) {
-          const n2 = nodes[j];
-          const dx = n2.x - n1.x;
-          const dy = n2.y - n1.y;
-          const distSq = dx * dx + dy * dy + 1;
-          const dist = Math.sqrt(distSq);
-
-          const r1 = n1.kind === 'project' ? 50 : (n1.cardWidth || 160) / 2;
-          const r2 = n2.kind === 'project' ? 50 : (n2.cardWidth || 160) / 2;
-          const minDist = r1 + r2 + (n1.kind === 'project' || n2.kind === 'project' ? 60 : 35);
-
-          if (dist < 450) {
-            const force = (minDist * 45) / distSq;
-            const fx = (dx / dist) * force;
-            const fy = (dy / dist) * force;
-
-            if (!n1.isDragging) {
-              n1.vx -= fx;
-              n1.vy -= fy;
-            }
-            if (!n2.isDragging) {
-              n2.vx += fx;
-              n2.vy += fy;
-            }
-          }
-        }
-      }
-
-      // 2. Spring attraction along edges
-      for (const edge of edges) {
-        if (!edge.sourceNode || !edge.targetNode) continue;
-        const s = edge.sourceNode;
-        const t = edge.targetNode;
-
-        const dx = t.x - s.x;
-        const dy = t.y - s.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const targetDist = edge.relationship === 'belongs_to' ? 140 : 180;
-        const springForce = (dist - targetDist) * 0.007;
-
-        const fx = (dx / dist) * springForce;
-        const fy = (dy / dist) * springForce;
-
-        if (!s.isDragging) {
-          s.vx += fx;
-          s.vy += fy;
-        }
-        if (!t.isDragging) {
-          t.vx -= fx;
-          t.vy -= fy;
-        }
-      }
-
-      // 3. Update positions with damping
-      for (const n of nodes) {
-        if (n.isDragging) continue;
-        n.vx *= 0.86;
-        n.vy *= 0.86;
-        n.x += n.vx;
-        n.y += n.vy;
-      }
 
       // --- Draw Edges (Organic Bezier Splines) ---
       for (const edge of edges) {
-        if (!edge.sourceNode || !edge.targetNode) continue;
         const s = edge.sourceNode;
         const t = edge.targetNode;
 
@@ -418,9 +371,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
         const dy = t.y - s.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
         const curvature = Math.min(30, dist * 0.14);
-        const sign = ((s.x * 3 + t.y * 7) | 0) % 2 === 0 ? 1 : -1;
-        const perpX = (-dy / dist) * curvature * sign;
-        const perpY = (dx / dist) * curvature * sign;
+        // Keep the bend on the same side relative to the edge's direction.
+        const perpX = (-dy / dist) * curvature;
+        const perpY = (dx / dist) * curvature;
         const cpX = (s.x + t.x) / 2 + perpX;
         const cpY = (s.y + t.y) / 2 + perpY;
 
@@ -464,8 +417,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
         // Relationship label on non-membership edges
         if (edge.relationship !== 'belongs_to' && (isHighlighted || transform.scale > 0.9)) {
-          const edgeMidX = (s.x + t.x) / 2;
-          const edgeMidY = (s.y + t.y) / 2;
+          const edgeMidX = (s.x + t.x + perpX) / 2;
+          const edgeMidY = (s.y + t.y + perpY) / 2;
           ctx.font = '10px Inter, system-ui, sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
@@ -668,12 +621,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
       // --- Render Radar Minimap ---
       const minimapCanvas = minimapCanvasRef.current;
-      if (minimapCanvas && nodes.length > 0) {
+      if (minimapCanvas) {
         const mctx = minimapCanvas.getContext('2d');
         if (mctx) {
           const mw = minimapCanvas.width;
           const mh = minimapCanvas.height;
           mctx.clearRect(0, 0, mw, mh);
+          if (nodes.length === 0) return;
 
           // Find bounding box of all nodes
           let minX = Infinity;
@@ -730,16 +684,29 @@ export const GraphView: React.FC<GraphViewProps> = ({
         }
       }
 
-      animFrameIdRef.current = requestAnimationFrame(render);
     };
 
-    render();
+    const requestRedraw = () => {
+      if (frameId !== null) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = null;
+        render();
+      });
+    };
+    redrawRef.current = requestRedraw;
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(requestRedraw);
+    resizeObserver?.observe(canvas);
+    const themeObserver = new MutationObserver(requestRedraw);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    window.addEventListener('resize', requestRedraw);
+    requestRedraw();
 
     return () => {
-      isRunning = false;
-      if (animFrameIdRef.current) {
-        cancelAnimationFrame(animFrameIdRef.current);
-      }
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      themeObserver.disconnect();
+      window.removeEventListener('resize', requestRedraw);
+      redrawRef.current = () => {};
     };
   }, [searchQuery, hoveredNode, selectedNode]);
 
@@ -791,7 +758,6 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
     if (hitNode) {
       draggedNodeRef.current = hitNode;
-      hitNode.isDragging = true;
       setSelectedNode(hitNode);
     } else {
       isPanningRef.current = true;
@@ -808,11 +774,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
     if (draggedNodeRef.current) {
       draggedNodeRef.current.x = coords.x;
       draggedNodeRef.current.y = coords.y;
-      draggedNodeRef.current.vx = 0;
-      draggedNodeRef.current.vy = 0;
+      redrawRef.current();
     } else if (isPanningRef.current) {
       transformRef.current.x = e.clientX - panStartRef.current.x;
       transformRef.current.y = e.clientY - panStartRef.current.y;
+      redrawRef.current();
     } else {
       const hitNode = getNodeAtCoords(coords.x, coords.y);
       setHoveredNode(hitNode);
@@ -820,10 +786,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
   };
 
   const handleMouseUp = () => {
-    if (draggedNodeRef.current) {
-      draggedNodeRef.current.isDragging = false;
-      draggedNodeRef.current = null;
-    }
+    draggedNodeRef.current = null;
     isPanningRef.current = false;
   };
 
@@ -844,6 +807,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     transformRef.current.y = mouseY - (mouseY - transformRef.current.y) * (nextScale / currentScale);
     transformRef.current.scale = nextScale;
     setZoomScale(nextScale);
+    redrawRef.current();
   };
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -865,18 +829,21 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const resetZoom = () => {
     transformRef.current = { x: 0, y: 0, scale: 1 };
     setZoomScale(1);
+    redrawRef.current();
   };
 
   const zoomIn = () => {
     const next = Math.min(2.5, transformRef.current.scale * 1.25);
     transformRef.current.scale = next;
     setZoomScale(next);
+    redrawRef.current();
   };
 
   const zoomOut = () => {
     const next = Math.max(0.35, transformRef.current.scale * 0.8);
     transformRef.current.scale = next;
     setZoomScale(next);
+    redrawRef.current();
   };
 
   const fitToView = () => {
@@ -915,6 +882,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       scale,
     };
     setZoomScale(scale);
+    redrawRef.current();
   };
 
   const visibleNodes = useMemo(
@@ -967,7 +935,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       </header>
 
       {/* 2. Secondary Filter & Search Toolbar */}
-      <div className="graph-toolbar">
+      <div className="graph-toolbar" data-guide-target="graph-toolbar">
         {/* Left Filter Pills */}
         <div className="graph-filters-group">
           <span className="graph-filters-label">
@@ -1127,6 +1095,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={() => { handleMouseUp(); setHoveredNode(null); }}
           onWheel={handleWheel}
           onDoubleClick={handleDoubleClick}
           className="graph-canvas"

@@ -1,17 +1,17 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 interface Props {
   operation?: 'edit' | 'create';
   heading?: string; currentLabel?:string; proposedLabel?:string; applyLabel?:string; footnote?:string; children?:ReactNode;
   current: ReactNode; proposed: ReactNode; summary: string; stale: boolean;
-  pending: boolean; busy: boolean; error: string | null;
-  onClose: () => void; onApply: () => void; onDismiss: () => void;
+  pending: boolean; busy: boolean; error: string | null; researchCitations?: boolean;
+  onClose: () => void; onApply: () => void; onDismiss: () => void; onOpenArtifact?: (id: string) => void;
 }
 /** Read-only review is outside the chat rail and outside the editable document. */
-export function DocumentEditReview({ operation = 'edit', heading, currentLabel, proposedLabel, applyLabel, footnote, children, current, proposed, summary, stale, pending, busy, error, onClose, onApply, onDismiss }: Props) {
+export function DocumentEditReview({ operation = 'edit', heading, currentLabel, proposedLabel, applyLabel, footnote, children, current, proposed, summary, stale, pending, busy, error, researchCitations = false, onClose, onApply, onDismiss, onOpenArtifact }: Props) {
   const dialog = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -47,7 +47,7 @@ export function DocumentEditReview({ operation = 'edit', heading, currentLabel, 
       <div className="document-edit-review-columns">
         {([[currentLabel || (operation === 'create' ? 'Before creation' : 'Current document'), current], [proposedLabel || (operation === 'create' ? 'Proposed page' : 'Suggested document'), proposed]] as const).map(([label, markdown]) => <section key={label} aria-label={label}>
           <h3>{label}</h3><div className="document-edit-review-prose" tabIndex={0}>
-            {typeof markdown==='string'?<ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({children}) => <div className="document-edit-review-table"><table>{children}</table></div>, a: ({children, href}) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{markdown}</ReactMarkdown>:markdown}
+            {typeof markdown==='string'?<ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={url=>url.startsWith('sthira://artifact/')||url.startsWith('sthira://project/')?url:defaultUrlTransform(url)} components={{ table: ({children}) => <div className="document-edit-review-table"><table>{children}</table></div>, a: ({children, href}) => { if(href?.startsWith('sthira://artifact/')&&onOpenArtifact)return <button type="button" className="agent-link" disabled={pending} onClick={()=>{onClose();onOpenArtifact(href.slice('sthira://artifact/'.length));}}>{children}</button>; const citation=researchCitations&&Boolean(href?.startsWith('#research-source-')); return <a href={href} target={citation?undefined:'_blank'} rel="noreferrer" className={citation?'research-citation-link':undefined} onClick={citation?event=>{event.preventDefault();const target=dialog.current?.querySelector<HTMLElement>(String(href));target?.scrollIntoView({block:'center'});target?.focus();}:undefined}>{children}</a>; } }}>{markdown}</ReactMarkdown>:markdown}
           </div>
         </section>)}
       </div>

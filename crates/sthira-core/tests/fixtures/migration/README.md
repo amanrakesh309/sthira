@@ -1,0 +1,3 @@
+# Synthetic export-shaped fixtures
+
+These hand-authored UTF-8 fixtures exercise the supported local Markdown/text contracts. They are not downloads from private accounts and do not certify source-service conversion fidelity. Notion-shaped input includes a nested Markdown folder, relative percent-encoded link, literal frontmatter and unsupported CSV. Obsidian-shaped input includes nested Unicode notes, alias links, multi-backtick code and an unsupported embed. Google Docs-shaped input includes a Markdown table/image link and plain text. Test code copies fixtures into a disposable source directory and verifies byte preservation before/after import and recovery. Actual account exports, attachments and proprietary metadata remain separate acceptance layers.

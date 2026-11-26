@@ -348,6 +348,11 @@ async fn saved_handoff_crosses_real_mcp_then_returns_to_configured_native_model(
             project_id: Some(p.id),
             workspace_memory: false,
             model_id: "native-model".into(),
+            allow_web: false,
+            research_template_mode: None,
+            research_template_id: None,
+            plan_template_mode: None,
+            plan_template_id: None,
         })
         .unwrap();
     let native = e
@@ -406,4 +411,40 @@ fn owner_cli_migration_preview_apply_retry_and_rollback_preserve_export_text() {
         rolled["plan"]["items"][0]["original"],
         "# Question\nThe date is unconfirmed."
     );
+}
+#[test]
+fn owner_cli_pages_summaries_and_applies_only_the_reviewed_selection() {
+    let (tmp, _, _) = init();
+    let mut last = Value::Null;
+    for i in 0..3 {
+        let draft=json!({"request_id":format!("review-{i}"),"source":"obsidian","collection":format!("export-{i}"),"project_id":null,"files":[{"path":"A.md","content":"[[B]]"},{"path":"B.md","content":"PRIVATE_ORIGINAL_BODY"}]}).to_string();
+        last = json_output(cli(&tmp, &["migration", "preview", &draft], None));
+    }
+    let first = json_output(cli(&tmp, &["migration", "history", "2"], None));
+    assert_eq!(first["items"].as_array().unwrap().len(), 2);
+    assert!(!first.to_string().contains("PRIVATE_ORIGINAL_BODY"));
+    assert!(!first["items"][0].as_object().unwrap().contains_key("plan"));
+    let cursor = first["next_cursor"].to_string();
+    let second = json_output(cli(&tmp, &["migration", "history", "2", &cursor], None));
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    let id = last["id"].as_str().unwrap();
+    let review = json_output(cli(
+        &tmp,
+        &["migration", "review", id, "1", "[\"A.md\"]"],
+        None,
+    ));
+    assert_eq!(review["items"][0]["preview_content"], "[[B]]");
+    let approval = json!({"paths":review["paths"],"basis":review["basis"]}).to_string();
+    let applied = json_output(cli(
+        &tmp,
+        &["migration", "apply-selected", id, "1", &approval],
+        None,
+    ));
+    assert_eq!(applied["receipt"]["pages"].as_array().unwrap().len(), 1);
+    let retried = json_output(cli(
+        &tmp,
+        &["migration", "apply-selected", id, "1", &approval],
+        None,
+    ));
+    assert_eq!(retried["receipt"]["pages"], applied["receipt"]["pages"]);
 }

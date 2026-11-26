@@ -11,6 +11,135 @@ use sthira_desktop::{
 use sthira_testkit::{DeterministicFakeModel, FakeClock};
 use tempfile::tempdir;
 
+#[test]
+fn canvas_picker_and_notes_persist_as_saved_pages() {
+    let tmp = tempdir().unwrap();
+    let db = tmp.path().join("test.db");
+    let vault = tmp.path().join("vault");
+    let open = || {
+        Engine::open(
+            &db,
+            &vault,
+            Arc::new(FakeClock::new(1_700_000_000_000)),
+            Arc::new(DeterministicFakeModel::new("test-model")),
+        )
+        .unwrap()
+    };
+    let engine = open();
+    let page = engine
+        .create_artifact(
+            sthira_core::ArtifactType::Note,
+            sthira_core::Authorship::User,
+            Some("Matching page"),
+            "An example with 10% improvement.",
+            None,
+        )
+        .unwrap();
+    let board = engine.create_canvas(None, "Planning board").unwrap();
+    let list = |query: &str| CanvasOpsRequest::ListPages {
+        canvas_id: board.clone(),
+        query: query.into(),
+    };
+    let get = || CanvasOpsRequest::GetCanvas {
+        canvas_id: Some(board.clone()),
+        project_id: None,
+    };
+    assert!(handle_canvas_ops(&engine, get())
+        .unwrap()
+        .canvas
+        .unwrap()
+        .items
+        .is_empty());
+    for query in ["", "matching PAGE", "10%"] {
+        let pages = handle_canvas_ops(&engine, list(query))
+            .unwrap()
+            .pages
+            .unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].id, page.id);
+    }
+    assert!(handle_canvas_ops(&engine, list("_%"))
+        .unwrap()
+        .pages
+        .unwrap()
+        .is_empty());
+    for x in [24.0, 344.0] {
+        handle_canvas_ops(
+            &engine,
+            CanvasOpsRequest::PlacePage {
+                canvas_id: board.clone(),
+                artifact_id: page.id.clone(),
+                x,
+                y: 24.0,
+            },
+        )
+        .unwrap();
+    }
+    assert!(handle_canvas_ops(&engine, list("Matching"))
+        .unwrap()
+        .pages
+        .unwrap()
+        .is_empty());
+    engine
+        .add_canvas_item(
+            &board,
+            "legacy",
+            sthira_core::CanvasItemKind::Text,
+            None,
+            220.0,
+            180.0,
+            Some(190.0),
+            None,
+            0,
+        )
+        .unwrap();
+    let create = |placeholder_id: Option<&str>| CanvasOpsRequest::CreateNote {
+        canvas_id: board.clone(),
+        placeholder_id: placeholder_id.map(str::to_owned),
+        x: 24.0,
+        y: 190.0,
+    };
+    let note = handle_canvas_ops(&engine, create(None))
+        .unwrap()
+        .artifact_id
+        .unwrap();
+    let legacy_note = handle_canvas_ops(&engine, create(Some("legacy")))
+        .unwrap()
+        .artifact_id
+        .unwrap();
+    assert!(handle_canvas_ops(&engine, create(Some("legacy"))).is_err());
+    drop(engine);
+
+    let engine = open();
+    let canvas = handle_canvas_ops(&engine, get()).unwrap().canvas.unwrap();
+    assert_eq!(canvas.items.len(), 3);
+    assert!(canvas.links.is_empty());
+    let placed = canvas
+        .items
+        .iter()
+        .find(|item| item.artifact_id.as_ref() == Some(&page.id))
+        .unwrap();
+    assert_eq!((placed.x, placed.y), (24.0, 24.0));
+    let legacy = canvas
+        .items
+        .iter()
+        .find(|item| item.item_id == "legacy")
+        .unwrap();
+    assert_eq!((legacy.x, legacy.y, legacy.w), (220.0, 180.0, Some(190.0)));
+    assert_eq!(legacy.artifact_id.as_ref(), Some(&legacy_note));
+    for id in [note, legacy_note] {
+        let artifact = handle_get_artifact_context(&engine, id).unwrap().artifact;
+        assert_eq!(artifact.title.as_deref(), Some("Untitled Note"));
+        assert!(artifact.last_synced_hash.is_some());
+        assert!(vault.join(artifact.file_path.unwrap()).is_file());
+    }
+    assert!(handle_canvas_ops(&engine, list(""))
+        .unwrap()
+        .pages
+        .unwrap()
+        .is_empty());
+}
+
 #[tokio::test]
 async fn test_ipc_bridge_all_12_commands_roundtrip() {
     let tmp = tempdir().unwrap();

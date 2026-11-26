@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default core capability for the main Sthira desktop window","local":true,"windows":["main"],"permissions":["core:default"]}}

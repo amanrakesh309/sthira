@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GraphView } from '../views/GraphView';
 import type { KnowledgeGraphData, ObjectType } from '../types/sthira';
@@ -166,6 +166,95 @@ describe('Knowledge Graph Fidelity & Interaction Tests', () => {
     // Press Escape to clear search
     await user.keyboard('{Escape}');
     expect(searchInput).toHaveValue('');
+  });
+
+  it('draws a settled layout, preserves positions across redraws and filters, and keeps a dragged endpoint fixed', async () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    const request = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+    let pathStart = [0, 0];
+    const curves = vi.fn((controlX: number, controlY: number, endX: number, endY: number) => {
+      const [startX, startY] = pathStart;
+      return (endX - startX) * (controlY - startY) - (endY - startY) * (controlX - startX);
+    });
+    const originalContext = HTMLCanvasElement.prototype.getContext as (
+      this: HTMLCanvasElement, kind: '2d',
+    ) => CanvasRenderingContext2D | null;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
+      const original = originalContext.call(this, '2d');
+      if (!original) return null;
+      return Object.assign(original, {
+        moveTo: (x: number, y: number) => { pathStart = [x, y]; },
+        quadraticCurveTo: curves,
+        fillText: vi.fn(),
+        strokeRect: vi.fn(),
+        createRadialGradient: () => ({ addColorStop: vi.fn() }),
+      });
+    });
+    const draw = () => {
+      act(() => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach(callback => callback(0));
+      });
+    };
+    mockInvoke.mockImplementation(async (cmd: string) => cmd === 'cmd_get_knowledge_graph' ? mockGraphData : mockObjectTypes);
+    const user = userEvent.setup();
+    const view = render(<GraphView onOpenProject={vi.fn()} onOpenArtifact={vi.fn()} onBack={vi.fn()} />);
+    try {
+      await waitFor(() => {
+        draw();
+        expect(curves).toHaveBeenCalledTimes(3);
+      });
+      const initial = curves.mock.calls.slice();
+      expect(initial).toHaveLength(3);
+      expect(frames.size).toBe(0);
+
+      curves.mockClear();
+      await user.type(screen.getByTestId('graph-search-input'), 'Executive');
+      draw();
+      expect(curves.mock.calls).toEqual(initial);
+
+      await user.click(screen.getByTestId('filter-pages'));
+      curves.mockClear();
+      draw();
+      expect(curves.mock.calls).toEqual([initial[2]]);
+      await user.click(screen.getByTestId('filter-pages'));
+      curves.mockClear();
+      draw();
+      expect(curves.mock.calls).toEqual(initial);
+
+      const canvas = screen.getByTestId('graph-canvas');
+      const [, , x, y] = initial[0];
+      fireEvent.mouseDown(canvas, { clientX: x, clientY: y });
+      fireEvent.mouseMove(canvas, { clientX: x + 36, clientY: y + 20 });
+      curves.mockClear();
+      draw();
+      const dragged = curves.mock.calls.slice();
+      expect(dragged[0][2]).toBeCloseTo(x + 36, 0);
+      expect(dragged[0][3]).toBeCloseTo(y + 20, 0);
+      expect(curves.mock.results[0].value).toBeGreaterThan(0);
+      fireEvent.mouseMove(canvas, { clientX: x + 36, clientY: y + 21 });
+      curves.mockClear();
+      draw();
+      expect(curves.mock.results[0].value).toBeGreaterThan(0);
+      const released = curves.mock.calls.slice();
+      fireEvent.mouseUp(canvas);
+      curves.mockClear();
+      fireEvent(window, new Event('resize'));
+      draw();
+      expect(curves.mock.calls).toEqual(released);
+      expect(frames.size).toBe(0);
+    } finally {
+      view.unmount();
+      context.mockRestore();
+      cancel.mockRestore();
+      request.mockRestore();
+    }
   });
 
   it('renders floating legend card and viewport controls', async () => {

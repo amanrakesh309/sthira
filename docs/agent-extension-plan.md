@@ -1,6 +1,10 @@
 # Agent Extension: five implementation phases
 
-This is a new five-phase sequence, **AE1–AE5**, separate from the historical phases 1–25 in [the original plan](plan.md). It does not renumber or restart that plan. [Permanent product policy](policies/product.md#planned-agent-and-migration-roadmap) governs behavior; feature contracts describe what actually exists. Implement and verify one phase before moving to the next. No dates are promised.
+This document tracks the five **Agent Extension phases AE1–AE5**, separate from the historical phases 1–25 in [the original plan](plan.md). It does not renumber or restart that plan. [Permanent product policy](policies/product.md#planned-agent-and-migration-roadmap) governs behavior; feature contracts describe what actually exists. Initial foundations exist for all five phases; that does not establish complete feature scope or native/live acceptance. No dates are promised.
+
+## Current next priorities
+
+The next order is **AE5 completion batch → UX1 — Guided onboarding and Help → CW1 — Accounts and workspace membership → CW2 — Shared work and synchronization**. The migration-agent/review batch is implemented. UX1 has guided tours and searchable offline Help. Native/live acceptance gaps remain tracked separately. The first coworking release covers shared workspaces, invitations, roles, comments and reviewed changes; simultaneous editing follows later as CW3. UX/CW are additional product phases, not a renumbering of AE1–AE5 or historical phases 1–25. Follow the [completion, onboarding and coworking plan](onboarding-and-cowork-plan.md) for scope, dependencies, architecture decisions and acceptance criteria. The coworking phases remain planned.
 
 ## AE1 — Shared memory and shared actions
 
@@ -44,7 +48,9 @@ Bring existing knowledge from Notion, Obsidian, Google Docs, and additional sour
 
 Start with a source inventory and preview, then mapping, validation, explicit import, and a readable result with errors and retry guidance. Preserve original source data, source attribution, stable import identity, and supported content/relationships. Define attachments, links, properties, duplicate detection, incremental reruns, cancellation, and rollback behavior per importer.
 
-The local-export foundation is implemented in [Migration assistant](features/migration.md): deterministic Markdown/text presets, explicit inventory/review/apply, source provenance, duplicate/conflict handling, atomic receipts and guarded recovery. Live connectors, rich formats and model-led migration planning remain follow-ups.
+The local-export foundation is implemented in [Migration assistant](features/migration.md): deterministic Markdown/text presets, explicit inventory/review/apply, source provenance, duplicate/conflict handling, atomic receipts and guarded recovery. Live connectors and richer formats remain separately scoped extensions.
+
+The implemented completion batch adds migration-agent guidance, selective per-document review, lightweight/paginated history and synthetic export-shaped fixture/recovery validation. Its [completion scope](onboarding-and-cowork-plan.md#ae5-completion-batch-before-ux1) keeps source-preservation and review protections intact; additional formats/connectors remain separate extensions.
 
 Acceptance requires disposable source fixtures and documented fidelity for each supported export/connector, duplicate-safe retries, bounded imports, partial-failure reporting, and verification that source data remains untouched. Export formats, live API permissions, and media fidelity are not guaranteed until implemented and tested.
 

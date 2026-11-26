@@ -25,6 +25,7 @@ Warm Stone + Forest Sage defines light mode; Deep Obsidian Stone defines dark mo
 ## Text, labels, and controls
 
 - Serif is for editorial headings and appropriate prose, not dense controls or metadata. UI text uses the established local/system sans-serif stack. Scale headings down at constrained widths and zoom. Essential labels remain at least 12px and readable in both themes.
+- Keep explanatory copy available through contextual information buttons and Help. Show required setup, consent, current state, warnings, and review information beside the relevant action.
 - Labels belong to their fields in the same layout column and stay attached when wrapping. Use a common label baseline, label-to-field gap, field height, and text inset. Align table headers/cells, dialog titles/body/footer, metadata, badges, and actions intentionally.
 - **Project filters:** Type, Relationship, and Sort by align to the selected-value text anchor, including the field's border and padding. With a 1px border and 12px left padding, that anchor is 13px. Recalculate if geometry changes; do not preserve a magic number independent of the control. Extra glyphs must not shift just one label's text anchor.
 - Standard controls are roughly 40–44px high with usable hit areas; important targets aim for 44×44px. Search/value text, dropdown arrows, and icons have compatible baselines and padding.
@@ -48,6 +49,7 @@ Warm Stone + Forest Sage defines light mode; Deep Obsidian Stone defines dark mo
 - Dialogs have proper semantics, initial focus, Tab containment, predictable Escape/backdrop behavior, and focus restoration. Search results support the declared arrow/activation model; focusable results must also activate from the keyboard. Async searches ignore stale responses after query/close changes.
 - Check actual element/state contrast: 4.5:1 normal text, 3:1 large text and meaningful control boundaries. Status also uses words/icons. Decorative surface separation does not automatically require 3:1; borders/token tables alone do not prove accessibility compliance.
 - Respect reduced motion; keep restrained transitions. Verify 125% scaling and long text without clipped controls or inaccessible off-screen actions.
+- Settle the Knowledge Graph layout before drawing. Keep node positions and connection curves steady at rest and across search and filter changes. Dragging moves the chosen node and its incident connections.
 - Copy is concise, factual, neutral, and helpful. No guilt, invented metrics, celebratory noise, engineering branding in ordinary flows, or unsupported certainty. Error reassurance must match actual draft/recovery behavior.
 
 ## Page coverage

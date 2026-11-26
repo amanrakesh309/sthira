@@ -77,7 +77,7 @@ COMMANDS:
     mcp                             Run the authenticated stdio MCP server
     review show|apply|dismiss|undo   Inspect and review a saved agent proposal (owner only)
     handoff list|read|save|close|continue  Owner saved handoff and continuation actions
-    migration preview|list|read|apply|cancel|rollback  Review local export imports
+    migration preview|list|history|read|review|apply-selected|apply|cancel|rollback  Review local export imports
     help                            Display this help message
 
 OPTIONS:

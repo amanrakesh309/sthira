@@ -372,7 +372,7 @@ fn v24_upgrade_is_additive_idempotent_and_keeps_pending_projects() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        30
     );
 }
 #[test]

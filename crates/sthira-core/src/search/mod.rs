@@ -19,6 +19,12 @@ pub struct ScrapedWebDocument {
     pub title: String,
     pub content_md: String,
     pub published_date: Option<String>,
+    /// Fetch time in epoch milliseconds; cached rows carry their original fetch time.
+    #[serde(default)]
+    pub fetched_at: Option<i64>,
+    /// True when the article body came from the local retrieval cache.
+    #[serde(default)]
+    pub from_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

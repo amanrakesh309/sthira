@@ -449,7 +449,7 @@ async fn v23_upgrade_keeps_legacy_pending_reviews_and_project_content_intact() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        30
     );
 }
 #[tokio::test]

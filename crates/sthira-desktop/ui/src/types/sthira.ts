@@ -116,16 +116,6 @@ export interface ArtifactContext {
 
 export type DerivationType = 'refine' | 'plan_from_research' | 'extract_ideas' | 'extract_tasks';
 
-export interface SynthesisTemplateView {
-  id: string;
-  name: string;
-  target_mode: 'research' | 'plan' | string;
-  description: string;
-  is_default: boolean;
-  template_skeleton_md: string;
-  created_at: number;
-}
-
 export type EpistemicOrigin = 'user_recorded' | 'source_backed' | 'ai_inferred';
 
 export interface BriefClaim {
@@ -234,6 +224,8 @@ export interface CanvasOpsResponse {
   canvas?: CanvasDataView | null;
   change_set_id?: string | null;
   success: boolean;
+  artifact_id?: string;
+  pages?: SearchResultItem[];
 }
 
 export interface GuidedProjectResult {

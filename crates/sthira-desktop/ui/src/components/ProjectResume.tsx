@@ -39,7 +39,7 @@ export function ProjectResume({ projectId, onSelectArtifact }: { projectId:strin
   };
   const generated=brief?.generation?.mode==='generated'||brief?.generation?.mode==='cached';
   const modelLabel=(brief?.generation?.model_name||'Model').trim().split(/\s+/).slice(0,4).join(' ');
-  return <div className="project-resume" aria-label="Project Resume" aria-busy={loading||busy}>
+  return <div className="project-resume" data-guide-target="resume-pane" aria-label="Project Resume" aria-busy={loading||busy}>
     <ResumeModelControl settings={settings}/>
     <div className="resume-toolbar"><span className="resume-helper" title={brief?.generation?.model_name||undefined}>{generated?`${brief?.generation?.mode==='cached'?'Saved excerpts':'Selected excerpts'} · ${modelLabel}${brief?.generation?.provider_name ? ` · ${brief.generation.provider_name}` : ''}`:'Saved facts'}</span><div>
       <button type="button" className="settings-btn-secondary" disabled={busy||loading} onClick={load}><RefreshCw size={14}/>Refresh facts</button>

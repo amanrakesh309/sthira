@@ -441,18 +441,47 @@ CREATE TABLE IF NOT EXISTS scheduled_topic_runs (
 CREATE INDEX IF NOT EXISTS idx_scheduled_topics_active ON scheduled_topics(is_active, topic_type);
 CREATE INDEX IF NOT EXISTS idx_scheduled_topic_runs_topic ON scheduled_topic_runs(topic_id, executed_at DESC);
 
--- Selectable Synthesis Templates for Research and Planning
+-- Selectable Synthesis Templates for Research, Plan, and optional Capture structures
 CREATE TABLE IF NOT EXISTS synthesis_templates (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan')),
+    target_mode TEXT NOT NULL CHECK(target_mode IN ('research', 'plan', 'capture')),
     description TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
     template_skeleton_md TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1,
+    guidance TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    archived_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_synthesis_templates_mode ON synthesis_templates(target_mode);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_synthesis_templates_one_default
+    ON synthesis_templates(target_mode) WHERE is_default = 1;
+
+CREATE TABLE IF NOT EXISTS synthesis_template_runs (
+    id TEXT PRIMARY KEY,
+    workflow TEXT NOT NULL,
+    artifact_id TEXT,
+    template_id TEXT NOT NULL,
+    template_version INTEGER NOT NULL,
+    template_name TEXT NOT NULL,
+    skeleton_md TEXT NOT NULL,
+    guidance TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    template_mode TEXT NOT NULL DEFAULT 'explicit',
+    generation_key TEXT,
+    status TEXT NOT NULL DEFAULT 'completed',
+    model_name TEXT NOT NULL DEFAULT '',
+    provider_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_synthesis_template_runs_artifact
+    ON synthesis_template_runs(artifact_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_synthesis_template_runs_generation
+    ON synthesis_template_runs(generation_key) WHERE generation_key IS NOT NULL;
+
 
 CREATE TABLE IF NOT EXISTS workflow_settings (
     workflow TEXT PRIMARY KEY CHECK(workflow IN ('research','plan','draft','chat','resume')),

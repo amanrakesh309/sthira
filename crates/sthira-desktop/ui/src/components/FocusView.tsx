@@ -28,6 +28,7 @@ import {
   ChevronDown,
   ExternalLink,
   BookOpen,
+  LibraryBig,
   Lightbulb,
   Link2,
   MessageSquare,
@@ -42,6 +43,8 @@ import { AmbientProposalPill } from './AmbientProposalPill';
 import { UndoToast } from './UndoToast';
 import { EpistemicBadge } from './EpistemicBadge';
 import { SlashCommandMenu, type SlashCommandItem } from './SlashCommandMenu';
+import { CaptureTemplateDialog } from './CaptureTemplateDialog';
+import '../styles/capture-template.css';
 import type { DocumentRunState } from '../types/sthira';
 import { QuickObjectCreatorCard } from './objects/QuickObjectCreatorCard';
 import { ObjectTypeBuilderModal } from './objects/ObjectTypeBuilderModal';
@@ -172,6 +175,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
   const [history, setHistory] = useState<IProjectHistory | null>(null);
 
   const [editorContent, setEditorContent] = useState('');
+  const [captureStructureOpen, setCaptureStructureOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -1674,10 +1678,10 @@ export const FocusView: React.FC<FocusViewProps> = ({
         </nav>
         <div className="focus-header-actions">
           {onOpenSearch && <button type="button" onClick={onOpenSearch} className="focus-search-action focus-icon-button" aria-label="Search workspace" title="Search workspace"><Search size={16} /></button>}
-          {explicitRouteProjectId && <button type="button" className="focus-header-action" aria-label="Resume" aria-expanded={showResume} disabled={isLoadingDocument||!!loadError} onClick={async()=>{const target=explicitRouteProjectId;if(isDirty&&!(await handleSave()))return;if(target===currentProjectIdRef.current)setShowResume(value=>!value);}}><Sparkles size={16}/><span>Resume</span></button>}
+          {explicitRouteProjectId && <button type="button" className="focus-header-action" aria-label="Resume" data-guide-target="resume-action" aria-expanded={showResume} disabled={isLoadingDocument||!!loadError} onClick={async()=>{const target=explicitRouteProjectId;if(isDirty&&!(await handleSave()))return;if(target===currentProjectIdRef.current)setShowResume(value=>!value);}}><Sparkles size={16}/><span>Resume</span></button>}
           <button type="button" className="focus-header-action" onClick={() => setIsHistoryOpen(true)} disabled={!history} aria-label="History" title={history ? 'Project history' : 'History is available for project documents'}><History size={16} /><span>History</span></button>
           {artifactId && <button type="button" disabled={!conversation && !chatLoadError} ref={chatButtonRef} className="focus-header-action" aria-label="Conversation" aria-expanded={showChat} aria-controls="document-chat" onClick={() => { if (chatLoadError) setChatReload(value => value + 1); else setChatOpen(!showChat); }}><MessageSquare size={16} /><span>Chat</span></button>}
-          <button type="button" ref={connectionsButtonRef} className="focus-header-action" onClick={() => { if (showConnections) closeConnections(); else { setShowConnections(true); setShowMargin(false); setShowChat(false); } }} disabled={!connectionEntity} aria-label="Connections" aria-expanded={showConnections && !!connectionEntity} aria-controls="workspace-connections" title={connectionEntity ? 'Show connected pages, projects and objects' : 'Save this page to connect it'}><Link2 size={16} /><span>Connections</span></button>
+          <button type="button" ref={connectionsButtonRef} className="focus-header-action" onClick={() => { if (showConnections) closeConnections(); else { setShowConnections(true); setShowMargin(false); setShowChat(false); } }} disabled={!connectionEntity} aria-label="Connections" data-guide-target="connections" aria-expanded={showConnections && !!connectionEntity} aria-controls="workspace-connections" title={connectionEntity ? 'Show connected pages, projects and objects' : 'Save this page to connect it'}><Link2 size={16} /><span>Connections</span></button>
           <button type="button" data-testid="btn-save-artifact" className={`focus-save-status ${saveError ? 'focus-save-error' : ''}`} onClick={handleSave} disabled={isLoadingDocument || !!loadError || isSaving || chatApplying || isSavingConflict} title={saveError ? 'Retry saving your changes' : mirrorPending ? 'Markdown mirror sync pending. Click to retry sync.' : 'Changes save automatically. Click to save now.'}>
             {isSaving ? <Loader2 size={15} className="animate-spin" /> : (saveError || mirrorPending) ? <AlertTriangle size={15} /> : <Check size={15} />}
             <span aria-live="polite">{saveError ? 'Save failed' : isSaving ? 'Saving...' : mirrorPending ? (isDirty ? 'Unsaved changes · mirror warning' : 'Saved (mirror warning)') : saveSuccess ? 'Saved' : isDirty ? 'Unsaved changes' : 'Auto-saved'}</span>
@@ -1915,7 +1919,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
               />
             </div>
 
-            <div className="focus-title-tools"><button type="button" className="focus-brief-source" disabled={!context?.artifact.id || isLoadingDocument || chatApplying || isSavingConflict || !!documentRun && documentRun.status === 'running'} aria-expanded={showTitleSuggestions} onClick={() => setShowTitleSuggestions(value => !value)}><Sparkles size={14}/> Suggest a title</button>
+            <div className="focus-title-tools" data-guide-target="editor"><button type="button" className="focus-brief-source" disabled={!context?.artifact.id || isLoadingDocument || chatApplying || isSavingConflict || !!documentRun && documentRun.status === 'running'} aria-expanded={showTitleSuggestions} onClick={() => setShowTitleSuggestions(value => !value)}><Sparkles size={14}/> Suggest a title</button>
               {onOpenInNewTab && <button type="button" className="focus-brief-source" onClick={onOpenInNewTab}>Open another document</button>}
             </div>
             {showTitleSuggestions && context?.artifact.id && <TitleSuggestionsPanel key={context.artifact.id} artifactId={context.artifact.id} current={{content:editorContent,title}} snapshot={() => ({content:currentContentRef.current,title:currentTitleRef.current})} beforeRequest={async () => {
@@ -2005,6 +2009,16 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 >
                   <span className="font-mono font-bold">/</span>
                   <span>Insert Block</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-capture-structure"
+                  onClick={() => setCaptureStructureOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sthira-surface-muted hover:bg-sthira-surface-muted text-sthira-text font-medium transition-colors cursor-pointer"
+                  title="Insert an optional Capture structure (no model used)"
+                >
+                  <LibraryBig className="w-3.5 h-3.5" />
+                  <span>Structure</span>
                 </button>
               </div>
 
@@ -2177,6 +2191,7 @@ export const FocusView: React.FC<FocusViewProps> = ({
                 }}
               />
               {slashMenu.isOpen && <SlashCommandMenu anchorElement={editorBodyRef.current} filterQuery={slashMenu.filterQuery} customObjectTypes={objectTypes} onSelect={handleSelectSlashCommand} onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))} position={slashMenu.position} activeModelName={activeModelName} />}
+              {captureStructureOpen && <CaptureTemplateDialog hasContent={editorContent.trim().length > 0} suggestedTitle={title} onClose={() => setCaptureStructureOpen(false)} onInsert={(markdown) => { documentEditorRef.current?.insertMarkdown(markdown); setCaptureStructureOpen(false); }} />}
               {templateSelector?.isOpen && <TemplateSelectorPopover objectType={templateSelector.objectType} position={templateSelector.position} onSelect={(templateId) => {
                 setPendingTemplateId(templateId);
                 setInlineObjectCreator({ isOpen: true, objectType: templateSelector.objectType, position: templateSelector.position, caretIndex: 0 });

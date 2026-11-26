@@ -560,21 +560,22 @@ describe('WorkflowSettingsPanel information and guidance', () => {
       );
     });
 
-    // Guide banner explaining why to toggle
-    expect(screen.getByTestId('workflow-guide-banner')).toBeInTheDocument();
-    expect(screen.getByText('Why Toggle Workflows & How They Work')).toBeInTheDocument();
-    expect(screen.getByText(/Local-first privacy:/)).toBeInTheDocument();
-    expect(screen.getByText(/Step 1/)).toBeInTheDocument();
-    expect(screen.getByText(/Step 2/)).toBeInTheDocument();
-    expect(screen.getByText(/Step 3/)).toBeInTheDocument();
+    // Instructions appear only when requested.
+    expect(screen.queryByText(/Connect an enabled model in AI & Models/)).not.toBeInTheDocument();
+    const workflowInfo = screen.getByRole('button', { name: 'About workflow setup' });
+    fireEvent.click(workflowInfo);
+    expect(screen.getByRole('note')).toHaveTextContent(/Connect an enabled model in AI & Models/);
+    fireEvent.keyDown(workflowInfo, { key: 'Escape' });
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
 
     // Fast-jump to AI & Models tab
     const jumpBtn = screen.getByTestId('btn-go-to-models-guide');
     fireEvent.click(jumpBtn);
     expect(navigateTabSpy).toHaveBeenCalledWith('models');
 
-    // Cards display purpose and disabled status
-    expect(screen.getByText(/Unlocks Research under Explore & Plan in the sidebar/)).toBeInTheDocument();
+    // Cards expose their purpose on demand and show the disabled status.
+    fireEvent.click(screen.getByRole('button', { name: 'About Research' }));
+    expect(screen.getByRole('note')).toHaveTextContent(/Unlocks Research under Explore & Plan in the sidebar/);
     expect(screen.getAllByText(/No model calls/).length).toBeGreaterThan(0);
   });
 });

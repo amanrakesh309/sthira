@@ -1,19 +1,36 @@
 import { AgentTasksProvider } from './context/AgentTasksContext';
 import { AgentTaskCenter } from './components/AgentTaskCenter';
+import { WorkspaceGuide, hasSeenPageTour, hasSeenWorkspaceWelcome, rememberPageTour, rememberWorkspaceWelcome } from './components/WorkspaceGuide';
+import { pageTours, type PageTourId } from './components/workspaceGuideContent';
+import { OPEN_HELP_ARTICLE } from './components/HelpTopicButton';
+import { isHelpArticleId, type HelpArticleId } from './components/workspaceHelpArticles';
 import { OPEN_AGENT_TASKS } from './api/workspaceAgent';
 import { DocumentTabs } from './components/DocumentTabs';
 import { useDocumentTabs, openDocumentTab, closeDocumentTab, type DocumentTabsState, type DocumentTab } from './hooks/useDocumentTabs';
 import { useWorkflowSettings } from './hooks/useWorkflowSettings';
 import type { SettingsSection } from './components/ModelSettingsModal';
 import { getDocumentConversation } from './api/conversation';
+import { getSynthesisTemplate } from './api/synthesisTemplates';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { HomeView } from './components/HomeView';
 import { FocusView } from './components/FocusView';
 import { CanvasView } from './components/CanvasView';
 import { LeftSidebar } from './components/LeftSidebar';
 import { SearchModal } from './components/SearchModal';
 import { ModelSettingsModal } from './components/ModelSettingsModal';
-import { AccountModal } from './components/AccountModal';
+import { AccountModal, type GoogleSession } from './components/AccountModal';
+import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
+import { JoinWorkspaceModal } from './components/JoinWorkspaceModal';
+import { TeamWorkspaceView, type TeamWorkspaceTab } from './components/TeamWorkspaceView';
+import {
+  getActiveWorkspaceId,
+  listWorkspaces,
+  setActiveWorkspaceId,
+  type OwnershipTransferView,
+  type WorkspaceListResponse,
+  type WorkspaceSummary,
+} from './api/workspaces';
 import { InteractiveFlowModal, type FlowMode } from './components/InteractiveFlowModal';
 import { ObjectCollectionContainer } from './components/objects/ObjectCollectionContainer';
 import { ObjectTypeBuilderModal } from './components/objects/ObjectTypeBuilderModal';
@@ -52,8 +69,13 @@ const WorkspaceApp: React.FC = () => {
   const [agentRunToOpen,setAgentRunToOpen]=useState<string|null>(null);
   const workflows = useWorkflowSettings();
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('models');
+  const [settingsTabRequest, setSettingsTabRequest] = useState(0);
   useEffect(() => {
-    const open = (event: Event) => { setSettingsSection((event as CustomEvent<SettingsSection>).detail || 'workflows'); setIsSettingsOpen(true); };
+    const open = (event: Event) => {
+      setSettingsSection((event as CustomEvent<SettingsSection>).detail || 'workflows');
+      setSettingsTabRequest(request => request + 1);
+      setIsSettingsOpen(true);
+    };
     window.addEventListener('sthira:open-settings', open);
     return () => window.removeEventListener('sthira:open-settings', open);
   }, []);
@@ -141,6 +163,9 @@ const WorkspaceApp: React.FC = () => {
   const navigating = useRef(false);
   const newTabIntent = useRef(false);
   const searchNewTab = useRef(false);
+  const canvasReturnRef = useRef<{
+    artifactId: string; canvasId: string; projectId?: string; returnProjectId: string | null;
+  } | null>(null);
   const registerBeforeLeave = useCallback((guard: (() => Promise<boolean>) | null) => { beforeLeaveRef.current = guard; }, []);
   const applyTab = (tab: DocumentTab) => {
     setActiveArtifactId(tab.id); setActiveProjectId(tab.projectId); setProjectReturnId(tab.returnProjectId); setCurrentView('focus');
@@ -181,6 +206,21 @@ const WorkspaceApp: React.FC = () => {
   }, [currentView]);
   // Modals state
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [guideEntry, setGuideEntry] = useState<'welcome' | 'help' | 'tour' | null>(null);
+  const [activePageTour, setActivePageTour] = useState<PageTourId>('home');
+  const [helpArticle, setHelpArticle] = useState<HelpArticleId>();
+  const welcomeOffered = useRef(false);
+  const pageToursOffered = useRef(new Set<PageTourId>());
+  useEffect(() => {
+    const openArticle = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (typeof id !== 'string' || !isHelpArticleId(id)) return;
+      setHelpArticle(id);
+      setGuideEntry('help');
+    };
+    window.addEventListener(OPEN_HELP_ARTICLE, openArticle);
+    return () => window.removeEventListener(OPEN_HELP_ARTICLE, openArticle);
+  }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -189,13 +229,22 @@ const WorkspaceApp: React.FC = () => {
     return false;
   });
   const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false);
+  const [isJoinWorkspaceOpen, setIsJoinWorkspaceOpen] = useState(false);
+  const [googleSession, setGoogleSession] = useState<GoogleSession | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [incomingTransfers, setIncomingTransfers] = useState<OwnershipTransferView[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSummary | null>(null);
+  const [teamWorkspaceTab, setTeamWorkspaceTab] = useState<TeamWorkspaceTab>('overview');
+  const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [isObjectTypeBuilderOpen, setIsObjectTypeBuilderOpen] = useState(false);
   const [isObjectTypeManagerOpen, setIsObjectTypeManagerOpen] = useState(false);
   const [activeFlow, setActiveFlow] = useState<{ mode: FlowMode; initialPrompt?: string } | null>(null);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if (isSettingsOpen || isSearchOpen || isAccountOpen || activeFlow || isObjectTypeBuilderOpen || isObjectTypeManagerOpen || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (isSettingsOpen || isSearchOpen || isAccountOpen || isCreateWorkspaceOpen || isJoinWorkspaceOpen || activeFlow || isObjectTypeBuilderOpen || isObjectTypeManagerOpen || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key === 'Tab' && documentTabs.stateRef.current.tabs.length > 1) {
         event.preventDefault();
         const {tabs,activeId} = documentTabs.stateRef.current;
@@ -217,6 +266,182 @@ const WorkspaceApp: React.FC = () => {
     recent_items: [],
     loose_captures: [],
   });
+  const tourPage: PageTourId = isSettingsOpen ? 'settings' : activeWorkspace ? 'team'
+    : currentView === 'scheduled_topics' ? 'explore_plan' : currentView;
+  const openPageTour = useCallback((page: PageTourId) => {
+    pageToursOffered.current.add(page);
+    rememberPageTour(page);
+    setActivePageTour(page);
+    setHelpArticle(undefined);
+    setGuideEntry('tour');
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri || homeLoadStatus === 'loading' || guideEntry || isSearchOpen || isAccountOpen
+      || isCreateWorkspaceOpen || isJoinWorkspaceOpen || isObjectTypeBuilderOpen
+      || isObjectTypeManagerOpen || activeFlow || taskCenterOpen) return;
+    const dialogIsOpen = Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).some(
+      dialog => !isSettingsOpen || !dialog.closest('[data-testid="model-settings-modal"]'),
+    );
+    if (dialogIsOpen) return;
+    if (!welcomeOffered.current && !hasSeenWorkspaceWelcome()) {
+      if (isSettingsOpen) return;
+      welcomeOffered.current = true;
+      rememberWorkspaceWelcome();
+      if (tourPage === 'home') {
+        pageToursOffered.current.add('home');
+        rememberPageTour('home');
+      }
+      setGuideEntry('welcome');
+    } else if (!pageToursOffered.current.has(tourPage) && !hasSeenPageTour(tourPage)) {
+      openPageTour(tourPage);
+    }
+  }, [activeFlow, guideEntry, homeLoadStatus, isAccountOpen, isCreateWorkspaceOpen, isJoinWorkspaceOpen,
+    isObjectTypeBuilderOpen, isObjectTypeManagerOpen, isSearchOpen, isSettingsOpen, openPageTour,
+    taskCenterOpen, tourPage]);
+
+  const activeWorkspaceRef = useRef<WorkspaceSummary | null>(null);
+  const workspaceSelectionRevision = useRef(0);
+  const workspaceListRequest = useRef(0);
+  const accountCheckRequest = useRef(0);
+
+  const updateActiveWorkspace = useCallback((workspace: WorkspaceSummary | null) => {
+    if (workspace?.workspaceId !== activeWorkspaceRef.current?.workspaceId) {
+      workspaceSelectionRevision.current += 1;
+    }
+    activeWorkspaceRef.current = workspace;
+    setActiveWorkspace(workspace);
+  }, []);
+
+  const applyWorkspaceList = useCallback((list: WorkspaceListResponse, targetId: string | null) => {
+    setWorkspaces(list.workspaces);
+    setIncomingTransfers(list.incomingTransfers);
+    if (targetId) {
+      const match = list.workspaces.find((w) => w.workspaceId === targetId);
+      if (match) {
+        updateActiveWorkspace(match);
+        setIsSearchOpen(false);
+      } else {
+        updateActiveWorkspace(null);
+        void setActiveWorkspaceId(null);
+        setWorkspaceNotice('You no longer have access to that workspace. Returned to Personal.');
+      }
+    }
+  }, [updateActiveWorkspace]);
+
+  const refreshWorkspaces = useCallback(async (restoreSavedActive = false) => {
+    if (!isTauri || typeof invoke !== 'function') return;
+    const request = ++workspaceListRequest.current;
+    const selectionRevision = workspaceSelectionRevision.current;
+    setWorkspacesLoading(true);
+    try {
+      const savedId = restoreSavedActive
+        ? await getActiveWorkspaceId().catch(() => null)
+        : activeWorkspaceRef.current?.workspaceId ?? null;
+      const res = await listWorkspaces();
+      if (request !== workspaceListRequest.current) return;
+      if (res.outcome === 'ok') {
+        applyWorkspaceList(
+          res.data,
+          selectionRevision === workspaceSelectionRevision.current ? savedId : null,
+        );
+      } else if (res.outcome === 'sessionUpdated') {
+        setGoogleSession(res.session);
+        if (res.session.status === 'signedOut' || res.session.status === 'unavailable') {
+          setWorkspaces([]);
+          setIncomingTransfers([]);
+          updateActiveWorkspace(null);
+          void setActiveWorkspaceId(null);
+        }
+      }
+    } catch {
+      // Offline / unreachable: Personal remains usable offline without clearing saved state.
+    } finally {
+      if (request === workspaceListRequest.current) setWorkspacesLoading(false);
+    }
+  }, [applyWorkspaceList, updateActiveWorkspace]);
+
+  const googleSessionRef = useRef<GoogleSession | null>(null);
+  googleSessionRef.current = googleSession;
+
+  const handleSessionUpdated = useCallback((nextSession: GoogleSession) => {
+    accountCheckRequest.current += 1;
+    const prevUid =
+      googleSessionRef.current?.status === 'signedIn' ? googleSessionRef.current.uid : undefined;
+    const nextUid = nextSession.status === 'signedIn' ? nextSession.uid : undefined;
+    setGoogleSession(nextSession);
+    if (nextSession.status === 'signedIn') {
+      if (prevUid && nextUid && prevUid !== nextUid) {
+        workspaceSelectionRevision.current += 1;
+        setWorkspaces([]);
+        setIncomingTransfers([]);
+        updateActiveWorkspace(null);
+        setTeamWorkspaceTab('overview');
+        void setActiveWorkspaceId(null);
+      }
+      void refreshWorkspaces(false);
+    } else if (nextSession.status === 'signedOut' || nextSession.status === 'unavailable') {
+      workspaceListRequest.current += 1;
+      setWorkspacesLoading(false);
+      setWorkspaces([]);
+      setIncomingTransfers([]);
+      if (activeWorkspaceRef.current) {
+        updateActiveWorkspace(null);
+        void setActiveWorkspaceId(null);
+        setWorkspaceNotice('Signed out. Returned to Personal workspace.');
+      }
+    }
+  }, [refreshWorkspaces, updateActiveWorkspace]);
+
+  const selectPersonalWorkspace = useCallback((noticeText?: string) => {
+    void navigate(() => {
+      workspaceSelectionRevision.current += 1;
+      updateActiveWorkspace(null);
+      setTeamWorkspaceTab('overview');
+      if (noticeText) setWorkspaceNotice(noticeText);
+      else setWorkspaceNotice('');
+      void setActiveWorkspaceId(null);
+    });
+  }, [updateActiveWorkspace]);
+
+  const selectTeamWorkspace = useCallback((ws: WorkspaceSummary, tab: TeamWorkspaceTab = 'overview') => {
+    void navigate(() => {
+      setWorkspaceNotice('');
+      updateActiveWorkspace(ws);
+      setIsSearchOpen(false);
+      setTeamWorkspaceTab(tab);
+      void setActiveWorkspaceId(ws.workspaceId);
+    });
+  }, [updateActiveWorkspace]);
+
+  useEffect(() => {
+    const checkAccount = () => {
+      if (!isTauri || typeof invoke !== 'function') return;
+      const request = ++accountCheckRequest.current;
+      void Promise.resolve(invoke<GoogleSession>('cmd_get_google_session'))
+        .then((status) => {
+          if (!status || request !== accountCheckRequest.current) return;
+          setGoogleSession(status);
+          if (status.status === 'signedIn') {
+            void refreshWorkspaces(true);
+          } else if (status.status === 'signedOut' || status.status === 'unavailable') {
+            workspaceListRequest.current += 1;
+            setWorkspacesLoading(false);
+            setWorkspaces([]);
+            setIncomingTransfers([]);
+            updateActiveWorkspace(null);
+          }
+        })
+        .catch(() => {});
+    };
+    checkAccount();
+    window.addEventListener('online', checkAccount);
+    return () => {
+      accountCheckRequest.current += 1;
+      workspaceListRequest.current += 1;
+      window.removeEventListener('online', checkAccount);
+    };
+  }, [refreshWorkspaces, updateActiveWorkspace]);
 
   const loadState = async () => {
     try {
@@ -240,6 +465,7 @@ const WorkspaceApp: React.FC = () => {
     // Keydown shortcut: Cmd+K / Ctrl+K opens search unless another modal dialog owns focus
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (activeWorkspaceRef.current) return;
         const activeModal = document.querySelector('[role="dialog"][aria-modal="true"]');
         if (activeModal && activeModal.getAttribute('data-testid') !== 'search-workspace-dialog') {
           return;
@@ -251,26 +477,66 @@ const WorkspaceApp: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
 
+    const handleBeforeUnload = () => {
+      if (beforeLeaveRef.current) {
+        void beforeLeaveRef.current();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     // Listen to live Tauri core events if running inside desktop app
     if (isTauri) {
+      let cancelled = false;
       let unlistenFn: (() => void) | undefined;
-      import('@tauri-apps/api/event').then(({ listen }) => {
-        listen('sthira://core-event', (event) => {
-          console.log('Received core event:', event);
-          loadState();
-        }).then((unlisten) => {
-          unlistenFn = unlisten;
-        });
-      });
+      let unlistenCloseFn: (() => void) | undefined;
+      import('@tauri-apps/api/event')
+        .then(({ listen }) => {
+          listen('sthira://core-event', (event) => {
+            console.log('Received core event:', event);
+            loadState();
+          })
+            .then((unlisten) => {
+              if (cancelled) unlisten();
+              else unlistenFn = unlisten;
+            })
+            .catch(() => {});
+          listen('sthira:close-requested', () => {
+            void (async () => {
+              try {
+                const ok = !beforeLeaveRef.current || (await beforeLeaveRef.current());
+                if (ok) {
+                  await Promise.resolve(invoke('cmd_confirm_window_close')).catch(() => {});
+                }
+              } catch {
+                // Keep window open if draft flush fails before confirming close.
+              }
+            })();
+          })
+            .then((unlisten) => {
+              if (cancelled) {
+                unlisten();
+                return;
+              }
+              unlistenCloseFn = unlisten;
+              void Promise.resolve(invoke('cmd_register_close_guard', { ready: true })).catch(() => {});
+            })
+            .catch(() => {});
+        })
+        .catch(() => {});
 
       return () => {
+        cancelled = true;
         window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+        void Promise.resolve(invoke('cmd_register_close_guard', { ready: false })).catch(() => {});
         if (unlistenFn) unlistenFn();
+        if (unlistenCloseFn) unlistenCloseFn();
       };
     }
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, []);
 
@@ -286,22 +552,24 @@ const WorkspaceApp: React.FC = () => {
     });
   };
 
-  const handleOpenArtifact = (artifactId: string, projectId?: string | null, inNewTab?: boolean, returnProjectId: string | null = null) => {
+  const handleOpenArtifact = (artifactId: string, projectId?: string | null, inNewTab?: boolean, returnProjectId: string | null = null,
+    returnCanvas?: { canvasId: string; projectId?: string; returnProjectId: string | null }) => {
     const newTab = inNewTab ?? (newTabIntent.current || searchNewTab.current);
     searchNewTab.current = false;
     const recent = homeState.recent_items.find(item => item.artifact_id === artifactId);
     const project = projectId !== undefined ? projectId : null;
     void navigate(() => {
+      canvasReturnRef.current = returnCanvas ? { artifactId, ...returnCanvas } : null;
       const next = openDocumentTab(documentTabs.stateRef.current, {id:artifactId,title:recent?.title || 'Loading page…',projectId:project,returnProjectId,scrollTop:0},newTab);
       documentTabs.update(next);
       applyTab(next.tabs.find(tab => tab.id === artifactId)!);
     });
   };
 
-  const handleOpenCanvas = (canvasId?: string, projectId?: string) => {
+  const handleOpenCanvas = (canvasId?: string, projectId?: string, returnProjectId: string | null = null) => {
     void navigate(() => {
-    setProjectReturnId(null);
-    if (projectId) setActiveProjectId(projectId);
+    setProjectReturnId(returnProjectId);
+    setActiveProjectId(projectId ?? null);
     setActiveCanvasId(canvasId || null);
     setCurrentView('canvas');
     });
@@ -377,6 +645,13 @@ const WorkspaceApp: React.FC = () => {
     if (workflows.loading || workflows.error || !workflows.settings.research.enabled) { setSettingsSection('workflows'); setIsSettingsOpen(true); return null; }
     modelId ||= workflows.settings.research.model_id;
     if (!workflows.settings.research.templates_enabled) templateId = null;
+    if (templateId && templateId !== '__none__') {
+      const template = await getSynthesisTemplate(templateId).catch(() => null);
+      if (!template || template.archived_at !== null || template.target_mode !== 'research') {
+        window.alert('The selected Research template is missing, archived, or incompatible. Choose another template or No template. Your inquiry is preserved.');
+        return null;
+      }
+    }
 
     const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
     let artifactId: string | null = null;
@@ -465,6 +740,13 @@ const WorkspaceApp: React.FC = () => {
     if (workflows.loading || workflows.error || !workflows.settings.plan.enabled) { setSettingsSection('workflows'); setIsSettingsOpen(true); return null; }
     modelId ||= workflows.settings.plan.model_id;
     if (!workflows.settings.plan.templates_enabled) templateId = null;
+    if (templateId && templateId !== '__none__') {
+      const template = await getSynthesisTemplate(templateId).catch(() => null);
+      if (!template || template.archived_at !== null || template.target_mode !== 'plan') {
+        window.alert('The selected Plan template is missing, archived, or incompatible. Choose another template or No template. Your goal is preserved.');
+        return null;
+      }
+    }
 
     const targetProject = projectId !== undefined ? projectId : activeProjectId || null;
     const title = `Plan: ${g.length > 60 ? `${g.slice(0, 60)}...` : g}`;
@@ -491,9 +773,10 @@ const WorkspaceApp: React.FC = () => {
         refreshToken: 0,
       });
 
-      // 2. Stream tokens into the page as they arrive.
+      // 2. Stream tokens into the page as they arrive. The receipt captures the
+      // dispatch-time template/model decision and is saved with the completed page.
       let accumulated = '';
-      await streamAdaptiveRun(g, 'plan', modelId, (chunk) => {
+      const generation = await streamAdaptiveRun(g, 'plan', modelId, (chunk) => {
         if (chunk.type !== 'text_token') return;
         accumulated += chunk.payload;
         const live = accumulated;
@@ -508,7 +791,7 @@ const WorkspaceApp: React.FC = () => {
       if (!accumulated.trim()) throw new Error('The selected model returned no plan. Your goal remains saved as a draft.');
       const body = accumulated.trim().startsWith('#') ? accumulated.trim() : `# ${title}\n\n${accumulated.trim()}`;
 
-      await saveGeneratedArtifact(artifactId, body, title, targetProject);
+      await saveGeneratedArtifact(artifactId, body, title, targetProject, generation);
 
       setDocumentRun((prev) =>
         prev && prev.artifactId === artifactId
@@ -590,6 +873,8 @@ const WorkspaceApp: React.FC = () => {
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAccount={() => setIsAccountOpen(true)}
+        onOpenHelp={() => { setHelpArticle(undefined); setGuideEntry('help'); }}
+        onOpenTour={() => openPageTour(tourPage)}
         isCollapsed={isLeftSidebarCollapsed}
         onToggleCollapse={() => setIsLeftSidebarCollapsed((prev) => !prev)}
         refreshTrigger={treeRefreshTrigger}
@@ -599,6 +884,18 @@ const WorkspaceApp: React.FC = () => {
           setRealtimeTitleUpdate({ id, title: newTitle });
           loadState();
         }}
+        activeWorkspace={activeWorkspace}
+        workspaces={workspaces}
+        incomingTransfers={incomingTransfers}
+        googleSession={googleSession}
+        workspacesLoading={workspacesLoading}
+        teamWorkspaceTab={teamWorkspaceTab}
+        onSelectTeamTab={(tab) => { void navigate(() => setTeamWorkspaceTab(tab)); }}
+        onSelectPersonal={() => selectPersonalWorkspace()}
+        onSelectWorkspace={(ws) => selectTeamWorkspace(ws, 'overview')}
+        onOpenCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
+        onOpenJoinWorkspace={() => setIsJoinWorkspaceOpen(true)}
+        onRefreshWorkspaces={() => void refreshWorkspaces(false)}
       />
 
       {/* Main Content Area — the full-width center workspace. There is deliberately no
@@ -606,8 +903,65 @@ const WorkspaceApp: React.FC = () => {
           into this container. */}
       <main
         data-testid="center-workspace"
-        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'project' || currentView === 'graph' || currentView === 'canvas' ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
+        data-guide-target="current-screen"
+        className={`sthira-canvas flex-1 h-full min-w-0 ${currentView === 'focus' || currentView === 'project' || currentView === 'graph' || currentView === 'canvas' || activeWorkspace ? 'overflow-hidden' : 'overflow-y-auto'} flex flex-col relative`}
       >
+        {workspaceNotice && !activeWorkspace && (
+          <div
+            role="status"
+            className="mx-6 mt-3 rounded-xl border border-sthira-border bg-sthira-surface px-4 py-2.5 text-xs text-sthira-text flex items-center justify-between gap-2"
+          >
+            <span>{workspaceNotice}</span>
+            <button
+              type="button"
+              onClick={() => setWorkspaceNotice('')}
+              className="text-sthira-text-muted hover:text-sthira-text underline cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {activeWorkspace ? (
+          <TeamWorkspaceView
+            key={activeWorkspace.workspaceId}
+            workspace={activeWorkspace}
+            initialTab={teamWorkspaceTab}
+            currentUid={googleSession?.status === 'signedIn' ? (googleSession.uid ?? null) : null}
+            onTabChange={setTeamWorkspaceTab}
+            registerBeforeLeave={registerBeforeLeave}
+            onSelectPersonal={(noticeText) => {
+              if (activeWorkspaceRef.current?.workspaceId === activeWorkspace.workspaceId) {
+                selectPersonalWorkspace(noticeText);
+              }
+            }}
+            onWorkspaceUpdated={(updated) => {
+              if (activeWorkspaceRef.current?.workspaceId !== updated.workspaceId) return;
+              updateActiveWorkspace(updated);
+              setWorkspaces((prev) =>
+                prev.map((w) => (w.workspaceId === updated.workspaceId ? updated : w)),
+              );
+            }}
+            onAccessLost={(message, list) => {
+              if (activeWorkspaceRef.current?.workspaceId !== activeWorkspace.workspaceId) return;
+              workspaceListRequest.current += 1;
+              setWorkspacesLoading(false);
+              if (list) {
+                setWorkspaces(list.workspaces);
+                setIncomingTransfers(list.incomingTransfers);
+              } else {
+                setWorkspaces((prev) =>
+                  prev.filter((w) => w.workspaceId !== activeWorkspace.workspaceId),
+                );
+              }
+              updateActiveWorkspace(null);
+              void setActiveWorkspaceId(null);
+              setWorkspaceNotice(message);
+            }}
+            onSessionChange={handleSessionUpdated}
+            onRefreshList={() => refreshWorkspaces(false)}
+          />
+        ) : (
+        <>
         <DocumentTabs tabs={documentTabs.state.tabs} activeId={currentView === 'focus' ? documentTabs.state.activeId : null} onSelect={selectTab} onClose={closeTab} onMove={(id,offset) => documentTabs.update(previous => {
           const tabs=[...previous.tabs]; const index=tabs.findIndex(tab=>tab.id===id);const target=index+offset;
           if(index<0||target<0||target>=tabs.length)return previous;
@@ -659,7 +1013,7 @@ const WorkspaceApp: React.FC = () => {
           onBack={() => handleNavigateWorkspaceIndex('projects')}
           onOpenProject={handleOpenProject}
           onOpenArtifact={(id, pid) => handleOpenArtifact(id, pid, undefined, overviewProjectId)}
-          onOpenCanvas={(id, pid) => { handleOpenCanvas(id, pid); setProjectReturnId(overviewProjectId); }}
+          onOpenCanvas={(id, pid) => handleOpenCanvas(id, pid, overviewProjectId)}
           onWorkspaceMutated={loadState}
         />}
 
@@ -695,8 +1049,14 @@ const WorkspaceApp: React.FC = () => {
             }}
             projectId={activeProjectId || undefined}
             artifactId={activeArtifactId || undefined}
-            backLabel={projectReturnId ? 'Project' : 'Home'}
+            backLabel={canvasReturnRef.current?.artifactId === activeArtifactId ? 'Canvas' : projectReturnId ? 'Project' : 'Home'}
             onBack={async () => {
+              const origin = canvasReturnRef.current;
+              if (origin && origin.artifactId === activeArtifactId) {
+                handleOpenCanvas(origin.canvasId, origin.projectId, origin.returnProjectId);
+                await loadState();
+                return;
+              }
               if (projectReturnId) {
                 handleOpenProject(projectReturnId);
                 await loadState();
@@ -753,6 +1113,7 @@ const WorkspaceApp: React.FC = () => {
 
         {currentView === 'canvas' && (
           <CanvasView
+            key={activeCanvasId ?? activeProjectId ?? 'default'}
             canvasId={activeCanvasId || undefined}
             projectId={activeProjectId || undefined}
             onBack={() => {
@@ -760,7 +1121,11 @@ const WorkspaceApp: React.FC = () => {
               setCurrentView('home');
               setActiveArtifactId(null);
             }}
-            onOpenArtifact={(id) => { const origin = projectReturnId; handleOpenArtifact(id); setProjectReturnId(origin); }}
+            onOpenArtifact={(id, canvas) => handleOpenArtifact(id, undefined, false, projectReturnId, {
+              canvasId: canvas.id,
+              projectId: canvas.project_id ?? undefined,
+              returnProjectId: projectReturnId,
+            })}
           />
         )}
 
@@ -804,9 +1169,22 @@ const WorkspaceApp: React.FC = () => {
             }}
           />
         )}
+        </>
+        )}
       </main>
 
       <AgentTaskCenter open={taskCenterOpen} onClose={()=>setTaskCenterOpen(false)} onOpenRun={openAgentRun} onOpenDocument={id=>{setTaskCenterOpen(false);handleOpenArtifact(id);}} />
+      {guideEntry && <WorkspaceGuide key={guideEntry === 'tour' ? activePageTour : helpArticle ?? guideEntry}
+        entry={guideEntry} initialArticle={helpArticle}
+        initialTour={guideEntry === 'tour' ? pageTours[activePageTour] : undefined}
+        onClose={() => { setGuideEntry(null); setHelpArticle(undefined); }}
+        onOpenSettings={section => {
+          setGuideEntry(null);
+          setHelpArticle(undefined);
+          setSettingsSection(section);
+          setSettingsTabRequest(request => request + 1);
+          setIsSettingsOpen(true);
+        }} />}
       {/* Global Interactive Modals */}
       <SearchModal
         isOpen={isSearchOpen}
@@ -817,14 +1195,51 @@ const WorkspaceApp: React.FC = () => {
 
       <ModelSettingsModal
         initialTab={settingsSection}
+        tabRequest={settingsTabRequest}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        onOpenTour={() => openPageTour('settings')}
         onVaultMutated={loadState}
       />
 
       <AccountModal
         isOpen={isAccountOpen}
         onClose={() => setIsAccountOpen(false)}
+        onSessionChange={handleSessionUpdated}
+      />
+
+      <CreateWorkspaceModal
+        isOpen={isCreateWorkspaceOpen}
+        session={googleSession}
+        onSessionChange={handleSessionUpdated}
+        onClose={() => setIsCreateWorkspaceOpen(false)}
+        onOpenAccount={() => {
+          setIsCreateWorkspaceOpen(false);
+          setIsAccountOpen(true);
+        }}
+        onCreated={(ws) => {
+          setIsCreateWorkspaceOpen(false);
+          setWorkspaces((prev) => [ws, ...prev.filter((w) => w.workspaceId !== ws.workspaceId)]);
+          selectTeamWorkspace(ws, 'overview');
+          void refreshWorkspaces(false);
+        }}
+      />
+
+      <JoinWorkspaceModal
+        isOpen={isJoinWorkspaceOpen}
+        session={googleSession}
+        onSessionChange={handleSessionUpdated}
+        onClose={() => setIsJoinWorkspaceOpen(false)}
+        onOpenAccount={() => {
+          setIsJoinWorkspaceOpen(false);
+          setIsAccountOpen(true);
+        }}
+        onJoined={(ws) => {
+          setIsJoinWorkspaceOpen(false);
+          setWorkspaces((prev) => [ws, ...prev.filter((w) => w.workspaceId !== ws.workspaceId)]);
+          selectTeamWorkspace(ws, 'overview');
+          void refreshWorkspaces(false);
+        }}
       />
 
       <InteractiveFlowModal

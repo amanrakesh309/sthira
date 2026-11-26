@@ -19,9 +19,12 @@ import {
   Sun,
   Sprout,
   ArrowLeft,
+  LibraryBig,
+  Compass,
 } from 'lucide-react';
 import { AIModelsSettings } from './AIModelsSettings';
 import { WorkflowSettingsPanel } from './WorkflowSettingsPanel';
+import { TemplateLibraryManager } from './TemplateLibraryManager';
 import { ThemeToggle } from './ThemeToggle';
 import {
   getProviderCatalog,
@@ -37,14 +40,16 @@ import type {
   WebSearchResultItem,
 } from '../types/sthira';
 
-export type SettingsSection = 'models' | 'workflows' | 'search' | 'appearance' | 'vault';
+export type SettingsSection = 'models' | 'workflows' | 'templates' | 'search' | 'appearance' | 'vault';
 
 interface ModelSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onVaultMutated: () => void;
   onCatalogChanged?: () => void;
+  onOpenTour?: () => void;
   initialTab?: SettingsSection;
+  tabRequest?: number;
 }
 
 export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
@@ -52,7 +57,9 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   onClose,
   onVaultMutated,
   onCatalogChanged,
+  onOpenTour,
   initialTab,
+  tabRequest,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -114,7 +121,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   const [testErrorMap, setTestErrorMap] = useState<Record<string, string | null>>({});
   const testRequestSeqRef = useRef<Record<string, number>>({});
 
-  useEffect(() => { if (isOpen && initialTab) setActiveTab(initialTab); }, [initialTab, isOpen]);
+  useEffect(() => { if (isOpen && initialTab) setActiveTab(initialTab); }, [initialTab, isOpen, tabRequest]);
 
   const fetchCatalog = async () => {
     try {
@@ -251,6 +258,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.querySelector<HTMLButtonElement>('.settings-close-btn')?.focus();
     const keyboard = (event: KeyboardEvent) => {
+      if (document.activeElement?.closest('dialog[open]')) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(); return; }
       if (event.key !== 'Tab') return;
       const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]') || []).filter(element => {
@@ -325,12 +333,15 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             <div className="settings-title-section">
               <div className="settings-amber-rule" />
               <h2 id="workspace-settings-title" className="settings-title">Settings</h2>
-              <p className="settings-subtitle">
-                Make room for the way you work.
-              </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {onOpenTour && (
+              <button type="button" aria-label="Show Settings tour" title="Show Settings tour"
+                className="context-info-button" onClick={onOpenTour}>
+                <Compass size={16} aria-hidden="true" />
+              </button>
+            )}
             <div className="settings-key-hint hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-md bg-sthira-surface-muted border border-sthira-border text-[11px] text-sthira-text-muted font-mono">
               <kbd>Esc</kbd>
               <span>to exit</span>
@@ -367,13 +378,13 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             <p className="settings-navigation-label">Workspace</p>
             {([
               ['models', 'AI & Models', Server], ['workflows', 'Workflows', Sparkles],
-              ['search', 'Web Search', Globe], ['appearance', 'Appearance', Sun], ['vault', 'Workspace & Data', Layers],
-            ] as const).map(([id, label, Icon]) => <button key={id} type="button" data-settings-section={id} aria-current={activeTab === id ? 'page' : undefined} className={activeTab === id ? 'active' : ''} onClick={() => setActiveTab(id)}><Icon size={17} /><span>{label}</span></button>)}
-            <p className="settings-navigation-note">Your notes stay available, with or without AI.</p>
+              ['templates', 'Templates', LibraryBig], ['search', 'Web Search', Globe], ['appearance', 'Appearance', Sun], ['vault', 'Workspace & Data', Layers],
+            ] as const).map(([id, label, Icon]) => <button key={id} type="button" data-settings-section={id} data-guide-target={`${id}-settings`} aria-current={activeTab === id ? 'page' : undefined} className={activeTab === id ? 'active' : ''} onClick={() => setActiveTab(id)}><Icon size={17} /><span>{label}</span></button>)}
           </nav>
 
           <div className="settings-content-col">
             {activeTab === 'workflows' && <WorkflowSettingsPanel providers={providers} onNavigateTab={(tab) => setActiveTab(tab as SettingsSection)} />}
+            {activeTab === 'templates' && <TemplateLibraryManager />}
             {activeTab === 'models' && <AIModelsSettings providers={providers} loading={loading} reload={fetchCatalog} onCatalogChanged={onCatalogChanged} />}
 
           {/* 4. WEB SEARCH PROVIDERS TAB */}
@@ -613,9 +624,6 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
           <div className="space-y-6 animate-in fade-in duration-100">
             <div className="settings-section-header">
               <h3 className="settings-section-title">Appearance</h3>
-              <p className="settings-section-sub">
-                Choose a theme or follow your system appearance.
-              </p>
             </div>
 
             <div className="p-5 rounded-2xl bg-sthira-surface border border-sthira-border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
@@ -623,9 +631,6 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
                 <span className="font-semibold text-sthira-text text-sm block mb-1">
                   Interface Theme
                 </span>
-                <p className="text-xs text-sthira-text-muted max-w-md">
-                  Choose between tactile Warm Stone (Light), glare-free Deep Obsidian (Dark), or automatically follow your operating system appearance.
-                </p>
               </div>
               <div className="shrink-0">
                 <ThemeToggle variant="selector" />

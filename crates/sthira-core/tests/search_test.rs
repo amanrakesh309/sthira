@@ -266,6 +266,8 @@ async fn test_search_providers_db_seeding_and_caching() {
             "# Deterministic Invariants\n\nAll operations must execute without side effects."
                 .to_string(),
         published_date: Some("2026-10-28".to_string()),
+        fetched_at: None,
+        from_cache: false,
     };
     {
         let writer = engine.db().writer();
@@ -279,6 +281,8 @@ async fn test_search_providers_db_seeding_and_caching() {
         .expect("Cache hit expected");
     assert_eq!(cached_hit.title, "Deterministic Invariants Spec");
     assert_eq!(cached_hit.url, test_url);
+    assert!(cached_hit.from_cache);
+    assert_eq!(cached_hit.fetched_at, Some(1_700_000_002));
     assert!(cached_hit
         .content_md
         .contains("All operations must execute without side effects."));
@@ -290,6 +294,8 @@ async fn test_search_providers_db_seeding_and_caching() {
         .expect("Scraper failed on cached doc");
     assert_eq!(fetched.title, "Deterministic Invariants Spec");
     assert_eq!(fetched.content_md, doc_to_cache.content_md);
+    assert!(fetched.from_cache);
+    assert_eq!(fetched.fetched_at, Some(1_700_000_002));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+import { HelpTopicButton } from './HelpTopicButton';
 import { useState } from 'react';
 import { ResumeSettingsPanel } from './ResumeSettingsPanel';
 import { useWorkflowSettings } from '../hooks/useWorkflowSettings';
@@ -9,8 +10,10 @@ import {
   type WorkflowId,
   type WorkflowSetting,
 } from '../api/workflowSettings';
+import { openTemplateManager } from '../api/synthesisTemplates';
 import type { ProviderEntry } from '../types/sthira';
-import { Sparkles, CheckCircle2, AlertTriangle, ArrowUpRight, ShieldCheck } from 'lucide-react';
+import { ContextInfo } from './ContextInfo';
+import { CheckCircle2, AlertTriangle, ArrowUpRight, ShieldCheck } from 'lucide-react';
 
 const workflows = [
   {
@@ -82,53 +85,17 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
 
   return (
     <section className="workflow-settings space-y-6">
-      <div className="settings-section-header">
-        <h3 className="settings-section-title">Workflows</h3>
-        <p className="settings-section-sub">
-          Choose how AI supports your work. Sthira is local-first: your notes are private and AI models never run in the background without explicit opt-in.
-        </p>
-      </div>
-
-      {/* Why Toggle & How It Works Guide Banner */}
-      <div className="workflow-guide-banner" data-testid="workflow-guide-banner">
-        <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
-          <div className="space-y-1">
-            <h4 className="flex items-center gap-2 text-sm font-semibold text-sthira-text">
-              <Sparkles className="w-4 h-4 text-sthira-primary shrink-0" />
-              <span>Why Toggle Workflows &amp; How They Work</span>
-            </h4>
-            <p className="text-xs text-sthira-text-muted leading-relaxed">
-              <strong>Local-first privacy:</strong> Sthira never calls AI models automatically. Toggling a workflow <strong>On</strong> unlocks that AI capability in the workspace (such as Explore &amp; Plan in the left sidebar). Toggling it <strong>Off</strong> guarantees that no external network requests or tokens are sent.
-            </p>
-          </div>
-          <button
-            type="button"
-            data-testid="btn-go-to-models-guide"
-            onClick={handleNavigateToModels}
-            className="shrink-0 px-3 py-1.5 rounded-lg border border-sthira-border bg-sthira-surface hover:bg-sthira-surface-muted text-xs font-semibold text-sthira-primary transition-colors cursor-pointer flex items-center gap-1.5 self-start"
-          >
-            <span>AI &amp; Models</span>
-            <ArrowUpRight className="w-3.5 h-3.5" />
-          </button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="context-info-heading">
+          <h3 className="settings-section-title">Workflows</h3>
+          <ContextInfo title="workflow setup">
+            <p>Connect an enabled model in AI &amp; Models. Turn on a workflow, then choose its model or use the workspace default.</p>
+            <p>Turning a workflow off stops new model requests from it. Saved pages and goals remain available.</p>
+          </ContextInfo>
         </div>
-
-        <div className="workflow-guide-steps">
-          <div className="workflow-guide-step">
-            <span className="text-[10px] font-bold text-sthira-primary tracking-wide uppercase">Step 1</span>
-            <strong>Connect a Provider</strong>
-            <p>Add and enable Ollama, OpenRouter, Anthropic, Gemini, or OpenAI in AI &amp; Models.</p>
-          </div>
-          <div className="workflow-guide-step">
-            <span className="text-[10px] font-bold text-sthira-primary tracking-wide uppercase">Step 2</span>
-            <strong>Toggle Workflow On</strong>
-            <p>Turn the switch On for workflows you want available in the left sidebar and input bar.</p>
-          </div>
-          <div className="workflow-guide-step">
-            <span className="text-[10px] font-bold text-sthira-primary tracking-wide uppercase">Step 3</span>
-            <strong>Assign Model</strong>
-            <p>Select a specific model or inherit your workspace default to achieve Ready status.</p>
-          </div>
-        </div>
+        <button type="button" data-testid="btn-go-to-models-guide" onClick={handleNavigateToModels} className="settings-btn-secondary">
+          AI &amp; Models <ArrowUpRight size={14} />
+        </button>
       </div>
 
       <div className="workflow-capture flex items-center gap-3 py-3 border-b border-sthira-border text-xs text-sthira-text-muted">
@@ -160,9 +127,7 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
           <article className="workflow-card" key={id} data-testid={`workflow-card-${id}`}>
             <div className="workflow-card-heading">
               <div>
-                <h4>{name}</h4>
-                <p>{description}</p>
-                <p className="text-xs text-sthira-text-subtle mt-0.5">{purpose}</p>
+                <div className="context-info-heading"><h4>{name}</h4><ContextInfo title={name}><p>{description}</p><p>{purpose}</p></ContextInfo></div>
               </div>
               <label className="workflow-switch">
                 <input
@@ -181,7 +146,7 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
               <div className="mt-3 pt-3 border-t border-sthira-border/60 flex items-center justify-between text-xs text-sthira-text-muted">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-sthira-text-subtle/50" />
-                  <span>{id === 'agent' ? 'Disabled · Saved goals remain available. Enable to start new work.' : <>Disabled · Turn switch On to make {name} accessible in the sidebar and workspace.</>}</span>
+                  <span>{id === 'agent' ? 'Off · Saved goals available' : 'Off'}</span>
                 </span>
                 <span className="text-[11px] font-medium text-sthira-text-subtle">No model calls</span>
               </div>
@@ -189,14 +154,14 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
               <div className="mt-3 pt-3 border-t border-sthira-border/60 flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium">
                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  <span>Ready · Active in sidebar &amp; tools using {model.display_name || model.model_identifier}.</span>
+                  <span>Ready · {model.display_name || model.model_identifier}</span>
                 </span>
               </div>
             ) : (
               <div className="mt-3 pt-3 border-t border-sthira-border/60 flex items-center justify-between gap-2 text-xs">
                 <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-medium">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  <span>Action needed: No enabled model is available. Connect a provider or select an active model below.</span>
+                  <span>Connect or select an enabled model. <HelpTopicButton article="troubleshooting" label="Setup help" /></span>
                 </span>
                 <button
                   type="button"
@@ -266,7 +231,16 @@ export function WorkflowSettingsPanel({ providers, onNavigateTab }: WorkflowSett
                     <span>
                       Use templates
                       <small>
-                        Choose a reusable structure when starting {name.toLowerCase()}. Template management is coming next.
+                        Lets this workflow choose a reusable structure. {name} stays available when templates are off and then uses no template.
+                        {' '}
+                        <button
+                          type="button"
+                          data-testid={`btn-manage-templates-${id}`}
+                          className="workflow-inline-link"
+                          onClick={() => openTemplateManager(id === 'research' ? 'research' : 'plan')}
+                        >
+                          Manage templates
+                        </button>
                       </small>
                     </span>
                   </label>

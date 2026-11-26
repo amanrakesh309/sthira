@@ -1,3 +1,4 @@
+mod account_sign_in;
 pub mod ai_setup;
 pub mod commands;
 pub mod connections;
@@ -10,11 +11,13 @@ pub mod resume;
 pub mod resume_pack;
 pub mod scheduler;
 pub mod seed;
+pub mod shared_drafts;
 pub mod shared_memory;
 pub mod state;
 pub mod workflow_settings;
 pub mod workspace_agent;
 pub mod workspace_session;
+mod workspaces;
 
 pub use commands::*;
 pub use connections::*;
@@ -25,10 +28,88 @@ pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
 pub use state::AppState;
 pub use workspace_session::handle_get_workspace_session_key;
 
+#[derive(Default)]
+pub struct CloseGuardState {
+    pub ready: std::sync::atomic::AtomicBool,
+    pub allowing: std::sync::atomic::AtomicBool,
+}
+
+#[tauri::command]
+fn cmd_register_close_guard(ready: bool, guard: tauri::State<'_, CloseGuardState>) {
+    guard
+        .ready
+        .store(ready, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn cmd_confirm_window_close<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    guard: tauri::State<'_, CloseGuardState>,
+) {
+    guard
+        .allowing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = window.close();
+}
+
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    let builder = builder
+        .manage(account_sign_in::SignInAttempt::default())
+        .manage(CloseGuardState::default());
     builder.invoke_handler(tauri::generate_handler![
+        cmd_register_close_guard,
+        cmd_confirm_window_close,
+        account_sign_in::cmd_get_google_session,
+        account_sign_in::cmd_google_sign_in,
+        account_sign_in::cmd_google_sign_out,
+        account_sign_in::cmd_cancel_google_sign_in,
+        account_sign_in::cmd_list_devices,
+        account_sign_in::cmd_revoke_device,
+        workspaces::cmd_get_active_workspace,
+        workspaces::cmd_set_active_workspace,
+        workspaces::cmd_list_workspaces,
+        workspaces::cmd_create_workspace,
+        workspaces::cmd_get_workspace,
+        workspaces::cmd_rename_workspace,
+        workspaces::cmd_create_invitation,
+        workspaces::cmd_revoke_invitation,
+        workspaces::cmd_replace_invitation,
+        workspaces::cmd_preview_invitation,
+        workspaces::cmd_accept_invitation,
+        workspaces::cmd_change_member_role,
+        workspaces::cmd_remove_member,
+        workspaces::cmd_leave_workspace,
+        workspaces::cmd_initiate_ownership_transfer,
+        workspaces::cmd_accept_ownership_transfer,
+        workspaces::cmd_cancel_ownership_transfer,
+        workspaces::cmd_list_shared_pages,
+        workspaces::cmd_create_shared_page,
+        workspaces::cmd_get_shared_page,
+        workspaces::cmd_list_shared_revisions,
+        workspaces::cmd_archive_shared_page,
+        workspaces::cmd_restore_shared_page,
+        workspaces::cmd_list_page_threads,
+        workspaces::cmd_create_page_thread,
+        workspaces::cmd_reply_page_thread,
+        workspaces::cmd_resolve_page_thread,
+        workspaces::cmd_reopen_page_thread,
+        workspaces::cmd_list_page_proposals,
+        workspaces::cmd_get_proposal,
+        workspaces::cmd_create_proposal,
+        workspaces::cmd_resubmit_proposal,
+        workspaces::cmd_withdraw_proposal,
+        workspaces::cmd_review_proposal,
+        workspaces::cmd_list_workspace_activity,
+        workspaces::cmd_get_shared_draft,
+        workspaces::cmd_save_shared_draft,
+        workspaces::cmd_delete_shared_draft,
         shared_memory::cmd_memory_action,
         migration::cmd_preview_migration,
+        migration::cmd_review_migration_selection,
+        migration::cmd_start_migration_guidance,
+        migration::cmd_get_migration_guidance,
+        migration::cmd_latest_migration_guidance,
+        migration::cmd_cancel_migration_guidance,
         migration::cmd_apply_migration,
         migration::cmd_list_migrations,
         migration::cmd_get_migration,
@@ -158,5 +239,14 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         commands::cmd_derive_artifact,
         commands::cmd_cancel_request,
         commands::cmd_list_synthesis_templates,
+        commands::cmd_get_synthesis_template,
+        commands::cmd_create_synthesis_template,
+        commands::cmd_update_synthesis_template,
+        commands::cmd_duplicate_synthesis_template,
+        commands::cmd_set_synthesis_template_default,
+        commands::cmd_clear_synthesis_template_default,
+        commands::cmd_archive_synthesis_template,
+        commands::cmd_restore_synthesis_template,
+        commands::cmd_delete_synthesis_template,
     ])
 }

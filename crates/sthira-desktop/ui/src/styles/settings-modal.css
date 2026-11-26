@@ -7,12 +7,6 @@
 .settings-navigation button.active { background: var(--sthira-primary-tint); color: var(--sthira-primary); font-weight: 600; }
 .settings-navigation-note { margin: 32px 12px 0; max-width: 180px; color: var(--sthira-text-muted); font-size: 12px; line-height: 1.6; }
 .workflow-settings { max-width: 840px; }
-.workflow-guide-banner { margin-top: 18px; padding: 18px 20px; background: var(--sthira-surface-muted); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md); font-size: 13px; line-height: 1.6; }
-.workflow-guide-banner h4 { font-size: 14px; font-weight: 600; margin: 0 0 6px; color: var(--sthira-text); }
-.workflow-guide-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px; }
-.workflow-guide-step { padding: 12px 14px; background: var(--sthira-surface); border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-sm); }
-.workflow-guide-step strong { display: block; font-size: 12px; color: var(--sthira-text); margin: 3px 0 2px; }
-.workflow-guide-step p { font-size: 11px; color: var(--sthira-text-muted); margin: 0; line-height: 1.45; }
 .workflow-capture { display: flex; gap: 16px; align-items: baseline; margin-top: 24px; padding: 16px 0; border-bottom: 1px solid var(--sthira-border); font-size: 13px; }
 .workflow-capture span, .workflow-card p { color: var(--sthira-text-muted); }
 .workflow-save-status { min-height: 24px; padding: 8px 0; color: var(--sthira-text-muted); font-size: 12px; }

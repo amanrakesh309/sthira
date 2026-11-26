@@ -131,6 +131,9 @@ describe('Wave B UI Regressions (B3 Dialogs, Tokens & Shortcuts)', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    const welcome = await screen.findByRole('dialog', { name: 'Welcome to Sthira' });
+    await user.click(within(welcome).getByRole('button', { name: 'Skip' }));
+
     const newTypeBtn = await screen.findByTestId('btn-new-custom-object-type');
     await user.click(newTypeBtn);
 

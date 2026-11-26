@@ -245,6 +245,15 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
         await new Promise<void>((resolve) => {
           finishStream = resolve;
         });
+        return {
+          generation_key: 'plan-generation-test',
+          workflow: 'plan',
+          template_mode: 'explicit',
+          template: { id: 'plan-template', name: 'Launch Plan', target_mode: 'plan', version: 3, skeleton_md: '# {{title}}', guidance: 'Keep it evidence-led.' },
+          model_id: 'model-a',
+          model_name: 'Configured model',
+          provider_name: 'Configured connection',
+        };
       }
     );
 
@@ -288,7 +297,8 @@ describe('Phase 20: research & plan stream into the full-width center workspace'
         PLAN_ARTIFACT_ID,
         expect.stringContaining('Ship the shell refactor.'),
         `Plan: ${GOAL}`,
-        null
+        null,
+        expect.objectContaining({ generation_key: 'plan-generation-test', template_mode: 'explicit', template: expect.objectContaining({ id: 'plan-template', version: 3 }) })
       );
     });
   });

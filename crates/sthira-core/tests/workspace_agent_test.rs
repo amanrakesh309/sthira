@@ -27,6 +27,11 @@ fn goal(project: Option<&str>) -> AgentGoal {
         project_id: project.map(str::to_owned),
         workspace_memory: false,
         model_id: "fixture-model".into(),
+        allow_web: false,
+        research_template_mode: None,
+        research_template_id: None,
+        plan_template_mode: None,
+        plan_template_id: None,
     }
 }
 async fn request(socket: &mut tokio::net::TcpStream) -> Value {
@@ -374,7 +379,7 @@ fn restart_marks_unfinished_runs_and_disabled_or_missing_models_never_dispatch()
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        30
     );
 }
 #[tokio::test]

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight, ArrowUpRight, BookOpen, ChevronDown, FileText, Folder,
-  FolderPlus, LayoutGrid, Plus, Search, SlidersHorizontal, Sparkles,
+  FolderPlus, LayoutGrid, Plus, Search, SlidersHorizontal,
 } from 'lucide-react';
 import { UniversalInputBar } from './UniversalInputBar';
 import { Button } from './ui';
@@ -107,12 +107,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
       <div className="home-content">
         <section className="home-hero" aria-labelledby="home-title">
-          <p className="home-eyebrow">Welcome to Sthira</p>
           <h1 id="home-title">Make room to think.</h1>
-          <p className="home-subtitle">Your knowledge, projects and ideas in one place.</p>
         </section>
 
-        <section aria-label="Universal input">
+        <section aria-label="Universal input" data-guide-target="capture">
           <UniversalInputBar onProjectSelect={onOpenProject} onOpenArtifact={onOpenArtifact}
             onRefresh={onRefresh} onOpenFlow={onOpenFlow} onOpenSettings={onOpenSettings}
             projects={homeState.projects} onStartResearch={onStartResearch} onStartPlan={onStartPlan} />
@@ -128,7 +126,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
         <section aria-labelledby="home-projects-title" aria-busy={loadStatus === 'loading'}>
           <div className="home-section-heading">
-            <h2 id="home-projects-title">Your projects</h2>
+            <h2 data-guide-target="projects" id="home-projects-title">Your projects</h2>
             {homeState.projects.length > 0 && (
               <button type="button" data-testid="home-view-all-projects" className="home-text-action"
                 onClick={() => onNavigateWorkspaceIndex?.('projects')}>View all projects <ArrowRight size={16} /></button>
@@ -150,7 +148,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     </span>
                     <ArrowUpRight className="home-project-arrow" size={16} aria-hidden="true" />
                   </span>
-                  <span className="home-project-description">{project.purpose || 'Open this project to review its pages and notes.'}</span>
+                  {project.purpose && <span className="home-project-description">{project.purpose}</span>}
                 </button>
               ))}
             </div>
@@ -165,7 +163,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
         <section aria-labelledby="home-resume-title">
           <div className="home-section-heading">
-            <h2 id="home-resume-title">Pick up where you left off</h2>
+            <h2 data-guide-target="resume" id="home-resume-title">Pick up where you left off</h2>
             {recentItems.length > 0 && (
               <button type="button" className="home-text-action" onClick={() => onNavigateWorkspaceIndex?.('notes')}>View all <ArrowRight size={16} /></button>
             )}
@@ -180,7 +178,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <span className="home-resume-icon">{isCanvas ? <LayoutGrid size={20} /> : <FileText size={20} strokeWidth={1.5} />}</span>
                     <span className="home-resume-copy">
                       <span className="home-card-title" title={item.title}>{item.title}</span>
-                      <span className="home-card-meta">{item.subtitle || (isCanvas ? 'Open your saved canvas.' : 'Open your saved work to continue.')}</span>
+                      {item.subtitle && <span className="home-card-meta">{item.subtitle}</span>}
                     </span>
                     <span className="home-continue"><ArrowRight size={15} /> {isCanvas ? 'Open' : 'Continue'}</span>
                     <span className="home-resume-date">{formatDate(item.timestamp)}</span>
@@ -189,13 +187,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
               })}
             </div>
           ) : loadStatus === 'ready' && (
-            <div className="home-empty-resume"><FileText size={20} /><p>Your recent documents and canvases will appear here. There’s room for your next idea.</p></div>
+            <div className="home-empty-resume"><FileText size={20} /><p>Your recent documents and canvases will appear here.</p></div>
           )}
         </section>
 
-        {homeState.projects.length === 0 && recentItems.length === 0 && loadStatus === 'ready' && (
-          <p className="home-start-hint"><Sparkles size={16} /> Start with a thought. Build on it at your own pace.</p>
-        )}
       </div>
     </div>
   );

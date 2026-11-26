@@ -30,6 +30,17 @@ pub fn cmd_create_agent_run(
     goal.model_id =
         crate::workflow_settings::workflow_model(&state.engine, "agent", Some(goal.model_id))?
             .ok_or("Choose a model.")?;
+    if goal.allow_web {
+        let reader = state.engine.db().reader().map_err(|e| e.to_string())?;
+        let configured = sthira_core::db::search_repo::get_default_search_provider(&reader)
+            .map_err(|e| e.to_string())?;
+        if configured.is_none() {
+            return Err(
+                "Web research is allowed, but no enabled search provider is configured. Configure one in Settings → Web Search or turn web research off."
+                    .into(),
+            );
+        }
+    }
     state
         .engine
         .create_agent_run(goal)

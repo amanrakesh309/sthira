@@ -85,6 +85,8 @@ fn seed_scrape_cache(engine: &Engine) {
                 title: title.to_string(),
                 content_md: body.to_string(),
                 published_date: None,
+                fetched_at: None,
+                from_cache: false,
             },
             now,
         )

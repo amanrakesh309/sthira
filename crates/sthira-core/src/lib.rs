@@ -32,7 +32,9 @@ pub use models::scheduled_topics::{
     format_hhmm, is_topic_due, iso_weekday_of, most_recent_scheduled_instant,
     next_scheduled_instant, parse_hhmm, ScheduledTopic, ScheduledTopicRun, TopicCadence, TopicType,
 };
-pub use models::synthesis_templates::SynthesisTemplate;
+pub use models::synthesis_templates::{
+    SynthesisTemplate, SynthesisTemplateDraft, SynthesisTemplateSnapshot,
+};
 pub use search::{
     build_search_provider, scraper, ScrapedWebDocument, SearchError, SearchErrorKind,
     SearchProvider, SearchProviderEntry, SearchResultItem,
@@ -357,7 +359,8 @@ impl Engine {
             if recover {
                 let tx = writer.transaction()?;
                 tx.execute("UPDATE document_conversation_turns SET error='The app stopped before this request finished. Send a follow-up to continue.',proposal_state='dismissed' WHERE reply IS NULL AND id IN (SELECT document_turn_id FROM agent_runs WHERE status IN ('queued','running'))",[])?;
-                tx.execute("UPDATE agent_runs SET revision=revision+1,status='interrupted',error='The app stopped before this run finished. Start a new run to continue.',updated_at=?1 WHERE status IN ('queued','running')", [now_ms])?;
+                tx.execute("UPDATE agent_runs SET revision=revision+1,status='interrupted',error='The app stopped before this run finished. Start a new run to continue.',progress_stage='interrupted',progress_message='Interrupted when the app stopped. Start a new run to continue.',updated_at=?1 WHERE status IN ('queued','running')", [now_ms])?;
+                tx.execute("UPDATE migration_guidance SET status='interrupted',error='The app stopped. Request new guidance to continue.',updated_at=?1 WHERE status IN ('queued','running')", [now_ms])?;
                 tx.commit()?;
             }
             if recover {
@@ -690,6 +693,7 @@ impl Engine {
         source_url: Option<&str>,
         target_project_id: Option<&str>,
         agent_step_id: Option<&str>,
+        before_commit: impl FnOnce(&rusqlite::Connection, &str) -> Result<(), CoreError>,
     ) -> Result<(Artifact, Option<String>), CoreError> {
         let now_ms = self.clock.now_ms();
         let artifact_id = uuid::Uuid::new_v4().to_string();
@@ -734,6 +738,7 @@ impl Engine {
                 Actor::User
             },
         )?;
+        before_commit(&tx, &artifact_id)?;
         tx.commit()?;
         drop(writer);
 
@@ -773,6 +778,7 @@ impl Engine {
             source_url,
             None,
             None,
+            |_, _| Ok(()),
         )?;
         Ok(artifact)
     }
@@ -794,6 +800,7 @@ impl Engine {
             source_url,
             target_project_id,
             None,
+            |_, _| Ok(()),
         )?;
         let mirror_synced = mirror_sync_error.is_none();
         Ok(SaveArtifactOutcome {
@@ -850,6 +857,38 @@ impl Engine {
         cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
         agent_step_id: Option<&str>,
     ) -> Result<Artifact, CoreError> {
+        self.create_derived_artifact_for_step(
+            artifact_type,
+            authorship,
+            title,
+            body,
+            source_url,
+            derived_from_artifact_id,
+            derivation_type,
+            target_project_id,
+            cancel_token,
+            agent_step_id,
+            "propose_derive",
+        )
+    }
+
+    /// Same lineage-preserving creation, but with an explicit reviewed-proposal kind so a
+    /// reviewed Plan proposal can create a derived page from an accepted research page.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_derived_artifact_for_step(
+        &self,
+        artifact_type: ArtifactType,
+        authorship: Authorship,
+        title: Option<&str>,
+        body: &str,
+        source_url: Option<&str>,
+        derived_from_artifact_id: Option<&str>,
+        derivation_type: Option<&str>,
+        target_project_id: Option<&str>,
+        cancel_token: Option<&crate::llm::lifecycle::CancellationToken>,
+        agent_step_id: Option<&str>,
+        agent_step_kind: &str,
+    ) -> Result<Artifact, CoreError> {
         let mut writer = self.db.writer();
 
         if let Some(token) = cancel_token {
@@ -890,7 +929,7 @@ impl Engine {
             crate::workspace_agent::claim_workflow_review(
                 &tx,
                 step,
-                "propose_derive",
+                agent_step_kind,
                 Some(&artifact_id),
             )?;
         }
@@ -1651,6 +1690,94 @@ impl Engine {
         Ok(canvas_id)
     }
 
+    fn require_active_canvas(
+        conn: &rusqlite::Connection,
+        canvas_id: &str,
+    ) -> Result<(), CoreError> {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM canvases c LEFT JOIN projects p ON p.id = c.project_id
+                WHERE c.id = ?1 AND (c.project_id IS NULL OR (p.id IS NOT NULL AND p.deleted_at IS NULL))
+            );",
+            params![canvas_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(CoreError::NotFound("This canvas is unavailable.".into()));
+        }
+        Ok(())
+    }
+
+    pub fn create_canvas_note(
+        &self,
+        canvas_id: &str,
+        placeholder_id: Option<&str>,
+        x: f64,
+        y: f64,
+    ) -> Result<Artifact, CoreError> {
+        let (artifact, _) = self.create_artifact_inner(
+            ArtifactType::Note,
+            Authorship::User,
+            Some("Untitled Note"),
+            "",
+            None,
+            None,
+            None,
+            |tx, artifact_id| {
+                Self::require_active_canvas(tx, canvas_id)?;
+                if let Some(item_id) = placeholder_id {
+                    let changed = tx.execute(
+                        "UPDATE canvas_items SET item_kind = 'artifact', artifact_id = ?3
+                         WHERE canvas_id = ?1 AND item_id = ?2 AND item_kind = 'text'
+                           AND artifact_id IS NULL;",
+                        params![canvas_id, item_id, artifact_id],
+                    )?;
+                    if changed == 0 {
+                        return Err(CoreError::NotFound("This note card is unavailable. Reopen the canvas to refresh it.".into()));
+                    }
+                } else {
+                    tx.execute(
+                        "INSERT INTO canvas_items (canvas_id, item_id, item_kind, artifact_id, x, y, w, h)
+                         VALUES (?1, ?2, 'artifact', ?2, ?3, ?4, 280, 140);",
+                        params![canvas_id, artifact_id, x, y],
+                    )?;
+                }
+                Ok(())
+            },
+        )?;
+        self.emit_event(CoreEvent::ArtifactChanged {
+            id: artifact.id.clone(),
+        });
+        Ok(artifact)
+    }
+
+    pub fn place_page_on_canvas(
+        &self,
+        canvas_id: &str,
+        artifact_id: &str,
+        x: f64,
+        y: f64,
+    ) -> Result<(), CoreError> {
+        let writer = self.db.writer();
+        Self::require_active_canvas(&writer, canvas_id)?;
+        Self::get_artifact_tx(&writer, artifact_id)?;
+        writer.execute(
+            "INSERT INTO canvas_items (canvas_id, item_id, item_kind, artifact_id, x, y, w, h)
+             SELECT ?1, ?2, 'artifact', ?3, ?4, ?5, 280, 140
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM canvas_items WHERE canvas_id = ?1 AND artifact_id = ?3
+             );",
+            params![
+                canvas_id,
+                uuid::Uuid::new_v4().to_string(),
+                artifact_id,
+                x,
+                y
+            ],
+        )?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn add_canvas_item(
         &self,
@@ -2303,13 +2430,38 @@ impl Engine {
         &self,
         target_mode: Option<&str>,
     ) -> Result<Vec<SynthesisTemplate>, CoreError> {
+        self.list_synthesis_templates_page(
+            target_mode,
+            false,
+            db::templates_repo::TemplatePage::default(),
+        )
+    }
+
+    pub fn list_synthesis_templates_page(
+        &self,
+        target_mode: Option<&str>,
+        include_archived: bool,
+        page: db::templates_repo::TemplatePage,
+    ) -> Result<Vec<SynthesisTemplate>, CoreError> {
         let reader = self.db.reader()?;
-        db::templates_repo::list_synthesis_templates(&reader, target_mode)
+        db::templates_repo::list_templates(&reader, target_mode, include_archived, page)
     }
 
     pub fn get_synthesis_template(&self, id: &str) -> Result<Option<SynthesisTemplate>, CoreError> {
         let reader = self.db.reader()?;
         db::templates_repo::get_synthesis_template(&reader, id)
+    }
+
+    /// Explicit lookup used by dispatch. "Inherit the default" is a separate choice,
+    /// so a stale or archived explicit selection produces an error instead of a silent
+    /// fallback to a different template.
+    pub fn require_synthesis_template(
+        &self,
+        id: &str,
+        workflow: &str,
+    ) -> Result<SynthesisTemplate, CoreError> {
+        let reader = self.db.reader()?;
+        db::templates_repo::require_active_template(&reader, id, workflow)
     }
 
     pub fn get_default_synthesis_template(
@@ -2318,5 +2470,121 @@ impl Engine {
     ) -> Result<Option<SynthesisTemplate>, CoreError> {
         let reader = self.db.reader()?;
         db::templates_repo::get_default_synthesis_template(&reader, target_mode)
+    }
+
+    pub fn create_synthesis_template(
+        &self,
+        draft: &SynthesisTemplateDraft,
+    ) -> Result<SynthesisTemplate, CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let template =
+            db::templates_repo::create_synthesis_template(&tx, draft, self.clock.now_ms())?;
+        tx.commit()?;
+        Ok(template)
+    }
+
+    pub fn update_synthesis_template(
+        &self,
+        draft: &SynthesisTemplateDraft,
+    ) -> Result<SynthesisTemplate, CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let template =
+            db::templates_repo::update_synthesis_template(&tx, draft, self.clock.now_ms())?;
+        tx.commit()?;
+        Ok(template)
+    }
+
+    pub fn duplicate_synthesis_template(&self, id: &str) -> Result<SynthesisTemplate, CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let template =
+            db::templates_repo::duplicate_synthesis_template(&tx, id, self.clock.now_ms())?;
+        tx.commit()?;
+        Ok(template)
+    }
+
+    /// Set or clear a workflow default inside one transaction so at most one template
+    /// per workflow is marked default even under concurrent writes.
+    pub fn set_synthesis_template_default(
+        &self,
+        target_mode: &str,
+        id: &str,
+    ) -> Result<(), CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        db::templates_repo::set_synthesis_template_default(&tx, target_mode, id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_synthesis_template_default(&self, target_mode: &str) -> Result<(), CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        db::templates_repo::clear_synthesis_template_default(&tx, target_mode)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn archive_synthesis_template(
+        &self,
+        id: &str,
+        expected_version: Option<i64>,
+    ) -> Result<SynthesisTemplate, CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let template = db::templates_repo::archive_synthesis_template(
+            &tx,
+            id,
+            expected_version,
+            self.clock.now_ms(),
+        )?;
+        tx.commit()?;
+        Ok(template)
+    }
+
+    pub fn restore_synthesis_template(&self, id: &str) -> Result<SynthesisTemplate, CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        let template =
+            db::templates_repo::restore_synthesis_template(&tx, id, self.clock.now_ms())?;
+        tx.commit()?;
+        Ok(template)
+    }
+
+    pub fn delete_synthesis_template(&self, id: &str) -> Result<(), CoreError> {
+        let mut writer = self.db.writer();
+        let tx = writer.transaction()?;
+        db::templates_repo::delete_synthesis_template(&tx, id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Persist an exact dispatch-time generation decision (template snapshot or an
+    /// explicit no-template/disabled decision). Idempotent per generation key.
+    pub fn record_generation_run(
+        &self,
+        record: &db::templates_repo::GenerationRecord<'_>,
+    ) -> Result<bool, CoreError> {
+        let writer = self.db.writer();
+        db::templates_repo::record_generation_run(&writer, record, self.clock.now_ms())
+    }
+
+    /// Compatibility wrapper for an explicit template-backed generation.
+    pub fn record_synthesis_template_run(
+        &self,
+        workflow: &str,
+        artifact_id: Option<&str>,
+        snapshot: &SynthesisTemplateSnapshot,
+    ) -> Result<(), CoreError> {
+        let writer = self.db.writer();
+        db::templates_repo::record_template_run(
+            &writer,
+            workflow,
+            artifact_id,
+            snapshot,
+            self.clock.now_ms(),
+        )
     }
 }

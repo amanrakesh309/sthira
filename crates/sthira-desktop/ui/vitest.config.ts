@@ -1,8 +1,7 @@
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
+import { defineConfig, mergeConfig } from 'vitest/config';
+import viteConfig from './vite.config';
 
-export default defineConfig({
-  plugins: [react()],
+export default mergeConfig(viteConfig, defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
@@ -12,4 +11,4 @@ export default defineConfig({
     // were intermittently timing out. This headroom makes the suite deterministic.
     testTimeout: 20000,
   },
-});
+}));
