@@ -4,10 +4,13 @@ use crate::{
         DEFAULT_INVITE_TTL_MS,
     },
     now_epoch_ms,
+    realtime::{handle_websocket_connection, looks_like_websocket_upgrade, RealtimeHub},
     shared_content::{
-        AttachProjectPageInput, CreateProposalInput, CreateSharedPageInput,
-        CreateSharedProjectInput, CreateThreadInput, DetachProjectPageInput, ReplyThreadInput,
-        ReviewProposalInput, SharedContentError, SharedContentStore, UpdateSharedProjectInput,
+        AttachProjectPageInput, CreateProjectThreadInput, CreateProposalInput,
+        CreateSharedPageInput, CreateSharedProjectInput, CreateThreadInput, DetachProjectPageInput,
+        LiveDraftUpdateInput, OpenLiveDraftInput, RebaseLiveDraftInput, ReplyProjectThreadInput,
+        ReplyThreadInput, ReviewProposalInput, SharedContentError, SharedContentStore,
+        SubmitLiveDraftInput, UpdateSharedProjectInput,
     },
     store::{
         sha256_hex, AuthSessionStore, StoreError, DEFAULT_CHALLENGE_TTL_MS, DEFAULT_SESSION_TTL_MS,
@@ -24,13 +27,14 @@ use tokio::{
 };
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
-const MAX_BODY_BYTES: usize = 64 * 1024;
+const MAX_BODY_BYTES: usize = 256 * 1024;
 
 #[derive(Clone)]
 pub struct SessionServiceState {
     pub store: Arc<dyn AuthSessionStore>,
     membership_store: Option<Arc<dyn WorkspaceMembershipStore>>,
     shared_content_store: Option<Arc<dyn SharedContentStore>>,
+    pub realtime_hub: Arc<RealtimeHub>,
     pub verifier: Arc<dyn IdentityVerifier>,
     pub challenge_ttl_ms: i64,
     pub session_ttl_ms: i64,
@@ -44,12 +48,21 @@ impl SessionServiceState {
             store,
             membership_store: None,
             shared_content_store: None,
+            realtime_hub: Arc::new(RealtimeHub::new()),
             verifier,
             challenge_ttl_ms: DEFAULT_CHALLENGE_TTL_MS,
             session_ttl_ms: DEFAULT_SESSION_TTL_MS,
             invite_ttl_ms: DEFAULT_INVITE_TTL_MS,
             clock: Arc::new(now_epoch_ms),
         }
+    }
+
+    pub fn membership_store(&self) -> Option<&dyn WorkspaceMembershipStore> {
+        self.membership_store.as_deref()
+    }
+
+    pub fn shared_content_store(&self) -> Option<&dyn SharedContentStore> {
+        self.shared_content_store.as_deref()
     }
 
     pub fn with_membership_store(
@@ -113,6 +126,14 @@ struct RenameWorkspaceRequest {
 struct CreateInvitationRequest {
     email: String,
     role: WorkspaceRole,
+}
+
+#[derive(Deserialize)]
+struct BatchInvitationRequest {
+    emails: Vec<String>,
+    role: WorkspaceRole,
+    #[serde(alias = "idempotencyKey")]
+    idempotency_key: String,
 }
 
 #[derive(Deserialize)]
@@ -266,6 +287,13 @@ async fn handle_connection(
     mut stream: TcpStream,
     state: Arc<SessionServiceState>,
 ) -> std::io::Result<()> {
+    let mut peek_buf = [0u8; 4096];
+    if let Ok(peek_len) = stream.peek(&mut peek_buf).await {
+        if looks_like_websocket_upgrade(&peek_buf[..peek_len]) {
+            handle_websocket_connection(stream, state).await;
+            return Ok(());
+        }
+    }
     let (status, json_body) = match read_request(&mut stream).await {
         Ok(req) => route(req, &state).await,
         Err((code, msg)) => json_error(code, "bad_request", msg),
@@ -399,7 +427,17 @@ async fn route(req: ParsedHttpRequest, state: &SessionServiceState) -> (u16, Str
                 .store
                 .revoke_device(&token, &payload.session_id, now_ms)
             {
-                Ok(outcome) => json_ok(&outcome),
+                Ok(outcome) => {
+                    if outcome.revoked {
+                        state.realtime_hub.revoke_session_connections(
+                            state,
+                            &outcome.session_id,
+                            "session_revoked",
+                            "This device was signed out.",
+                        );
+                    }
+                    json_ok(&outcome)
+                }
                 Err(err) => store_error(err),
             }
         }
@@ -408,7 +446,15 @@ async fn route(req: ParsedHttpRequest, state: &SessionServiceState) -> (u16, Str
                 return json_error(401, "invalid_session", "Authentication is required.");
             };
             match state.store.sign_out_current(&token, now_ms) {
-                Ok(outcome) => json_ok(&outcome),
+                Ok(outcome) => {
+                    state.realtime_hub.revoke_session_connections(
+                        state,
+                        &outcome.session_id,
+                        "session_revoked",
+                        "Signed out of this session.",
+                    );
+                    json_ok(&outcome)
+                }
                 Err(err) => store_error(err),
             }
         }
@@ -590,6 +636,24 @@ fn route_workspace_subpath(
                 Err(err) => membership_error(err),
             }
         }
+        ("POST", ["invitations", "batch"]) => {
+            let Ok(payload) = serde_json::from_slice::<BatchInvitationRequest>(&req.body) else {
+                return json_error(400, "invalid_request", "Invalid batch invitation request.");
+            };
+            match membership_store.create_invitation_batch(
+                &caller,
+                &recheck,
+                workspace_id,
+                &payload.emails,
+                payload.role,
+                &payload.idempotency_key,
+                now_ms,
+                state.invite_ttl_ms,
+            ) {
+                Ok(outcome) => json_ok(&outcome),
+                Err(err) => membership_error(err),
+            }
+        }
         ("POST", ["invitations", invitation_id, "revoke"]) => {
             match membership_store.revoke_invitation(
                 &caller,
@@ -627,11 +691,34 @@ fn route_workspace_subpath(
                 payload.role,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    if let Some(target) = details
+                        .members
+                        .iter()
+                        .find(|m| m.membership_id == *membership_id)
+                    {
+                        state.realtime_hub.enforce_workspace_member_access(
+                            state,
+                            workspace_id,
+                            &target.uid,
+                            Some(target.role),
+                        );
+                    }
+                    json_ok(&details)
+                }
                 Err(err) => membership_error(err),
             }
         }
         ("POST", ["members", membership_id, "remove"]) => {
+            let target_uid = membership_store
+                .get_workspace_details(&caller, workspace_id, now_ms)
+                .ok()
+                .and_then(|d| {
+                    d.members
+                        .into_iter()
+                        .find(|m| m.membership_id == *membership_id)
+                        .map(|m| m.uid)
+                });
             match membership_store.remove_member(
                 &caller,
                 &recheck,
@@ -639,13 +726,29 @@ fn route_workspace_subpath(
                 membership_id,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    if let Some(uid) = target_uid {
+                        state.realtime_hub.enforce_workspace_member_access(
+                            state,
+                            workspace_id,
+                            &uid,
+                            None,
+                        );
+                    }
+                    json_ok(&details)
+                }
                 Err(err) => membership_error(err),
             }
         }
         ("POST", ["leave"]) => {
             match membership_store.leave_workspace(&caller, &recheck, workspace_id, now_ms) {
                 Ok(()) => {
+                    state.realtime_hub.enforce_workspace_member_access(
+                        state,
+                        workspace_id,
+                        &caller.uid,
+                        None,
+                    );
                     json_ok(&serde_json::json!({ "left": true, "workspaceId": workspace_id }))
                 }
                 Err(err) => membership_error(err),
@@ -753,6 +856,16 @@ fn route_shared_content(
     let cursor = query_param(query, "cursor");
     let limit = query_usize(query, "limit");
     let search_q = query_param(query, "q");
+    let since_seq = state.realtime_hub.last_event_seq(workspace_id);
+    let flush_events = |content_store: &dyn SharedContentStore| {
+        if let Ok(evs) =
+            content_store.list_realtime_events(caller, workspace_id, since_seq, Some(50))
+        {
+            state
+                .realtime_hub
+                .broadcast_new_events(state, workspace_id, evs);
+        }
+    };
 
     match (method, subpath) {
         ("GET", ["projects"]) => match content_store.list_projects(
@@ -814,7 +927,10 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -830,7 +946,107 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["projects", project_id, "threads"]) => match content_store.list_project_threads(
+            caller,
+            workspace_id,
+            project_id,
+            cursor.as_deref(),
+            limit,
+        ) {
+            Ok(list) => json_ok(&list),
+            Err(err) => shared_content_error(err),
+        },
+        ("POST", ["projects", project_id, "threads"]) => {
+            let Ok(payload) = serde_json::from_slice::<CreateProjectThreadInput>(body) else {
+                return json_error(
+                    400,
+                    "invalid_request",
+                    "Invalid project discussion request.",
+                );
+            };
+            match content_store.create_project_thread(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "threads", thread_id, "replies"]) => {
+            let Ok(payload) = serde_json::from_slice::<ReplyProjectThreadInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid discussion reply request.");
+            };
+            match content_store.reply_project_thread(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                thread_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "threads", thread_id, "resolve"]) => {
+            let Ok(payload) = serde_json::from_slice::<IdempotencyOnlyRequest>(body) else {
+                return json_error(
+                    400,
+                    "invalid_request",
+                    "Invalid discussion resolve request.",
+                );
+            };
+            match content_store.resolve_project_thread(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                thread_id,
+                &payload.idempotency_key,
+                now_ms,
+            ) {
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "threads", thread_id, "reopen"]) => {
+            let Ok(payload) = serde_json::from_slice::<IdempotencyOnlyRequest>(body) else {
+                return json_error(400, "invalid_request", "Invalid discussion reopen request.");
+            };
+            match content_store.reopen_project_thread(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                thread_id,
+                &payload.idempotency_key,
+                now_ms,
+            ) {
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -929,7 +1145,13 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    state
+                        .realtime_hub
+                        .close_page_draft_rooms(state, workspace_id, page_id);
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -945,7 +1167,134 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["pages", page_id, "live-draft"]) => {
+            match content_store.get_live_draft(caller, workspace_id, page_id) {
+                Ok(opt) => json_ok(&opt),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["pages", page_id, "live-draft", "diff"]) => {
+            let sv = query_param(query, "sv");
+            match content_store.get_live_draft_diff(caller, workspace_id, page_id, sv.as_deref()) {
+                Ok(opt) => json_ok(&opt),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "live-draft"]) => {
+            let payload = if body.is_empty() {
+                OpenLiveDraftInput::default()
+            } else {
+                let Ok(parsed) = serde_json::from_slice::<OpenLiveDraftInput>(body) else {
+                    return json_error(400, "invalid_request", "Invalid live draft open request.");
+                };
+                parsed
+            };
+            match content_store.open_or_create_live_draft(
+                caller,
+                recheck,
+                workspace_id,
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(out) => json_ok(&out),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "live-draft", "update"]) => {
+            let Ok(payload) = serde_json::from_slice::<LiveDraftUpdateInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid live draft update request.");
+            };
+            match content_store.apply_live_draft_update(
+                caller,
+                recheck,
+                workspace_id,
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(outcome) => {
+                    if !outcome.duplicate {
+                        let author_display = if caller.display_name.trim().is_empty() {
+                            caller.email.clone()
+                        } else {
+                            caller.display_name.clone()
+                        };
+                        state.realtime_hub.notify_http_draft_update(
+                            state,
+                            workspace_id,
+                            page_id,
+                            &payload.draft_id,
+                            outcome.draft_version,
+                            outcome.checkpoint_seq,
+                            &outcome.checkpoint_id,
+                            outcome.server_seq,
+                            &caller.uid,
+                            &author_display,
+                            &outcome.accepted_update_b64,
+                            outcome.contributors.clone(),
+                            &payload.client_conn_id,
+                        );
+                    }
+                    json_ok(&outcome)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "live-draft", "submit"]) => {
+            let Ok(payload) = serde_json::from_slice::<SubmitLiveDraftInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid live draft submit request.");
+            };
+            match content_store.submit_live_draft(
+                caller,
+                recheck,
+                workspace_id,
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "live-draft", "rebase"]) => {
+            let Ok(payload) = serde_json::from_slice::<RebaseLiveDraftInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid live draft rebase request.");
+            };
+            match content_store.rebase_live_draft(
+                caller,
+                recheck,
+                workspace_id,
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(draft) => {
+                    state
+                        .realtime_hub
+                        .notify_draft_rebased(state, workspace_id, page_id, &draft);
+                    flush_events(content_store);
+                    json_ok(&draft)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["realtime-events"]) => {
+            let after_seq = query_param(query, "after_seq")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            match content_store.list_realtime_events(caller, workspace_id, after_seq, limit) {
+                Ok(events) => json_ok(&events),
                 Err(err) => shared_content_error(err),
             }
         }
@@ -973,7 +1322,10 @@ fn route_shared_content(
                 &payload,
                 now_ms,
             ) {
-                Ok(thread) => json_ok(&thread),
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -990,7 +1342,10 @@ fn route_shared_content(
                 &payload,
                 now_ms,
             ) {
-                Ok(thread) => json_ok(&thread),
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -1007,7 +1362,10 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(thread) => json_ok(&thread),
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -1024,7 +1382,10 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(thread) => json_ok(&thread),
+                Ok(thread) => {
+                    flush_events(content_store);
+                    json_ok(&thread)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -1090,7 +1451,10 @@ fn route_shared_content(
                 &payload.idempotency_key,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -1106,7 +1470,10 @@ fn route_shared_content(
                 &payload,
                 now_ms,
             ) {
-                Ok(details) => json_ok(&details),
+                Ok(details) => {
+                    flush_events(content_store);
+                    json_ok(&details)
+                }
                 Err(err) => shared_content_error(err),
             }
         }
@@ -1201,6 +1568,21 @@ fn shared_content_error(err: SharedContentError) -> (u16, String) {
         ),
         SharedContentError::StaleSubmission(msg) => json_error(409, "stale_submission", &msg),
         SharedContentError::StaleProposal(msg) => json_error(409, "stale_proposal", &msg),
+        SharedContentError::LiveDraftFrozen => json_error(
+            409,
+            "live_draft_frozen",
+            "This live draft is locked while a submission is pending review.",
+        ),
+        SharedContentError::StaleDraftVersion(msg) => json_error(409, "stale_draft_version", &msg),
+        SharedContentError::StaleDraftCheckpoint(msg) => {
+            json_error(409, "stale_draft_checkpoint", &msg)
+        }
+        SharedContentError::StaleDraftBase(msg) => json_error(409, "stale_draft_base", &msg),
+        SharedContentError::LiveDraftNotFound => json_error(
+            404,
+            "live_draft_not_found",
+            "This live draft was not found or is no longer active.",
+        ),
         SharedContentError::IdempotencyConflict => json_error(
             409,
             "idempotency_conflict",

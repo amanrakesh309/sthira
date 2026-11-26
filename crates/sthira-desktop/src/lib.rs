@@ -5,6 +5,7 @@ pub mod commands;
 pub mod connections;
 pub mod conversation;
 pub mod events;
+mod live_collab;
 pub mod migration;
 pub mod naming;
 pub mod projects;
@@ -56,7 +57,8 @@ fn cmd_confirm_window_close<R: tauri::Runtime>(
 pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     let builder = builder
         .manage(account_sign_in::SignInAttempt::default())
-        .manage(CloseGuardState::default());
+        .manage(CloseGuardState::default())
+        .manage(live_collab::LiveCollabManager::default());
     builder.invoke_handler(tauri::generate_handler![
         cmd_register_close_guard,
         cmd_confirm_window_close,
@@ -118,6 +120,26 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         workspaces::cmd_get_shared_draft,
         workspaces::cmd_save_shared_draft,
         workspaces::cmd_delete_shared_draft,
+        workspaces::cmd_create_invitation_batch,
+        workspaces::cmd_open_live_draft,
+        workspaces::cmd_get_live_draft,
+        workspaces::cmd_get_live_draft_diff,
+        workspaces::cmd_apply_live_draft_update,
+        workspaces::cmd_submit_live_draft,
+        workspaces::cmd_rebase_live_draft,
+        workspaces::cmd_list_project_threads,
+        workspaces::cmd_create_project_thread,
+        workspaces::cmd_reply_project_thread,
+        workspaces::cmd_resolve_project_thread,
+        workspaces::cmd_reopen_project_thread,
+        workspaces::cmd_list_realtime_events,
+        live_collab::cmd_collab_connect,
+        live_collab::cmd_collab_disconnect,
+        live_collab::cmd_collab_join_draft,
+        live_collab::cmd_collab_leave_draft,
+        live_collab::cmd_collab_send_update,
+        live_collab::cmd_collab_send_awareness,
+        live_collab::cmd_collab_ping,
         shared_memory::cmd_memory_action,
         migration::cmd_preview_migration,
         migration::cmd_review_migration_selection,

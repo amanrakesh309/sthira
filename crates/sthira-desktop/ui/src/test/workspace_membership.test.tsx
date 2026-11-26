@@ -479,24 +479,34 @@ describe('CW1 Workspace Membership UI', () => {
         getCount += 1;
         return { outcome: 'ok', data: wsOneDetailsOwner };
       }
-      if (cmd === 'cmd_create_invitation') {
+      if (cmd === 'cmd_create_invitation_batch') {
         return {
           outcome: 'ok',
           data: {
-            invitation: {
-              invitationId: 'inv_1',
-              workspaceId: 'ws_1',
-              recipientEmail: 'teammate@example.com',
-              offeredRole: 'admin',
-              status: 'pending',
-              invitedByMembershipId: 'mem_a',
-              invitedByDisplayName: 'Alice Owner',
-              createdAtMs: 1_700_000_001_000,
-              expiresAtMs: 1_700_604_801_000,
-              acceptedAtMs: null,
-              revokedAtMs: null,
-            },
-            inviteCode: 'sthi_regression_code_1',
+            offeredRole: 'admin',
+            replayed: false,
+            results: [
+              {
+                email: 'teammate@example.com',
+                outcome: 'created',
+                message: 'Invited as admin.',
+                invitation: {
+                  invitationId: 'inv_1',
+                  workspaceId: 'ws_1',
+                  recipientEmail: 'teammate@example.com',
+                  offeredRole: 'admin',
+                  status: 'pending',
+                  invitedByMembershipId: 'mem_a',
+                  invitedByDisplayName: 'Alice Owner',
+                  createdAtMs: 1_700_000_001_000,
+                  expiresAtMs: 1_700_604_801_000,
+                  acceptedAtMs: null,
+                  revokedAtMs: null,
+                },
+                inviteCode: 'sthi_regression_code_1',
+                replayed: false,
+              },
+            ],
           },
         };
       }
@@ -524,8 +534,8 @@ describe('CW1 Workspace Membership UI', () => {
     expect(getCount).toBe(1);
 
     await user.selectOptions(screen.getByLabelText('Invitation role'), 'admin');
-    await user.type(screen.getByLabelText('Recipient email'), 'teammate@example.com');
-    await user.click(screen.getByRole('button', { name: 'Create invitation' }));
+    await user.type(screen.getByLabelText('Recipient email addresses'), 'teammate@example.com');
+    await user.click(screen.getByRole('button', { name: 'Send workspace invitations' }));
 
     expect(await screen.findByTestId('generated-invite-code')).toHaveTextContent(
       'sthi_regression_code_1',

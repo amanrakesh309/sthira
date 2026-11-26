@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
   ArrowLeft,
+  CheckCircle2,
   Edit3,
   FileText,
   FolderKanban,
   FolderPlus,
+  MessageSquare,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -18,21 +20,29 @@ import {
   attachPageToProject,
   canAuthorSharedContent,
   canManageSharedProject,
+  canReviewOrArchiveSharedContent,
+  createProjectThread,
   createSharedProject,
   detachPageFromProject,
   getSharedProject,
   listProjectPickerPages,
+  listProjectThreads,
   listSharedProjects,
   makeRequestIdempotencyKey,
+  reopenProjectThread,
+  replyProjectThread,
+  resolveProjectThread,
   restoreSharedProject,
   updateSharedProject,
   type SharedPageSummary,
   type SharedProjectDetails,
   type SharedProjectSummary,
+  type SharedProjectThreadView,
   type WorkspaceListResponse,
   type WorkspaceResponse,
   type WorkspaceRole,
 } from '../api/workspaces';
+import { subscribeCollabEvents } from '../api/liveCollab';
 import type { GoogleSession } from './AccountModal';
 import { SharedPagesPanel } from './SharedPagesPanel';
 
@@ -40,6 +50,7 @@ export interface ProjectOpenRequest {
   projectId?: string | null;
   pageId?: string | null;
   proposalId?: string | null;
+  threadId?: string | null;
   mode?: 'newProject';
 }
 
@@ -91,6 +102,14 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
   const [newName, setNewName] = useState('');
   const [newPurpose, setNewPurpose] = useState('');
   const createKeyRef = useRef<{ sig: string; key: string } | null>(null);
+
+  const [projectThreads, setProjectThreads] = useState<SharedProjectThreadView[]>([]);
+  const [projectThreadsCursor, setProjectThreadsCursor] = useState<string | null>(null);
+  const [newProjectThreadBody, setNewProjectThreadBody] = useState('');
+  const [projectReplyDrafts, setProjectReplyDrafts] = useState<Record<string, string>>({});
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const newProjectThreadKeyRef = useRef<{ sig: string; key: string } | null>(null);
+  const projectReplyKeysRef = useRef<Record<string, { sig: string; key: string }>>({});
 
   const [editingMeta, setEditingMeta] = useState(false);
   const [editName, setEditName] = useState('');
@@ -245,6 +264,14 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
             });
           } else {
             setSelectedProject(res.data);
+            void listProjectThreads(workspaceId, projectId, null)
+              .then((thrRes) => {
+                if (mountedRef.current && thrRes?.outcome === 'ok') {
+                  setProjectThreads(thrRes.data.items);
+                  setProjectThreadsCursor(thrRes.data.nextCursor ?? null);
+                }
+              })
+              .catch(() => {});
           }
           return nextDetails;
         }
@@ -424,7 +451,9 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
       const targetProjectId = pendingOpenRequest.projectId;
       const targetPageId = pendingOpenRequest.pageId ?? null;
       const targetProposalId = pendingOpenRequest.proposalId ?? null;
+      const targetThreadId = pendingOpenRequest.threadId ?? null;
       onConsumedOpenRequest?.();
+      setHighlightedThreadId(targetThreadId);
       void (async () => {
         const seq = ++detailReqRef.current;
         setBusy(true);
@@ -443,6 +472,14 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
             setPickerOpen(false);
             setEditingMeta(false);
             setSelectedProject(res.data);
+            void listProjectThreads(workspaceId, targetProjectId, null)
+              .then((thrRes) => {
+                if (mountedRef.current && thrRes?.outcome === 'ok') {
+                  setProjectThreads(thrRes.data.items);
+                  setProjectThreadsCursor(thrRes.data.nextCursor ?? null);
+                }
+              })
+              .catch(() => {});
             if (targetPageId) {
               const hasMembership = res.data.pages.some(
                 (item) => item.page.pageId === targetPageId,
@@ -642,6 +679,149 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
     } catch (err) {
       if (!mountedRef.current) return;
       setPickerError(typeof err === 'string' ? err : 'Could not add page to project.');
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  };
+
+  const upsertProjectThread = useCallback((incoming: SharedProjectThreadView) => {
+    setProjectThreads((prev) => {
+      const exists = prev.some((t) => t.threadId === incoming.threadId);
+      return exists
+        ? prev.map((t) => (t.threadId === incoming.threadId ? incoming : t))
+        : [incoming, ...prev];
+    });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void subscribeCollabEvents((ev) => {
+      if (!active || ev.type !== 'workspace_event') return;
+      if (ev.workspaceId !== workspaceId) return;
+      const curProj = selectedProjectRef.current;
+      if (
+        ev.eventType === 'project_thread_updated' &&
+        curProj &&
+        ev.projectId === curProj.project.projectId &&
+        ev.payload &&
+        typeof ev.payload === 'object'
+      ) {
+        const incoming = ev.payload as SharedProjectThreadView;
+        if (incoming.threadId && incoming.projectId === curProj.project.projectId) {
+          upsertProjectThread(incoming);
+        }
+      } else if (
+        (ev.eventType === 'project_archived' || ev.eventType === 'project_restored') &&
+        curProj &&
+        ev.projectId === curProj.project.projectId
+      ) {
+        void openProjectById(curProj.project.projectId, projectPageQueryRef.current, null);
+      }
+    }).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [openProjectById, upsertProjectThread, workspaceId]);
+
+  const canReviewOrModerate = canReviewOrArchiveSharedContent(myRole);
+
+  const handleStartProjectThread = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedProject || !newProjectThreadBody.trim() || busy) return;
+    const projectId = selectedProject.project.projectId;
+    const body = newProjectThreadBody.trim();
+    const sig = `${projectId}:${body}`;
+    if (!newProjectThreadKeyRef.current || newProjectThreadKeyRef.current.sig !== sig) {
+      newProjectThreadKeyRef.current = { sig, key: makeRequestIdempotencyKey('pthr') };
+    }
+    setBusy(true);
+    setPanelError('');
+    try {
+      const res = await createProjectThread(
+        workspaceId,
+        projectId,
+        body,
+        newProjectThreadKeyRef.current.key,
+      );
+      if (!mountedRef.current) return;
+      if (res.outcome === 'ok') {
+        newProjectThreadKeyRef.current = null;
+        setNewProjectThreadBody('');
+        upsertProjectThread(res.data);
+        setPanelNotice('Started project discussion.');
+        return;
+      }
+      handleFailureResponse(res, 'Could not start project discussion.');
+    } catch (err) {
+      if (mountedRef.current) {
+        setPanelError(typeof err === 'string' ? err : 'Could not start project discussion.');
+      }
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  };
+
+  const handleReplyProjectThread = async (threadId: string) => {
+    if (!selectedProject || busy) return;
+    const projectId = selectedProject.project.projectId;
+    const body = (projectReplyDrafts[threadId] || '').trim();
+    if (!body) return;
+    const sig = `${threadId}:${body}`;
+    if (!projectReplyKeysRef.current[threadId] || projectReplyKeysRef.current[threadId].sig !== sig) {
+      projectReplyKeysRef.current[threadId] = { sig, key: makeRequestIdempotencyKey('prpl') };
+    }
+    setBusy(true);
+    setPanelError('');
+    try {
+      const res = await replyProjectThread(
+        workspaceId,
+        projectId,
+        threadId,
+        body,
+        projectReplyKeysRef.current[threadId].key,
+      );
+      if (!mountedRef.current) return;
+      if (res.outcome === 'ok') {
+        delete projectReplyKeysRef.current[threadId];
+        setProjectReplyDrafts((prev) => ({ ...prev, [threadId]: '' }));
+        upsertProjectThread(res.data);
+        return;
+      }
+      handleFailureResponse(res, 'Could not post reply.');
+    } catch (err) {
+      if (mountedRef.current) {
+        setPanelError(typeof err === 'string' ? err : 'Could not post reply.');
+      }
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  };
+
+  const handleProjectThreadStatus = async (threadId: string, resolve: boolean) => {
+    if (!selectedProject || busy) return;
+    const projectId = selectedProject.project.projectId;
+    setBusy(true);
+    setPanelError('');
+    try {
+      const key = makeRequestIdempotencyKey(resolve ? 'pres' : 'preo');
+      const res = resolve
+        ? await resolveProjectThread(workspaceId, projectId, threadId, key)
+        : await reopenProjectThread(workspaceId, projectId, threadId, key);
+      if (!mountedRef.current) return;
+      if (res.outcome === 'ok') {
+        upsertProjectThread(res.data);
+        return;
+      }
+      handleFailureResponse(res, 'Could not update discussion status.');
+    } catch (err) {
+      if (mountedRef.current) {
+        setPanelError(typeof err === 'string' ? err : 'Could not update discussion status.');
+      }
     } finally {
       if (mountedRef.current) setBusy(false);
     }
@@ -1174,6 +1354,166 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
               className="sthira-button-secondary cursor-pointer"
             >
               Load more project pages
+            </button>
+          )}
+        </section>
+
+        {/* Project Discussions */}
+        <section
+          aria-label="Project discussion"
+          className="rounded-2xl border border-sthira-border bg-sthira-surface p-5 space-y-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold flex items-center gap-1.5">
+              <MessageSquare className="w-4 h-4 text-sthira-primary" />
+              <span>Discussion ({projectThreads.length})</span>
+            </h3>
+            {isArchived && (
+              <span className="text-xs text-sthira-text-muted">
+                Archived project discussions are read-only.
+              </span>
+            )}
+          </div>
+
+          {canAuthor && !isArchived && (
+            <form onSubmit={(e) => void handleStartProjectThread(e)} className="space-y-2">
+              <label className="block space-y-1">
+                <span className="text-xs text-sthira-text-muted">
+                  Start a project discussion in {project.name}
+                </span>
+                <textarea
+                  aria-label="New project discussion"
+                  rows={2}
+                  disabled={busy}
+                  value={newProjectThreadBody}
+                  onChange={(e) => setNewProjectThreadBody(e.target.value)}
+                  placeholder="Coordinate milestones, goals, or open questions for this project…"
+                  className="w-full rounded-lg border border-sthira-border bg-sthira-canvas p-2.5 text-xs text-sthira-text focus:outline-none"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={busy || !newProjectThreadBody.trim()}
+                className="sthira-button-primary cursor-pointer"
+              >
+                Start discussion
+              </button>
+            </form>
+          )}
+
+          {projectThreads.length === 0 ? (
+            <p className="text-xs text-sthira-text-muted">No project discussions yet.</p>
+          ) : (
+            <ul className="space-y-3" aria-label="Project discussion threads">
+              {projectThreads.map((thr) => {
+                const canToggleResolve =
+                  canAuthor &&
+                  !isArchived &&
+                  (canReviewOrModerate || (!!currentUid && thr.authorUid === currentUid));
+                const isResolved = thr.status === 'resolved';
+                const isHighlighted = highlightedThreadId === thr.threadId;
+                return (
+                  <li
+                    key={thr.threadId}
+                    data-thread-id={thr.threadId}
+                    data-highlighted={isHighlighted ? 'true' : undefined}
+                    className={`rounded-xl border bg-sthira-canvas p-3.5 space-y-2.5 text-xs ${
+                      isHighlighted
+                        ? 'border-sthira-primary ring-2 ring-sthira-primary'
+                        : 'border-sthira-border'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-sthira-text">
+                          {thr.authorDisplayName}
+                        </span>
+                        <span className="rounded px-1.5 py-0.5 text-[11px] border border-sthira-border bg-sthira-surface text-sthira-text inline-flex items-center gap-1">
+                          {isResolved && <CheckCircle2 className="w-3 h-3 text-sthira-primary" />}
+                          <span>{isResolved ? 'Resolved' : 'Open'}</span>
+                        </span>
+                      </div>
+                      {canToggleResolve && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          aria-label={`${isResolved ? 'Reopen' : 'Resolve'} discussion by ${thr.authorDisplayName}`}
+                          onClick={() => void handleProjectThreadStatus(thr.threadId, !isResolved)}
+                          className="sthira-button-secondary cursor-pointer"
+                        >
+                          {isResolved ? 'Reopen discussion' : 'Resolve discussion'}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 pl-2 border-l-2 border-sthira-border">
+                      {thr.messages.map((msg) => (
+                        <div key={msg.messageId} className="space-y-0.5">
+                          <p className="text-[11px] text-sthira-text-muted">
+                            <strong className="text-sthira-text">{msg.authorDisplayName}</strong> ·{' '}
+                            {new Date(msg.createdAtMs).toLocaleString()}
+                          </p>
+                          <p className="text-sthira-text whitespace-pre-wrap">{msg.body}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {canAuthor && !isArchived && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <input
+                          aria-label={`Reply to project discussion by ${thr.authorDisplayName}`}
+                          type="text"
+                          disabled={busy}
+                          value={projectReplyDrafts[thr.threadId] || ''}
+                          onChange={(e) =>
+                            setProjectReplyDrafts((prev) => ({
+                              ...prev,
+                              [thr.threadId]: e.target.value,
+                            }))
+                          }
+                          placeholder="Write a reply…"
+                          className="flex-1 min-w-[180px] min-h-[36px] rounded-lg border border-sthira-border bg-sthira-surface px-2.5 text-xs text-sthira-text focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || !(projectReplyDrafts[thr.threadId] || '').trim()}
+                          aria-label={`Post reply to project discussion by ${thr.authorDisplayName}`}
+                          onClick={() => void handleReplyProjectThread(thr.threadId)}
+                          className="sthira-button-secondary cursor-pointer"
+                        >
+                          Reply
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {projectThreadsCursor && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                void listProjectThreads(workspaceId, project.projectId, projectThreadsCursor).then(
+                  (thrRes) => {
+                    if (mountedRef.current && thrRes.outcome === 'ok') {
+                      setProjectThreads((prev) => {
+                        const seen = new Set(prev.map((t) => t.threadId));
+                        return [
+                          ...prev,
+                          ...thrRes.data.items.filter((t) => !seen.has(t.threadId)),
+                        ];
+                      });
+                      setProjectThreadsCursor(thrRes.data.nextCursor ?? null);
+                    }
+                  },
+                );
+              }}
+              className="sthira-button-secondary cursor-pointer"
+            >
+              Load older discussions
             </button>
           )}
         </section>

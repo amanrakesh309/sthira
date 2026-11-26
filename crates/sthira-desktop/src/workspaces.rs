@@ -391,6 +391,16 @@ async fn invoke_workspace_api<T: DeserializeOwned + Serialize>(
         scoped_workspace_id,
     )
     .await?;
+    if matches!(
+        &resp,
+        WorkspaceResponse::SessionUpdated {
+            session: SessionStatus::SignedOut { .. }
+        } | WorkspaceResponse::AccessLost { .. }
+    ) {
+        if let Some(mgr) = app.try_state::<crate::live_collab::LiveCollabManager>() {
+            mgr.disconnect_all().await;
+        }
+    }
     Ok((resp, data_dir))
 }
 
@@ -790,6 +800,8 @@ pub(crate) struct SharedPageRevisionView {
     pub(crate) reviewer_uid: Option<String>,
     pub(crate) reviewer_display_name: Option<String>,
     pub(crate) proposal_id: Option<String>,
+    #[serde(default)]
+    pub(crate) contributor_names: Vec<String>,
     pub(crate) created_at_ms: i64,
 }
 
@@ -881,6 +893,14 @@ pub(crate) struct SharedProposalSummary {
     pub(crate) reviewed_at_ms: Option<i64>,
     pub(crate) reviewer_display_name: Option<String>,
     pub(crate) applied_revision_number: Option<i64>,
+    #[serde(default)]
+    pub(crate) live_draft_id: Option<String>,
+    #[serde(default)]
+    pub(crate) draft_version: Option<i64>,
+    #[serde(default)]
+    pub(crate) contributor_uids: Vec<String>,
+    #[serde(default)]
+    pub(crate) contributor_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -897,6 +917,10 @@ pub(crate) struct SharedProposalDetails {
     pub(crate) page_archived: bool,
     pub(crate) can_review: bool,
     pub(crate) can_author_edit: bool,
+    #[serde(default)]
+    pub(crate) has_eligible_reviewer: bool,
+    #[serde(default)]
+    pub(crate) ineligible_reason: Option<String>,
     pub(crate) decisions: Vec<ProposalDecisionView>,
 }
 
@@ -1009,6 +1033,491 @@ pub(crate) struct ProjectPageMembershipOutcome {
 pub(crate) struct PagedList<T> {
     pub(crate) items: Vec<T>,
     pub(crate) next_cursor: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum BatchInviteItemOutcome {
+    Created,
+    AlreadyMember,
+    AlreadyPending,
+    InvalidEmail,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BatchInvitationItemResult {
+    pub(crate) email: String,
+    pub(crate) outcome: BatchInviteItemOutcome,
+    pub(crate) message: String,
+    pub(crate) invitation: Option<WorkspaceInvitationView>,
+    pub(crate) invite_code: Option<String>,
+    pub(crate) replayed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BatchInvitationOutcome {
+    pub(crate) offered_role: WorkspaceRole,
+    pub(crate) replayed: bool,
+    pub(crate) results: Vec<BatchInvitationItemResult>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LiveDraftStatus {
+    Editing,
+    PendingReview,
+    Applied,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LiveDraftContributorView {
+    pub(crate) uid: String,
+    pub(crate) display_name: String,
+    pub(crate) contribution_count: i64,
+    pub(crate) last_edited_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedLiveDraftView {
+    pub(crate) draft_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) page_id: String,
+    pub(crate) base_revision_number: i64,
+    pub(crate) draft_version: i64,
+    pub(crate) checkpoint_seq: i64,
+    pub(crate) checkpoint_id: String,
+    pub(crate) status: LiveDraftStatus,
+    pub(crate) snapshot_state_b64: String,
+    pub(crate) snapshot_vector_b64: String,
+    pub(crate) base_title: String,
+    pub(crate) base_content_md: String,
+    pub(crate) current_title: String,
+    pub(crate) current_content_md: String,
+    pub(crate) contributors: Vec<LiveDraftContributorView>,
+    pub(crate) pending_proposal_id: Option<String>,
+    pub(crate) created_by_uid: String,
+    pub(crate) created_by_display_name: String,
+    pub(crate) created_at_ms: i64,
+    pub(crate) updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenLiveDraftOutcome {
+    pub(crate) created: bool,
+    pub(crate) draft: SharedLiveDraftView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LiveDraftDiffResponse {
+    pub(crate) draft: SharedLiveDraftView,
+    pub(crate) missing_update_b64: String,
+    pub(crate) server_vector_b64: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LiveDraftUpdateOutcome {
+    pub(crate) accepted: bool,
+    pub(crate) duplicate: bool,
+    pub(crate) draft_version: i64,
+    pub(crate) checkpoint_seq: i64,
+    pub(crate) checkpoint_id: String,
+    pub(crate) server_seq: i64,
+    pub(crate) accepted_update_b64: String,
+    pub(crate) contributors: Vec<LiveDraftContributorView>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LiveDraftRebaseMode {
+    CarryDraft,
+    RestartFromCurrent,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedProjectMessageView {
+    pub(crate) message_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) author_uid: String,
+    pub(crate) author_display_name: String,
+    pub(crate) body: String,
+    pub(crate) created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedProjectThreadView {
+    pub(crate) thread_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) project_id: String,
+    pub(crate) author_uid: String,
+    pub(crate) author_display_name: String,
+    pub(crate) status: ThreadStatus,
+    pub(crate) resolved_at_ms: Option<i64>,
+    pub(crate) resolved_by_display_name: Option<String>,
+    pub(crate) created_at_ms: i64,
+    pub(crate) updated_at_ms: i64,
+    pub(crate) messages: Vec<SharedProjectMessageView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RealtimeCatchupEvent {
+    pub(crate) event_seq: i64,
+    pub(crate) workspace_id: String,
+    pub(crate) event_type: String,
+    pub(crate) project_id: Option<String>,
+    pub(crate) page_id: Option<String>,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) proposal_id: Option<String>,
+    pub(crate) draft_id: Option<String>,
+    pub(crate) payload_json: serde_json::Value,
+    pub(crate) created_at_ms: i64,
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_create_invitation_batch<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    emails: Vec<String>,
+    role: WorkspaceRole,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<BatchInvitationOutcome>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/invitations/batch"),
+        Some(serde_json::json!({
+            "emails": emails,
+            "role": role,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_open_live_draft<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+    initial_update_b64: Option<String>,
+    expected_base_revision_number: Option<i64>,
+) -> Result<WorkspaceResponse<OpenLiveDraftOutcome>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft"),
+        Some(serde_json::json!({
+            "initialUpdateB64": initial_update_b64,
+            "expectedBaseRevisionNumber": expected_base_revision_number,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_get_live_draft<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+) -> Result<WorkspaceResponse<Option<SharedLiveDraftView>>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_get_live_draft_diff<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+    client_state_vector_b64: Option<String>,
+) -> Result<WorkspaceResponse<Option<LiveDraftDiffResponse>>, String> {
+    let mut path = format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft/diff");
+    if let Some(sv) = client_state_vector_b64
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+    {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("sv", &sv)
+            .finish();
+        path.push('?');
+        path.push_str(&encoded);
+    }
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &path,
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub(crate) async fn cmd_apply_live_draft_update<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+    draft_id: String,
+    draft_version: i64,
+    client_conn_id: String,
+    client_op_seq: i64,
+    update_b64: String,
+) -> Result<WorkspaceResponse<LiveDraftUpdateOutcome>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft/update"),
+        Some(serde_json::json!({
+            "draftId": draft_id,
+            "draftVersion": draft_version,
+            "clientConnId": client_conn_id,
+            "clientOpSeq": client_op_seq,
+            "updateB64": update_b64,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub(crate) async fn cmd_submit_live_draft<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+    expected_draft_id: String,
+    expected_draft_version: i64,
+    expected_checkpoint_id: String,
+    summary: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProposalDetails>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft/submit"),
+        Some(serde_json::json!({
+            "expectedDraftId": expected_draft_id,
+            "expectedDraftVersion": expected_draft_version,
+            "expectedCheckpointId": expected_checkpoint_id,
+            "summary": summary,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub(crate) async fn cmd_rebase_live_draft<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    page_id: String,
+    expected_draft_id: String,
+    expected_draft_version: i64,
+    expected_checkpoint_id: String,
+    expected_base_revision_number: i64,
+    mode: LiveDraftRebaseMode,
+    rebased_title: Option<String>,
+    rebased_content_md: Option<String>,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedLiveDraftView>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/pages/{page_id}/live-draft/rebase"),
+        Some(serde_json::json!({
+            "expectedDraftId": expected_draft_id,
+            "expectedDraftVersion": expected_draft_version,
+            "expectedCheckpointId": expected_checkpoint_id,
+            "expectedBaseRevisionNumber": expected_base_revision_number,
+            "mode": mode,
+            "rebasedTitle": rebased_title,
+            "rebasedContentMd": rebased_content_md,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_list_project_threads<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> Result<WorkspaceResponse<PagedList<SharedProjectThreadView>>, String> {
+    let qs = build_query_suffix(None, cursor.as_deref(), limit);
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/threads{qs}"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_create_project_thread<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    body: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectThreadView>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/threads"),
+        Some(serde_json::json!({
+            "body": body,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_reply_project_thread<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    thread_id: String,
+    body: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectThreadView>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/threads/{thread_id}/replies"),
+        Some(serde_json::json!({
+            "body": body,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_resolve_project_thread<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    thread_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectThreadView>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/threads/{thread_id}/resolve"),
+        Some(serde_json::json!({ "idempotencyKey": idempotency_key })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_reopen_project_thread<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    thread_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectThreadView>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/threads/{thread_id}/reopen"),
+        Some(serde_json::json!({ "idempotencyKey": idempotency_key })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_list_realtime_events<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    after_seq: i64,
+    limit: Option<usize>,
+) -> Result<WorkspaceResponse<Vec<RealtimeCatchupEvent>>, String> {
+    let mut path = format!(
+        "/v1/workspaces/{workspace_id}/realtime-events?after_seq={}",
+        after_seq.max(0)
+    );
+    if let Some(lim) = limit {
+        path.push_str(&format!("&limit={lim}"));
+    }
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &path,
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
 }
 
 fn build_query_suffix_with_search(
@@ -1679,7 +2188,7 @@ pub(crate) async fn cmd_list_workspace_activity<R: Runtime>(
     Ok(resp)
 }
 
-async fn resolve_verified_draft_uid(
+pub(crate) async fn resolve_verified_draft_uid(
     store: &SessionStore,
     config: &SignInConfig,
     saved: &SavedDeviceSession,

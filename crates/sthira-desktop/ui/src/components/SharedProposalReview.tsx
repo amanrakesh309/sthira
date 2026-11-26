@@ -11,6 +11,7 @@ import { RichDocumentRenderer } from './RichDocumentRenderer';
 interface SharedProposalReviewProps {
   details: SharedProposalDetails;
   currentUid?: string | null;
+  canAuthorEditLive?: boolean;
   busy: boolean;
   error: string;
   onRefresh: () => void;
@@ -22,6 +23,7 @@ interface SharedProposalReviewProps {
     expectedSubmissionNumber: number,
   ) => Promise<boolean>;
   onOpenRevise: (rebaseOntoCurrent: boolean) => void;
+  onOpenLiveDraft?: () => void;
   onWithdraw: (idempotencyKey: string) => Promise<boolean>;
 }
 
@@ -47,12 +49,14 @@ function formatDateTime(epochMs: number): string {
 export const SharedProposalReview: React.FC<SharedProposalReviewProps> = ({
   details,
   currentUid,
+  canAuthorEditLive = false,
   busy,
   error,
   onRefresh,
   onBack,
   onReview,
   onOpenRevise,
+  onOpenLiveDraft,
   onWithdraw,
 }) => {
   const [note, setNote] = useState('');
@@ -138,6 +142,12 @@ export const SharedProposalReview: React.FC<SharedProposalReviewProps> = ({
               Author: <strong className="text-sthira-text">{proposal.authorDisplayName}</strong> · Base rev{' '}
               {proposal.baseRevisionNumber} · Current page rev {details.currentPageRevisionNumber}
             </p>
+            {proposal.contributorNames && proposal.contributorNames.length > 0 && (
+              <p className="text-xs text-sthira-text-muted" data-testid="proposal-contributors">
+                Draft contributors:{' '}
+                <strong className="text-sthira-text">{proposal.contributorNames.join(', ')}</strong>
+              </p>
+            )}
           </div>
           <span className="rounded-lg px-2.5 py-1 text-xs font-medium border border-sthira-border bg-sthira-canvas text-sthira-text">
             {PROPOSAL_STATUS_LABELS[proposal.status]}
@@ -167,9 +177,13 @@ export const SharedProposalReview: React.FC<SharedProposalReviewProps> = ({
           </p>
         )}
 
-        {proposal.status === 'pending' && isOwnProposal && !details.canReview && (
-          <p className="rounded-xl border border-sthira-border bg-sthira-canvas px-3.5 py-2.5 text-xs text-sthira-text-muted">
-            Another Owner or Admin must review and apply your proposal.
+        {proposal.status === 'pending' && !details.canReview && (details.ineligibleReason || isOwnProposal) && (
+          <p
+            role="status"
+            data-testid="review-restriction-banner"
+            className="rounded-xl border border-sthira-border bg-sthira-canvas px-3.5 py-2.5 text-xs text-sthira-text-muted"
+          >
+            {details.ineligibleReason || 'Another Owner or Admin must review and apply your proposal.'}
           </p>
         )}
       </section>
@@ -297,6 +311,41 @@ export const SharedProposalReview: React.FC<SharedProposalReviewProps> = ({
           </div>
         </section>
       )}
+
+      {/* Live-draft reopen or rebase controls */}
+      {proposal.liveDraftId &&
+        (proposal.status === 'changesRequested' || proposal.isStale) &&
+        !details.pageArchived &&
+        canAuthorEditLive &&
+        onOpenLiveDraft && (
+          <section
+            aria-label="Live draft follow-up actions"
+            className="rounded-2xl border border-sthira-border bg-sthira-surface p-5 flex flex-wrap items-center justify-between gap-3"
+          >
+            <div className="space-y-0.5">
+              <h3 className="text-sm font-semibold">
+                {proposal.isStale
+                  ? `Live draft needs rebase onto rev ${details.currentPageRevisionNumber}`
+                  : 'Changes requested on live draft'}
+              </h3>
+              <p className="text-xs text-sthira-text-muted">
+                {proposal.isStale
+                  ? `Published rev ${details.currentPageRevisionNumber} landed after this draft started on rev ${proposal.baseRevisionNumber}. Open the rebase view to compare versions, carry this draft forward, or restart from rev ${details.currentPageRevisionNumber} while keeping history.`
+                  : 'The shared draft is reopened for collaborative edits. Continue in Edit together to address feedback and submit a fresh revision.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onOpenLiveDraft}
+              className="sthira-button-primary cursor-pointer"
+            >
+              {proposal.isStale
+                ? `Rebase live draft (rev ${details.currentPageRevisionNumber})`
+                : 'Continue in Edit together'}
+            </button>
+          </section>
+        )}
 
       {/* Author Controls */}
       {details.canAuthorEdit && (

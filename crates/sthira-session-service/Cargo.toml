@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 base64 = "0.22"
+futures-util = "0.3"
 getrandom = "0.2"
 markdown = "1.0.0"
 reqwest = { workspace = true }
@@ -26,8 +27,10 @@ sha2 = { workspace = true }
 subtle = "2"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = "0.30"
 url = "2"
 uuid = { workspace = true }
+yrs = "0.28"
 
 [dev-dependencies]
 tempfile = { workspace = true }

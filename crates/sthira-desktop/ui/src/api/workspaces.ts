@@ -365,6 +365,7 @@ export interface SharedPageRevisionView {
   reviewerUid?: string | null;
   reviewerDisplayName?: string | null;
   proposalId?: string | null;
+  contributorNames?: string[];
   createdAtMs: number;
 }
 
@@ -423,6 +424,10 @@ export interface SharedProposalSummary {
   reviewedAtMs?: number | null;
   reviewerDisplayName?: string | null;
   appliedRevisionNumber?: number | null;
+  liveDraftId?: string | null;
+  draftVersion?: number | null;
+  contributorUids?: string[];
+  contributorNames?: string[];
 }
 
 export interface SharedProposalDetails {
@@ -437,6 +442,8 @@ export interface SharedProposalDetails {
   pageArchived: boolean;
   canReview: boolean;
   canAuthorEdit: boolean;
+  hasEligibleReviewer?: boolean;
+  ineligibleReason?: string | null;
   decisions: ProposalDecisionView[];
 }
 
@@ -526,6 +533,119 @@ export interface ProjectPageMembershipOutcome {
 export interface PagedList<T> {
   items: T[];
   nextCursor?: string | null;
+}
+
+export type BatchInviteItemOutcome =
+  | 'created'
+  | 'alreadyMember'
+  | 'alreadyPending'
+  | 'invalidEmail';
+
+export interface BatchInvitationItemResult {
+  email: string;
+  outcome: BatchInviteItemOutcome;
+  message: string;
+  invitation?: WorkspaceInvitationView | null;
+  inviteCode?: string | null;
+  replayed: boolean;
+}
+
+export interface BatchInvitationOutcome {
+  offeredRole: WorkspaceRole;
+  replayed: boolean;
+  results: BatchInvitationItemResult[];
+}
+
+export type LiveDraftStatus = 'editing' | 'pendingReview' | 'applied';
+
+export interface LiveDraftContributorView {
+  uid: string;
+  displayName: string;
+  contributionCount: number;
+  lastEditedAtMs: number;
+}
+
+export interface SharedLiveDraftView {
+  draftId: string;
+  workspaceId: string;
+  pageId: string;
+  baseRevisionNumber: number;
+  draftVersion: number;
+  checkpointSeq: number;
+  checkpointId: string;
+  status: LiveDraftStatus;
+  snapshotStateB64: string;
+  snapshotVectorB64: string;
+  baseTitle: string;
+  baseContentMd: string;
+  currentTitle: string;
+  currentContentMd: string;
+  contributors: LiveDraftContributorView[];
+  pendingProposalId?: string | null;
+  createdByUid: string;
+  createdByDisplayName: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface OpenLiveDraftOutcome {
+  created: boolean;
+  draft: SharedLiveDraftView;
+}
+
+export interface LiveDraftDiffResponse {
+  draft: SharedLiveDraftView;
+  missingUpdateB64: string;
+  serverVectorB64: string;
+}
+
+export interface LiveDraftUpdateOutcome {
+  accepted: boolean;
+  duplicate: boolean;
+  draftVersion: number;
+  checkpointSeq: number;
+  checkpointId: string;
+  serverSeq: number;
+  acceptedUpdateB64: string;
+  contributors: LiveDraftContributorView[];
+}
+
+export type LiveDraftRebaseMode = 'carryDraft' | 'restartFromCurrent';
+
+export interface SharedProjectMessageView {
+  messageId: string;
+  threadId: string;
+  authorUid: string;
+  authorDisplayName: string;
+  body: string;
+  createdAtMs: number;
+}
+
+export interface SharedProjectThreadView {
+  threadId: string;
+  workspaceId: string;
+  projectId: string;
+  authorUid: string;
+  authorDisplayName: string;
+  status: ThreadStatus;
+  resolvedAtMs?: number | null;
+  resolvedByDisplayName?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  messages: SharedProjectMessageView[];
+}
+
+export interface RealtimeCatchupEvent {
+  eventSeq: number;
+  workspaceId: string;
+  eventType: string;
+  projectId?: string | null;
+  pageId?: string | null;
+  threadId?: string | null;
+  proposalId?: string | null;
+  draftId?: string | null;
+  payloadJson: unknown;
+  createdAtMs: number;
 }
 
 export interface SharedDraftRecord {
@@ -1004,5 +1124,220 @@ export async function deleteSharedDraft(
     workspaceId,
     draftKey,
     accountUid: accountUid ?? null,
+  });
+}
+
+export async function createInvitationBatch(
+  workspaceId: string,
+  emails: string[],
+  role: WorkspaceRole,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<BatchInvitationOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<BatchInvitationOutcome>>('cmd_create_invitation_batch', {
+    workspaceId,
+    emails,
+    role,
+    idempotencyKey,
+  });
+}
+
+export async function openLiveDraft(
+  workspaceId: string,
+  pageId: string,
+  initialUpdateB64?: string | null,
+  expectedBaseRevisionNumber?: number | null,
+): Promise<WorkspaceResponse<OpenLiveDraftOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<OpenLiveDraftOutcome>>('cmd_open_live_draft', {
+    workspaceId,
+    pageId,
+    initialUpdateB64: initialUpdateB64 ?? null,
+    expectedBaseRevisionNumber: expectedBaseRevisionNumber ?? null,
+  });
+}
+
+export async function getLiveDraft(
+  workspaceId: string,
+  pageId: string,
+): Promise<WorkspaceResponse<SharedLiveDraftView | null>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedLiveDraftView | null>>('cmd_get_live_draft', {
+    workspaceId,
+    pageId,
+  });
+}
+
+export async function getLiveDraftDiff(
+  workspaceId: string,
+  pageId: string,
+  clientStateVectorB64?: string | null,
+): Promise<WorkspaceResponse<LiveDraftDiffResponse | null>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<LiveDraftDiffResponse | null>>('cmd_get_live_draft_diff', {
+    workspaceId,
+    pageId,
+    clientStateVectorB64: clientStateVectorB64 ?? null,
+  });
+}
+
+export async function applyLiveDraftUpdateHttp(
+  workspaceId: string,
+  pageId: string,
+  draftId: string,
+  draftVersion: number,
+  clientConnId: string,
+  clientOpSeq: number,
+  updateB64: string,
+): Promise<WorkspaceResponse<LiveDraftUpdateOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<LiveDraftUpdateOutcome>>('cmd_apply_live_draft_update', {
+    workspaceId,
+    pageId,
+    draftId,
+    draftVersion,
+    clientConnId,
+    clientOpSeq,
+    updateB64,
+  });
+}
+
+export async function submitLiveDraft(
+  workspaceId: string,
+  pageId: string,
+  expectedDraftId: string,
+  expectedDraftVersion: number,
+  expectedCheckpointId: string,
+  summary: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProposalDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProposalDetails>>('cmd_submit_live_draft', {
+    workspaceId,
+    pageId,
+    expectedDraftId,
+    expectedDraftVersion,
+    expectedCheckpointId,
+    summary,
+    idempotencyKey,
+  });
+}
+
+export async function rebaseLiveDraft(
+  workspaceId: string,
+  pageId: string,
+  params: {
+    expectedDraftId: string;
+    expectedDraftVersion: number;
+    expectedCheckpointId: string;
+    expectedBaseRevisionNumber: number;
+    mode: LiveDraftRebaseMode;
+    rebasedTitle?: string | null;
+    rebasedContentMd?: string | null;
+    idempotencyKey: string;
+  },
+): Promise<WorkspaceResponse<SharedLiveDraftView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedLiveDraftView>>('cmd_rebase_live_draft', {
+    workspaceId,
+    pageId,
+    expectedDraftId: params.expectedDraftId,
+    expectedDraftVersion: params.expectedDraftVersion,
+    expectedCheckpointId: params.expectedCheckpointId,
+    expectedBaseRevisionNumber: params.expectedBaseRevisionNumber,
+    mode: params.mode,
+    rebasedTitle: params.rebasedTitle ?? null,
+    rebasedContentMd: params.rebasedContentMd ?? null,
+    idempotencyKey: params.idempotencyKey,
+  });
+}
+
+export async function listProjectThreads(
+  workspaceId: string,
+  projectId: string,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedProjectThreadView>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedProjectThreadView>>>('cmd_list_project_threads', {
+    workspaceId,
+    projectId,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function createProjectThread(
+  workspaceId: string,
+  projectId: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectThreadView>>('cmd_create_project_thread', {
+    workspaceId,
+    projectId,
+    body,
+    idempotencyKey,
+  });
+}
+
+export async function replyProjectThread(
+  workspaceId: string,
+  projectId: string,
+  threadId: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectThreadView>>('cmd_reply_project_thread', {
+    workspaceId,
+    projectId,
+    threadId,
+    body,
+    idempotencyKey,
+  });
+}
+
+export async function resolveProjectThread(
+  workspaceId: string,
+  projectId: string,
+  threadId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectThreadView>>('cmd_resolve_project_thread', {
+    workspaceId,
+    projectId,
+    threadId,
+    idempotencyKey,
+  });
+}
+
+export async function reopenProjectThread(
+  workspaceId: string,
+  projectId: string,
+  threadId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectThreadView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectThreadView>>('cmd_reopen_project_thread', {
+    workspaceId,
+    projectId,
+    threadId,
+    idempotencyKey,
+  });
+}
+
+export async function listRealtimeEvents(
+  workspaceId: string,
+  afterSeq: number,
+  limit?: number,
+): Promise<WorkspaceResponse<RealtimeCatchupEvent[]>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<RealtimeCatchupEvent[]>>('cmd_list_realtime_events', {
+    workspaceId,
+    afterSeq,
+    limit: limit ?? null,
   });
 }

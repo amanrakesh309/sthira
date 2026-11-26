@@ -202,7 +202,12 @@ pub(crate) fn purge_workspace_drafts(data_dir: &Path, account_uid: &str, workspa
     }
 }
 
-pub(crate) fn clear_session_account_and_drafts(data_dir: &Path) {
+pub(crate) enum DraftCleanup {
+    All,
+    KeepLiveRecovery,
+}
+
+pub(crate) fn clear_session_account_and_drafts(data_dir: &Path, cleanup: DraftCleanup) {
     let binding_path = data_dir.join(SESSION_ACCOUNT_FILE);
     if let Ok(bytes) = fs::read(&binding_path) {
         if let Ok(binding) = serde_json::from_slice::<SessionAccountBinding>(&bytes) {
@@ -210,14 +215,44 @@ pub(crate) fn clear_session_account_and_drafts(data_dir: &Path) {
                 let acct_dir = data_dir
                     .join(DRAFTS_DIR)
                     .join(account_dir_name(&binding.uid));
-                if acct_dir.exists() {
-                    let _ = fs::remove_dir_all(acct_dir);
+                match cleanup {
+                    DraftCleanup::All => {
+                        let _ = fs::remove_dir_all(acct_dir);
+                    }
+                    DraftCleanup::KeepLiveRecovery => retain_live_recovery(&acct_dir),
                 }
             }
         }
     }
     if binding_path.exists() {
         let _ = fs::remove_file(binding_path);
+    }
+}
+
+fn retain_live_recovery(account_dir: &Path) {
+    if !fs::symlink_metadata(account_dir).is_ok_and(|info| info.is_dir()) {
+        return;
+    }
+    let Ok(workspaces) = fs::read_dir(account_dir) else {
+        return;
+    };
+    for workspace in workspaces.flatten() {
+        if !workspace.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(drafts) = fs::read_dir(workspace.path()) else {
+            continue;
+        };
+        for draft in drafts.flatten() {
+            if !draft
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("live_") && name.ends_with(".json"))
+            {
+                let _ = fs::remove_file(draft.path());
+            }
+        }
+        let _ = fs::remove_dir(workspace.path());
     }
 }
 
@@ -303,10 +338,57 @@ mod tests {
             .unwrap()
             .is_some());
 
-        // Terminal sign-out / revocation clears remaining drafts for that account.
-        clear_session_account_and_drafts(dir.path());
+        // Revocation clears remaining drafts for that account.
+        clear_session_account_and_drafts(dir.path(), DraftCleanup::All);
         assert_eq!(
             load_draft(dir.path(), "uid-a", "ws-2", "new_page").unwrap(),
+            None
+        );
+
+        // Live shared-draft pending update records (`live_<page_id>`) obey identical account & workspace isolation.
+        let live_recovery = SharedDraftRecord {
+            account_uid: "uid-a".into(),
+            workspace_id: "ws-live".into(),
+            draft_key: "live_shp9".into(),
+            page_id: Some("shp9".into()),
+            proposal_id: None,
+            base_revision_number: Some(4),
+            title: "Offline Live Recovery".into(),
+            content_md: r#"{"draftId":"drf_9","draftVersion":2,"mergedPendingB64":"AQID"}"#.into(),
+            summary: "Pending unsynced".into(),
+            updated_at_ms: 2000,
+        };
+        record_session_account_uid(dir.path(), "sess-a", "uid-a").unwrap();
+        save_draft(dir.path(), &live_recovery).unwrap();
+        assert_eq!(
+            load_draft(dir.path(), "uid-b", "ws-live", "live_shp9").unwrap(),
+            None
+        );
+        assert!(load_draft(dir.path(), "uid-a", "ws-live", "live_shp9")
+            .unwrap()
+            .is_some());
+        save_draft(dir.path(), &draft_a_ws2).unwrap();
+        clear_session_account_and_drafts(dir.path(), DraftCleanup::KeepLiveRecovery);
+        assert_eq!(
+            read_verified_session_account_uid(dir.path(), "sess-a", Some("uid-a")),
+            Err(DraftBindingError::NeedsVerification)
+        );
+        assert_eq!(
+            load_draft(dir.path(), "uid-a", "ws-2", "new_page").unwrap(),
+            None
+        );
+        assert_eq!(
+            load_draft(dir.path(), "uid-b", "ws-live", "live_shp9").unwrap(),
+            None
+        );
+        record_session_account_uid(dir.path(), "sess-a-reverified", "uid-a").unwrap();
+        assert_eq!(
+            load_draft(dir.path(), "uid-a", "ws-live", "live_shp9").unwrap(),
+            Some(live_recovery)
+        );
+        clear_session_account_and_drafts(dir.path(), DraftCleanup::All);
+        assert_eq!(
+            load_draft(dir.path(), "uid-a", "ws-live", "live_shp9").unwrap(),
             None
         );
     }

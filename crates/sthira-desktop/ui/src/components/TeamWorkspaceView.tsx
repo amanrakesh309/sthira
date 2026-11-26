@@ -25,17 +25,20 @@ import {
   canRemoveTarget,
   canRenameWorkspace,
   changeMemberRole,
-  createInvitation,
+  createInvitationBatch,
   editableRolesForTarget,
   getWorkspaceDetails,
   grantableInviteRoles,
   initiateOwnershipTransfer,
   leaveWorkspace,
+  listRealtimeEvents,
+  makeRequestIdempotencyKey,
   removeMember,
   renameWorkspace,
   replaceInvitation,
   revokeInvitation,
   WORKSPACE_ROLE_LABELS,
+  type BatchInvitationOutcome,
   type CreatedInvitation,
   type InvitationStatus,
   type WorkspaceDetails,
@@ -45,6 +48,7 @@ import {
   type WorkspaceRole,
   type WorkspaceSummary,
 } from '../api/workspaces';
+import { collabConnect, collabDisconnect, subscribeCollabEvents } from '../api/liveCollab';
 import type { GoogleSession } from './AccountModal';
 import { HelpTopicButton } from './HelpTopicButton';
 import { SharedActivityFeed, SharedPagesPanel } from './SharedPagesPanel';
@@ -113,6 +117,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
   const [pendingOpenRequest, setPendingOpenRequest] = useState<{
     pageId?: string | null;
     proposalId?: string | null;
+    threadId?: string | null;
     mode?: 'newPage' | 'publishCopy';
   } | null>(null);
   const [pendingProjectRequest, setPendingProjectRequest] =
@@ -120,12 +125,16 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
 
   // Editable form state preserved across retryable failures
   const [renameDraft, setRenameDraft] = useState(workspace.name);
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteEmailsRaw, setInviteEmailsRaw] = useState('');
   const [inviteRole, setInviteRole] = useState<WorkspaceRole>('viewer');
-  const [createdInvite, setCreatedInvite] = useState<CreatedInvitation | null>(null);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [batchOutcome, setBatchOutcome] = useState<BatchInvitationOutcome | null>(null);
+  const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
+  const [replacedInviteCodes, setReplacedInviteCodes] = useState<Record<string, CreatedInvitation>>({});
   const [roleDrafts, setRoleDrafts] = useState<Record<string, WorkspaceRole>>({});
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
+  const lastEventSeqRef = useRef(0);
+  const needsCatchupRef = useRef(false);
+  const inviteBatchKeyRef = useRef<{ sig: string; key: string } | null>(null);
 
   const callbacksRef = useRef({
     onWorkspaceUpdated,
@@ -228,6 +237,203 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
   }, [loadDetails]);
 
   useEffect(() => {
+    let active = true;
+    let revoked = false;
+    let catchUpInFlight = false;
+    let hasBaseline = false;
+    let refreshPending = false;
+    let retryAttempt = 0;
+    let catchupAttempt = 0;
+    let reconnectTimer: number | null = null;
+    let catchupRetryTimer: number | null = null;
+    const seenEventSeqs = new Set<number>();
+    const bufferedEvents: Array<{ eventSeq: number }> = [];
+    lastEventSeqRef.current = 0;
+    needsCatchupRef.current = false;
+
+    const DRAFT_ONLY_EVICT_CODES = new Set([
+      'role_downgraded',
+      'page_archived',
+      'live_draft_closed',
+      'shared_content_disabled',
+      'stale_draft_scope',
+    ]);
+
+    const clearTimers = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (catchupRetryTimer !== null) {
+        window.clearTimeout(catchupRetryTimer);
+        catchupRetryTimer = null;
+      }
+    };
+
+    const recordSeenSeq = (seq: number) => {
+      seenEventSeqs.add(seq);
+      if (seenEventSeqs.size > 2000) {
+        const oldest = seenEventSeqs.values().next();
+        if (!oldest.done) seenEventSeqs.delete(oldest.value);
+      }
+      if (seq > lastEventSeqRef.current) {
+        lastEventSeqRef.current = seq;
+      }
+    };
+
+    const scheduleCatchupRetry = () => {
+      if (!active || revoked || catchupRetryTimer !== null) return;
+      const delays = [1000, 2000, 4000, 8000, 15000];
+      const delayMs = delays[Math.min(catchupAttempt, delays.length - 1)];
+      catchupAttempt += 1;
+      catchupRetryTimer = window.setTimeout(() => {
+        catchupRetryTimer = null;
+        void runCatchup(false);
+      }, delayMs);
+    };
+
+    const runCatchup = async (forceRefreshOnEmpty = false) => {
+      if (!active || revoked || catchUpInFlight) return;
+      if (catchupRetryTimer !== null) {
+        window.clearTimeout(catchupRetryTimer);
+        catchupRetryTimer = null;
+      }
+      catchUpInFlight = true;
+      let cursor = lastEventSeqRef.current;
+      let completedAllPages = true;
+      const hadBaselineBefore = hasBaseline;
+      try {
+        while (active && !revoked) {
+          const res = await listRealtimeEvents(workspace.workspaceId, cursor, 100);
+          if (!active || revoked) return;
+          if (res.outcome === 'accessLost') {
+            revoked = true;
+            clearTimers();
+            callbacksRef.current.onAccessLost(res.message, res.workspaces);
+            return;
+          }
+          if (res.outcome !== 'ok') {
+            completedAllPages = false;
+            break;
+          }
+          const batch = res.data;
+          if (batch.length === 0) break;
+          for (const missed of batch) {
+            if (hadBaselineBefore && !seenEventSeqs.has(missed.eventSeq)) {
+              refreshPending = true;
+            }
+            recordSeenSeq(missed.eventSeq);
+            cursor = Math.max(cursor, missed.eventSeq);
+          }
+          if (batch.length < 100) break;
+        }
+        if (completedAllPages) {
+          // Only fold buffered live events once catch-up pages succeeded contiguously;
+          // draining buffered events across a failed page would skip intermediate sequences.
+          while (bufferedEvents.length > 0) {
+            const buffered = bufferedEvents.shift()!;
+            if (!seenEventSeqs.has(buffered.eventSeq)) {
+              refreshPending = true;
+            }
+            recordSeenSeq(buffered.eventSeq);
+          }
+          hasBaseline = true;
+          catchupAttempt = 0;
+          needsCatchupRef.current = false;
+          if (
+            active &&
+            !revoked &&
+            (refreshPending || (forceRefreshOnEmpty && hadBaselineBefore))
+          ) {
+            refreshPending = false;
+            setCw2RefreshSignal((n) => n + 1);
+            void loadDetails();
+          }
+        } else {
+          needsCatchupRef.current = true;
+          scheduleCatchupRetry();
+        }
+      } catch {
+        needsCatchupRef.current = true;
+        scheduleCatchupRetry();
+      } finally {
+        catchUpInFlight = false;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!active || revoked || reconnectTimer !== null) return;
+      const delays = [1000, 2000, 4000, 8000, 15000];
+      const delayMs = delays[Math.min(retryAttempt, delays.length - 1)];
+      retryAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        void attemptConnect();
+      }, delayMs);
+    };
+
+    const attemptConnect = async () => {
+      if (!active || revoked) return;
+      try {
+        await collabConnect(workspace.workspaceId, currentUid);
+        if (!active || revoked) return;
+        retryAttempt = 0;
+      } catch {
+        if (!active || revoked) return;
+        needsCatchupRef.current = true;
+        scheduleReconnect();
+      }
+    };
+
+    void runCatchup(false);
+    void attemptConnect();
+
+    let unlisten: (() => void) | null = null;
+    void subscribeCollabEvents((ev) => {
+      if (!active || revoked || ev.workspaceId !== workspace.workspaceId) return;
+      if (ev.type === 'access_revoked') {
+        if (DRAFT_ONLY_EVICT_CODES.has(ev.code)) {
+          void loadDetails();
+          return;
+        }
+        revoked = true;
+        clearTimers();
+        void loadDetails();
+        return;
+      }
+      if (ev.type === 'ws_disconnected') {
+        needsCatchupRef.current = true;
+        scheduleReconnect();
+      } else if (ev.type === 'connected') {
+        retryAttempt = 0;
+        if (reconnectTimer !== null) {
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (needsCatchupRef.current) {
+          void runCatchup(false);
+        }
+      } else if (ev.type === 'workspace_event') {
+        if (catchUpInFlight || needsCatchupRef.current) {
+          bufferedEvents.push({ eventSeq: ev.eventSeq });
+        } else {
+          recordSeenSeq(ev.eventSeq);
+        }
+      }
+    }).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+
+    return () => {
+      active = false;
+      clearTimers();
+      unlisten?.();
+      void collabDisconnect();
+    };
+  }, [currentUid, loadDetails, workspace.workspaceId]);
+
+  useEffect(() => {
     if (details && details.workspace.myRole !== workspace.myRole) {
       void loadDetails();
     }
@@ -294,28 +500,50 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
     }
   };
 
-  const handleCreateInvite = async (event: React.FormEvent) => {
+  const parseInviteInputEmails = (raw: string): string[] => {
+    return raw
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  };
+
+  const handleCreateInviteBatch = async (event: React.FormEvent) => {
     event.preventDefault();
-    const email = inviteEmail.trim();
-    if (!email || mutating) return;
+    const emails = parseInviteInputEmails(inviteEmailsRaw);
+    if (emails.length === 0 || mutating) return;
+    const sig = `${currentSummary.workspaceId}:${inviteRole}:${emails.join('|').toLowerCase()}`;
+    if (!inviteBatchKeyRef.current || inviteBatchKeyRef.current.sig !== sig) {
+      inviteBatchKeyRef.current = { sig, key: makeRequestIdempotencyKey('invb') };
+    }
     setMutating(true);
     setError('');
     setNotice('');
     try {
-      const res = await createInvitation(currentSummary.workspaceId, email, inviteRole);
+      const res = await createInvitationBatch(
+        currentSummary.workspaceId,
+        emails,
+        inviteRole,
+        inviteBatchKeyRef.current.key,
+      );
       if (res.outcome === 'ok') {
-        setCreatedInvite(res.data);
-        setCopiedCode(false);
-        setInviteEmail('');
+        inviteBatchKeyRef.current = null;
+        setBatchOutcome(res.data);
+        setCopiedCodeKey(null);
+        const createdCount = res.data.results.filter((r) => r.outcome === 'created').length;
+        if (createdCount > 0) {
+          setInviteEmailsRaw('');
+        }
         setNotice(
-          `Invitation created for ${res.data.invitation.recipientEmail} (${WORKSPACE_ROLE_LABELS[res.data.invitation.offeredRole]}). Share the single-use code directly.`,
+          `Processed ${res.data.results.length} ${
+            res.data.results.length === 1 ? 'recipient' : 'recipients'
+          } (${createdCount} created as ${WORKSPACE_ROLE_LABELS[res.data.offeredRole]}).`,
         );
         await loadDetails();
       } else {
         await handleWorkspaceResponseError(res);
       }
     } catch (err) {
-      setError(typeof err === 'string' ? err : 'Could not create invitation.');
+      setError(typeof err === 'string' ? err : 'Could not send workspace invitations.');
     } finally {
       setMutating(false);
     }
@@ -426,11 +654,17 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           break;
         }
         case 'invite-revoke': {
+          const revokedId = confirmation.invitation.invitationId;
           const res = await revokeInvitation(
             currentSummary.workspaceId,
-            confirmation.invitation.invitationId,
+            revokedId,
           );
           if (res.outcome === 'ok') {
+            setReplacedInviteCodes((prev) => {
+              const next = { ...prev };
+              delete next[revokedId];
+              return next;
+            });
             setConfirmation(null);
             setNotice(`Revoked invitation for ${confirmation.invitation.recipientEmail}.`);
             await loadDetails();
@@ -441,13 +675,35 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           break;
         }
         case 'invite-replace': {
+          const oldId = confirmation.invitation.invitationId;
           const res = await replaceInvitation(
             currentSummary.workspaceId,
-            confirmation.invitation.invitationId,
+            oldId,
           );
           if (res.outcome === 'ok') {
-            setCreatedInvite(res.data);
-            setCopiedCode(false);
+            setReplacedInviteCodes((prev) => ({
+              ...prev,
+              [oldId]: res.data,
+              [res.data.invitation.invitationId]: res.data,
+            }));
+            setBatchOutcome((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    results: prev.results.map((item) =>
+                      item.invitation?.invitationId === oldId
+                        ? {
+                            ...item,
+                            invitation: res.data.invitation,
+                            inviteCode: res.data.inviteCode,
+                            message: `Issued fresh ${WORKSPACE_ROLE_LABELS[res.data.invitation.offeredRole]} code.`,
+                          }
+                        : item,
+                    ),
+                  }
+                : null,
+            );
+            setCopiedCodeKey(null);
             setConfirmation(null);
             setNotice(`Issued a fresh invitation code for ${res.data.invitation.recipientEmail}.`);
             await loadDetails();
@@ -465,13 +721,12 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
     }
   };
 
-  const copyInviteCode = async () => {
-    if (!createdInvite) return;
+  const copyCodeForKey = async (key: string, code: string) => {
     try {
-      await navigator.clipboard.writeText(createdInvite.inviteCode);
-      setCopiedCode(true);
+      await navigator.clipboard.writeText(code);
+      setCopiedCodeKey(key);
     } catch {
-      setCopiedCode(false);
+      setCopiedCodeKey(null);
     }
   };
 
@@ -834,12 +1089,12 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           <SharedActivityFeed
             workspaceId={currentSummary.workspaceId}
             refreshSignal={cw2RefreshSignal}
-            onOpenPage={(pageId, proposalId) => {
-              setPendingOpenRequest({ pageId, proposalId });
+            onOpenPage={(pageId, proposalId, threadId) => {
+              setPendingOpenRequest({ pageId, proposalId, threadId });
               void selectTab('pages');
             }}
-            onOpenProject={(projectId, pageId, proposalId) => {
-              setPendingProjectRequest({ projectId, pageId, proposalId });
+            onOpenProject={(projectId, pageId, proposalId, threadId) => {
+              setPendingProjectRequest({ projectId, pageId, proposalId, threadId });
               void selectTab('projects');
             }}
             onAccessLost={onAccessLost}
@@ -1042,149 +1297,254 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
                 className="rounded-2xl border border-sthira-border bg-sthira-surface p-5 space-y-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold flex items-center gap-1.5">
-                    <Mail className="w-4 h-4 text-sthira-primary" />
-                    <span>Invitations</span>
-                  </h2>
+                  <div className="space-y-0.5">
+                    <h2 className="text-sm font-semibold flex items-center gap-1.5">
+                      <Mail className="w-4 h-4 text-sthira-primary" />
+                      <span>Invite people to {currentSummary.name}</span>
+                    </h2>
+                    <p className="text-xs text-sthira-text-muted">
+                      Invitations grant access to the workspace (shared pages and projects). Enter one or more addresses separated by commas or new lines.
+                    </p>
+                  </div>
                   <span className="text-sthira-text-muted">Single-use codes · 7-day expiry</span>
                 </div>
 
                 <form
-                  onSubmit={(e) => void handleCreateInvite(e)}
-                  className="flex flex-wrap items-end gap-3"
+                  onSubmit={(e) => void handleCreateInviteBatch(e)}
+                  className="space-y-3"
                 >
-                  <label className="flex-1 min-w-[220px] space-y-1">
-                    <span className="text-sthira-text-muted">Recipient email</span>
-                    <input
-                      aria-label="Recipient email"
-                      type="email"
-                      required
-                      disabled={mutating}
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      placeholder="teammate@example.com"
-                      className="w-full min-h-[40px] rounded-lg border border-sthira-border bg-sthira-canvas px-3 text-sm text-sthira-text"
-                    />
-                  </label>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <label className="flex-1 min-w-[240px] space-y-1">
+                      <span className="text-sthira-text-muted">Recipient email addresses</span>
+                      <textarea
+                        aria-label="Recipient email addresses"
+                        rows={3}
+                        required
+                        disabled={mutating}
+                        value={inviteEmailsRaw}
+                        onChange={(e) => setInviteEmailsRaw(e.target.value)}
+                        placeholder={'teammate1@example.com, teammate2@example.com\nteammate3@example.com'}
+                        className="w-full rounded-lg border border-sthira-border bg-sthira-canvas p-2.5 text-sm text-sthira-text focus:outline-none"
+                      />
+                    </label>
 
-                  <label className="w-36 space-y-1">
-                    <span className="text-sthira-text-muted">Role</span>
-                    <select
-                      aria-label="Invitation role"
-                      disabled={mutating}
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value as WorkspaceRole)}
-                      className="w-full min-h-[40px] rounded-lg border border-sthira-border bg-sthira-surface px-2.5 text-xs text-sthira-text"
+                    <label className="w-40 space-y-1">
+                      <span className="text-sthira-text-muted">Role for batch</span>
+                      <select
+                        aria-label="Invitation role"
+                        disabled={mutating}
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value as WorkspaceRole)}
+                        className="w-full min-h-[40px] rounded-lg border border-sthira-border bg-sthira-surface px-2.5 text-xs text-sthira-text"
+                      >
+                        {allowedInviteRoles.map((roleOpt) => (
+                          <option key={roleOpt} value={roleOpt}>
+                            {WORKSPACE_ROLE_LABELS[roleOpt]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-sthira-text-muted">
+                      {parseInviteInputEmails(inviteEmailsRaw).length} address(es) entered
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={mutating || parseInviteInputEmails(inviteEmailsRaw).length === 0}
+                      className="sthira-button-primary cursor-pointer"
                     >
-                      {allowedInviteRoles.map((roleOpt) => (
-                        <option key={roleOpt} value={roleOpt}>
-                          {WORKSPACE_ROLE_LABELS[roleOpt]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <button
-                    type="submit"
-                    disabled={mutating || !inviteEmail.trim()}
-                    className="sthira-button-primary cursor-pointer"
-                  >
-                    Create invitation
-                  </button>
+                      Send workspace invitations
+                    </button>
+                  </div>
                 </form>
 
-                {createdInvite && (
+                {batchOutcome && (
                   <div
                     role="region"
-                    aria-label="New invitation code"
-                    className="rounded-xl border border-sthira-border bg-sthira-canvas p-4 space-y-2.5"
+                    aria-label="Batch invitation results"
+                    className="rounded-xl border border-sthira-border bg-sthira-canvas p-4 space-y-3"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-semibold text-sthira-text">
-                        Share invitation code for {createdInvite.invitation.recipientEmail} (
-                        {WORKSPACE_ROLE_LABELS[createdInvite.invitation.offeredRole]})
+                        Invitation results ({WORKSPACE_ROLE_LABELS[batchOutcome.offeredRole]})
                       </span>
                       <button
                         type="button"
-                        onClick={() => setCreatedInvite(null)}
+                        onClick={() => setBatchOutcome(null)}
                         className="text-sthira-text-muted hover:text-sthira-text underline cursor-pointer"
                       >
                         Dismiss
                       </button>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <code
-                        data-testid="generated-invite-code"
-                        className="flex-1 min-w-[200px] rounded-lg border border-sthira-border bg-sthira-surface px-3 py-2 font-mono text-xs break-all select-all"
-                      >
-                        {createdInvite.inviteCode}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => void copyInviteCode()}
-                        className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{copiedCode ? 'Copied' : 'Copy code'}</span>
-                      </button>
-                    </div>
-                    <p className="text-sthira-text-muted">
-                      Expires {formatShortDate(createdInvite.invitation.expiresAtMs)}. Send this code through your own channel; it is only shown once.
-                    </p>
+                    <ul className="space-y-2.5" aria-label="Per-recipient invite results">
+                      {batchOutcome.results.map((item, idx) => {
+                        const rowInv = item.invitation
+                          ? details?.invitations.find((d) => d.invitationId === item.invitation?.invitationId) ??
+                            item.invitation
+                          : null;
+                        const activeCode =
+                          (rowInv && replacedInviteCodes[rowInv.invitationId]?.inviteCode) ||
+                          item.inviteCode ||
+                          null;
+                        const codeKey = `${item.email}-${idx}`;
+                        return (
+                          <li
+                            key={codeKey}
+                            className="rounded-lg border border-sthira-border bg-sthira-surface p-3 space-y-2"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="min-w-0 space-y-0.5">
+                                <span className="font-medium text-sthira-text break-all">
+                                  {item.email}
+                                </span>
+                                <p className="text-xs text-sthira-text-muted">{item.message}</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {rowInv && rowInv.status === 'pending' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={mutating}
+                                      aria-label={`Replace invite for ${item.email}`}
+                                      onClick={() =>
+                                        setConfirmation({ kind: 'invite-replace', invitation: rowInv })
+                                      }
+                                      className="sthira-button-secondary cursor-pointer"
+                                    >
+                                      Replace
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={mutating}
+                                      aria-label={`Revoke invite for ${item.email}`}
+                                      onClick={() =>
+                                        setConfirmation({ kind: 'invite-revoke', invitation: rowInv })
+                                      }
+                                      className="sthira-button-secondary cursor-pointer"
+                                    >
+                                      Revoke
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {activeCode && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <code
+                                  data-testid="generated-invite-code"
+                                  data-invite-email={item.email}
+                                  className="flex-1 min-w-[200px] rounded-lg border border-sthira-border bg-sthira-canvas px-3 py-1.5 font-mono text-xs break-all select-all"
+                                >
+                                  {activeCode}
+                                </code>
+                                <button
+                                  type="button"
+                                  aria-label={`Copy invite code for ${item.email}`}
+                                  onClick={() => {
+                                    void copyCodeForKey(codeKey, activeCode);
+                                  }}
+                                  className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  {copiedCodeKey === codeKey ? (
+                                    <Check className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{copiedCodeKey === codeKey ? 'Copied' : 'Copy code'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 )}
 
                 {details && details.invitations.length > 0 && (
                   <ul className="space-y-2" aria-label="Workspace invitations">
-                    {details.invitations.map((inv) => (
-                      <li
-                        key={inv.invitationId}
-                        className="rounded-xl border border-sthira-border bg-sthira-canvas p-3 flex flex-wrap items-center justify-between gap-2.5"
-                      >
-                        <div className="min-w-0 space-y-0.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-sthira-text break-all">
-                              {inv.recipientEmail}
-                            </span>
-                            <span className="rounded px-1.5 py-0.5 text-[11px] border border-sthira-border text-sthira-text-muted">
-                              {WORKSPACE_ROLE_LABELS[inv.offeredRole]}
-                            </span>
-                            <span className="rounded px-1.5 py-0.5 text-[11px] border border-sthira-border bg-sthira-surface text-sthira-text">
-                              {INVITE_STATUS_LABELS[inv.status]}
-                            </span>
-                          </div>
-                          <p className="text-sthira-text-muted">
-                            Invited by {inv.invitedByDisplayName} · Expires{' '}
-                            {formatShortDate(inv.expiresAtMs)}
-                          </p>
-                        </div>
+                    {details.invitations.map((inv) => {
+                      const replaced = replacedInviteCodes[inv.invitationId];
+                      const rowCodeKey = `inv-${inv.invitationId}`;
+                      return (
+                        <li
+                          key={inv.invitationId}
+                          className="rounded-xl border border-sthira-border bg-sthira-canvas p-3 space-y-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2.5">
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-sthira-text break-all">
+                                  {inv.recipientEmail}
+                                </span>
+                                <span className="rounded px-1.5 py-0.5 text-[11px] border border-sthira-border text-sthira-text-muted">
+                                  {WORKSPACE_ROLE_LABELS[inv.offeredRole]}
+                                </span>
+                                <span className="rounded px-1.5 py-0.5 text-[11px] border border-sthira-border bg-sthira-surface text-sthira-text">
+                                  {INVITE_STATUS_LABELS[inv.status]}
+                                </span>
+                              </div>
+                              <p className="text-sthira-text-muted">
+                                Invited by {inv.invitedByDisplayName} · Expires{' '}
+                                {formatShortDate(inv.expiresAtMs)}
+                              </p>
+                            </div>
 
-                        {inv.status === 'pending' && (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={mutating}
-                              onClick={() =>
-                                setConfirmation({ kind: 'invite-replace', invitation: inv })
-                              }
-                              className="sthira-button-secondary cursor-pointer"
-                            >
-                              Replace
-                            </button>
-                            <button
-                              type="button"
-                              disabled={mutating}
-                              onClick={() =>
-                                setConfirmation({ kind: 'invite-revoke', invitation: inv })
-                              }
-                              className="sthira-button-secondary cursor-pointer"
-                            >
-                              Revoke
-                            </button>
+                            {inv.status === 'pending' && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={mutating}
+                                  onClick={() =>
+                                    setConfirmation({ kind: 'invite-replace', invitation: inv })
+                                  }
+                                  className="sthira-button-secondary cursor-pointer"
+                                >
+                                  Replace
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={mutating}
+                                  onClick={() =>
+                                    setConfirmation({ kind: 'invite-revoke', invitation: inv })
+                                  }
+                                  className="sthira-button-secondary cursor-pointer"
+                                >
+                                  Revoke
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </li>
-                    ))}
+
+                          {replaced && inv.status === 'pending' && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <code
+                                data-testid="generated-invite-code"
+                                data-invite-email={inv.recipientEmail}
+                                className="flex-1 min-w-[200px] rounded-lg border border-sthira-border bg-sthira-surface px-3 py-1.5 font-mono text-xs break-all select-all"
+                              >
+                                {replaced.inviteCode}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => void copyCodeForKey(rowCodeKey, replaced.inviteCode)}
+                                className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                {copiedCodeKey === rowCodeKey ? (
+                                  <Check className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                                <span>{copiedCodeKey === rowCodeKey ? 'Copied' : 'Copy code'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </section>

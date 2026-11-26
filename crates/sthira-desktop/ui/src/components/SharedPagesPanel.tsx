@@ -11,7 +11,9 @@ import {
   History,
   MessageSquare,
   RotateCcw,
+  Users,
 } from 'lucide-react';
+import { subscribeCollabEvents } from '../api/liveCollab';
 import {
   archiveSharedPage,
   canAuthorSharedContent,
@@ -48,6 +50,7 @@ import type { GoogleSession } from './AccountModal';
 import { PublishPersonalCopyModal } from './PublishPersonalCopyModal';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
 import { SharedPageDraftEditor, sharedDraftKeyForMode, type SharedDraftEditorMode } from './SharedPageDraftEditor';
+import { LiveSharedDraftEditor } from './LiveSharedDraftEditor';
 import { SharedProposalReview } from './SharedProposalReview';
 
 interface SharedPagesPanelProps {
@@ -57,7 +60,12 @@ interface SharedPagesPanelProps {
   currentUid?: string | null;
   authorDisplayName?: string;
   refreshSignal: number;
-  pendingOpenRequest?: { pageId?: string | null; proposalId?: string | null; mode?: 'newPage' | 'publishCopy' } | null;
+  pendingOpenRequest?: {
+    pageId?: string | null;
+    proposalId?: string | null;
+    threadId?: string | null;
+    mode?: 'newPage' | 'publishCopy';
+  } | null;
   originProjectContext?: {
     projectId: string;
     projectName: string;
@@ -108,6 +116,16 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
 
   const [selectedProposal, setSelectedProposal] = useState<SharedProposalDetails | null>(null);
   const [draftMode, setDraftMode] = useState<SharedDraftEditorMode | null>(null);
+  const [liveEditingPage, setLiveEditingPage] = useState<{
+    pageId: string;
+    baseRevisionNumber: number;
+    baseTitle: string;
+    baseContentMd: string;
+    currentRevisionNumber?: number;
+    currentTitle?: string;
+    currentContentMd?: string;
+  } | null>(null);
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
   const [publishCopyOpen, setPublishCopyOpen] = useState(false);
 
   const [newThreadBody, setNewThreadBody] = useState('');
@@ -232,9 +250,11 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   const selectedPageRef = useRef(selectedPage);
   const selectedProposalRef = useRef(selectedProposal);
   const draftModeRef = useRef(draftMode);
+  const liveEditingPageRef = useRef(liveEditingPage);
   selectedPageRef.current = selectedPage;
   selectedProposalRef.current = selectedProposal;
   draftModeRef.current = draftMode;
+  liveEditingPageRef.current = liveEditingPage;
   const prevRefreshSignalRef = useRef(refreshSignal);
 
   const originProjectRef = useRef(originProjectContext);
@@ -244,6 +264,8 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
     setSelectedPage(null);
     setSelectedProposal(null);
     setDraftMode(null);
+    setLiveEditingPage(null);
+    setHighlightedThreadId(null);
     setInspectedRevision(null);
     setShowHistory(false);
     setPanelNotice('');
@@ -256,7 +278,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   useEffect(() => {
     if (refreshSignal === prevRefreshSignalRef.current) return;
     prevRefreshSignalRef.current = refreshSignal;
-    if (draftModeRef.current) return;
+    if (draftModeRef.current || liveEditingPageRef.current) return;
     if (selectedProposalRef.current) {
       void openProposalById(selectedProposalRef.current.proposal.proposalId);
     } else if (selectedPageRef.current) {
@@ -268,6 +290,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
 
   useEffect(() => {
     if (!pendingOpenRequest) return;
+    setHighlightedThreadId(pendingOpenRequest.threadId ?? null);
     if (pendingOpenRequest.mode === 'newPage') {
       setDraftMode({ kind: 'newPage' });
       onConsumedOpenRequest?.();
@@ -293,6 +316,55 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
       onConsumedOpenRequest?.();
     }
   }, [onConsumedOpenRequest, openPageById, openProposalById, pendingOpenRequest]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void subscribeCollabEvents((ev) => {
+      if (!active || ev.type !== 'workspace_event') return;
+      if (ev.workspaceId !== workspaceId) return;
+      if (
+        ev.eventType === 'page_thread_updated' &&
+        selectedPageRef.current &&
+        ev.pageId === selectedPageRef.current.page.pageId &&
+        ev.payload &&
+        typeof ev.payload === 'object'
+      ) {
+        const incoming = ev.payload as SharedCommentThreadView;
+        if (incoming.threadId) {
+          setSelectedPage((prev) => {
+            if (!prev || prev.page.pageId !== incoming.pageId) return prev;
+            const exists = prev.threads.some((t) => t.threadId === incoming.threadId);
+            const threads = exists
+              ? prev.threads.map((t) => (t.threadId === incoming.threadId ? incoming : t))
+              : [incoming, ...prev.threads];
+            return { ...prev, threads };
+          });
+        }
+      } else if (
+        (ev.eventType === 'proposal_updated' ||
+          ev.eventType === 'page_archived' ||
+          ev.eventType === 'page_restored') &&
+        selectedPageRef.current &&
+        ev.pageId === selectedPageRef.current.page.pageId &&
+        !liveEditingPageRef.current &&
+        !draftModeRef.current
+      ) {
+        if (selectedProposalRef.current && ev.proposalId === selectedProposalRef.current.proposal.proposalId) {
+          void openProposalById(selectedProposalRef.current.proposal.proposalId);
+        } else if (!selectedProposalRef.current) {
+          void openPageById(selectedPageRef.current.page.pageId);
+        }
+      }
+    }).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [openPageById, openProposalById, workspaceId]);
 
   const canAuthor = canAuthorSharedContent(myRole);
   const canReviewOrArchive = canReviewOrArchiveSharedContent(myRole);
@@ -542,14 +614,64 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
     );
   }
 
+  if (liveEditingPage) {
+    return (
+      <LiveSharedDraftEditor
+        workspaceId={workspaceId}
+        pageId={liveEditingPage.pageId}
+        baseRevisionNumber={liveEditingPage.baseRevisionNumber}
+        baseTitle={liveEditingPage.baseTitle}
+        baseContentMd={liveEditingPage.baseContentMd}
+        initialCurrentRevisionNumber={liveEditingPage.currentRevisionNumber}
+        initialCurrentTitle={liveEditingPage.currentTitle}
+        initialCurrentContentMd={liveEditingPage.currentContentMd}
+        currentUid={currentUid}
+        authorDisplayName={authorDisplayName || 'Team member'}
+        backLabel="Back to page"
+        registerBeforeLeave={registerBeforeLeave}
+        onSubmitted={(submitted) => {
+          setLiveEditingPage(null);
+          setSelectedProposal(submitted);
+          setPanelNotice('Submitted shared draft for independent review.');
+        }}
+        onOpenProposal={(proposalId) => {
+          setLiveEditingPage(null);
+          void openProposalById(proposalId);
+        }}
+        onBack={() => {
+          const pid = liveEditingPage.pageId;
+          setLiveEditingPage(null);
+          setPanelError('');
+          void openPageById(pid);
+        }}
+        onAccessLost={onAccessLost}
+        onSessionChange={onSessionChange}
+      />
+    );
+  }
+
   if (selectedProposal) {
     return (
       <SharedProposalReview
         details={selectedProposal}
         currentUid={currentUid}
+        canAuthorEditLive={canAuthor}
         busy={busy}
         error={panelError}
         onRefresh={() => void openProposalById(selectedProposal.proposal.proposalId)}
+        onOpenLiveDraft={() => {
+          const prop = selectedProposal;
+          setSelectedProposal(null);
+          setLiveEditingPage({
+            pageId: prop.proposal.pageId,
+            baseRevisionNumber: prop.proposal.baseRevisionNumber,
+            baseTitle: prop.baseTitle,
+            baseContentMd: prop.baseContentMd,
+            currentRevisionNumber: prop.currentPageRevisionNumber,
+            currentTitle: prop.currentPageTitle,
+            currentContentMd: prop.currentPageContentMd,
+          });
+        }}
         onBack={() => {
           const pageId = selectedProposal.proposal.pageId;
           setSelectedProposal(null);
@@ -675,23 +797,44 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
               <span>History ({revisionsList.length})</span>
             </button>
             {canAuthor && !isArchived && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPanelError('');
-                  setDraftMode({
-                    kind: 'proposeEdit',
-                    pageId: page.pageId,
-                    baseRevisionNumber: page.currentRevisionNumber,
-                    initialTitle: page.title,
-                    initialContentMd: currentRevision.contentMd,
-                  });
-                }}
-                className="sthira-button-primary inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>Propose edit</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPanelError('');
+                    setLiveEditingPage({
+                      pageId: page.pageId,
+                      baseRevisionNumber: page.currentRevisionNumber,
+                      baseTitle: page.title,
+                      baseContentMd: currentRevision.contentMd,
+                      currentRevisionNumber: page.currentRevisionNumber,
+                      currentTitle: page.title,
+                      currentContentMd: currentRevision.contentMd,
+                    });
+                  }}
+                  className="sthira-button-primary inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Edit together</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPanelError('');
+                    setDraftMode({
+                      kind: 'proposeEdit',
+                      pageId: page.pageId,
+                      baseRevisionNumber: page.currentRevisionNumber,
+                      initialTitle: page.title,
+                      initialContentMd: currentRevision.contentMd,
+                    });
+                  }}
+                  className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Propose edit</span>
+                </button>
+              </>
             )}
             {canReviewOrArchive && (
               <button
@@ -746,6 +889,9 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
               Origin: {page.provenance.originalAuthorLabel || page.publisherDisplayName}
               {page.provenance.sourceNote ? ` (${page.provenance.sourceNote})` : ''} · Published by{' '}
               {page.publisherDisplayName} · Revision author: {activeDoc.authorDisplayName}
+              {activeDoc.contributorNames && activeDoc.contributorNames.length > 0
+                ? ` · Contributors: ${activeDoc.contributorNames.join(', ')}`
+                : ''}
               {activeDoc.reviewerDisplayName ? ` · Approved by ${activeDoc.reviewerDisplayName}` : ''} ·{' '}
               {formatDateTime(activeDoc.createdAtMs)}
             </p>
@@ -777,6 +923,9 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
                     </p>
                     <p className="text-sthira-text-muted">
                       Author: {rev.authorDisplayName}
+                      {rev.contributorNames && rev.contributorNames.length > 0
+                        ? ` · Contributors: ${rev.contributorNames.join(', ')}`
+                        : ''}
                       {rev.reviewerDisplayName ? ` · Reviewer: ${rev.reviewerDisplayName}` : ''} ·{' '}
                       {formatDateTime(rev.createdAtMs)}
                     </p>
@@ -899,10 +1048,15 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
                 const canToggleResolve =
                   canAuthor && (canReviewOrArchive || (!!currentUid && thr.authorUid === currentUid));
                 const isResolved = thr.status === 'resolved';
+                const isHighlighted = highlightedThreadId === thr.threadId;
                 return (
                   <li
                     key={thr.threadId}
-                    className="rounded-xl border border-sthira-border bg-sthira-canvas p-3.5 space-y-2.5 text-xs"
+                    data-thread-id={thr.threadId}
+                    data-highlighted={isHighlighted ? 'true' : undefined}
+                    className={`rounded-xl border bg-sthira-canvas p-3.5 space-y-2.5 text-xs ${
+                      isHighlighted ? 'border-sthira-primary ring-2 ring-sthira-primary' : 'border-sthira-border'
+                    }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -1139,8 +1293,13 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
 interface SharedActivityFeedProps {
   workspaceId: string;
   refreshSignal: number;
-  onOpenPage: (pageId: string, proposalId?: string | null) => void;
-  onOpenProject?: (projectId: string, pageId?: string | null, proposalId?: string | null) => void;
+  onOpenPage: (pageId: string, proposalId?: string | null, threadId?: string | null) => void;
+  onOpenProject?: (
+    projectId: string,
+    pageId?: string | null,
+    proposalId?: string | null,
+    threadId?: string | null,
+  ) => void;
   onAccessLost: (message: string, workspaces?: WorkspaceListResponse | null) => void;
   onSessionChange: (session: GoogleSession) => void;
 }
@@ -1246,17 +1405,30 @@ export const SharedActivityFeed: React.FC<SharedActivityFeedProps> = ({
                     type="button"
                     onClick={() => {
                       if (item.projectId && onOpenProject) {
-                        onOpenProject(item.projectId, item.pageId, item.proposalId);
+                        onOpenProject(item.projectId, item.pageId, item.proposalId, item.threadId);
                       } else {
-                        onOpenPage(item.pageId!, item.proposalId);
+                        onOpenPage(item.pageId!, item.proposalId, item.threadId);
                       }
                     }}
                     className="sthira-button-secondary cursor-pointer"
                   >
-                    {item.proposalId ? 'Open proposal' : 'Open page'}
+                    {item.proposalId
+                      ? 'Open proposal'
+                      : item.threadId
+                        ? 'Open discussion'
+                        : 'Open page'}
                   </button>
                 )}
-                {item.projectId && onOpenProject && (
+                {item.projectId && onOpenProject && item.threadId && !item.pageId && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProject(item.projectId!, null, null, item.threadId)}
+                    className="sthira-button-secondary cursor-pointer"
+                  >
+                    Open discussion
+                  </button>
+                )}
+                {item.projectId && onOpenProject && (!item.threadId || item.pageId) && (
                   <button
                     type="button"
                     onClick={() => onOpenProject(item.projectId!)}

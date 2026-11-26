@@ -12,6 +12,7 @@
 //! 3. Lock order is strictly `WorkspaceDB -> AuthSessionStore`; `AuthSessionStore` never acquires
 //!    the workspace DB lock, eliminating lock-order deadlocks across the boundary.
 
+use crate::crdt;
 use crate::membership::{
     caller_display_name, require_active_membership, sanitize_idempotency_key, MembershipError,
     SessionRecheck, SqliteWorkspaceMembershipStore, WorkspaceRole,
@@ -166,6 +167,8 @@ pub struct SharedPageRevisionView {
     pub reviewer_uid: Option<String>,
     pub reviewer_display_name: Option<String>,
     pub proposal_id: Option<String>,
+    #[serde(default)]
+    pub contributor_names: Vec<String>,
     pub created_at_ms: i64,
 }
 
@@ -311,6 +314,14 @@ pub struct SharedProposalSummary {
     pub reviewed_at_ms: Option<i64>,
     pub reviewer_display_name: Option<String>,
     pub applied_revision_number: Option<i64>,
+    #[serde(default)]
+    pub live_draft_id: Option<String>,
+    #[serde(default)]
+    pub draft_version: Option<i64>,
+    #[serde(default)]
+    pub contributor_uids: Vec<String>,
+    #[serde(default)]
+    pub contributor_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,6 +338,10 @@ pub struct SharedProposalDetails {
     pub page_archived: bool,
     pub can_review: bool,
     pub can_author_edit: bool,
+    #[serde(default)]
+    pub has_eligible_reviewer: bool,
+    #[serde(default)]
+    pub ineligible_reason: Option<String>,
     pub decisions: Vec<ProposalDecisionView>,
 }
 
@@ -494,6 +509,204 @@ pub struct DetachProjectPageInput {
     pub idempotency_key: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveDraftStatus {
+    Editing,
+    PendingReview,
+    Applied,
+}
+
+impl LiveDraftStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LiveDraftStatus::Editing => "editing",
+            LiveDraftStatus::PendingReview => "pending_review",
+            LiveDraftStatus::Applied => "applied",
+        }
+    }
+
+    pub fn from_db(raw: &str) -> Result<Self, SharedContentError> {
+        match raw {
+            "editing" => Ok(LiveDraftStatus::Editing),
+            "pending_review" => Ok(LiveDraftStatus::PendingReview),
+            "applied" => Ok(LiveDraftStatus::Applied),
+            _ => Err(SharedContentError::InvalidInput(
+                "Unknown live draft status.".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDraftContributorView {
+    pub uid: String,
+    pub display_name: String,
+    pub contribution_count: i64,
+    pub last_edited_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedLiveDraftView {
+    pub draft_id: String,
+    pub workspace_id: String,
+    pub page_id: String,
+    pub base_revision_number: i64,
+    pub draft_version: i64,
+    pub checkpoint_seq: i64,
+    pub checkpoint_id: String,
+    pub status: LiveDraftStatus,
+    pub snapshot_state_b64: String,
+    pub snapshot_vector_b64: String,
+    pub base_title: String,
+    pub base_content_md: String,
+    pub current_title: String,
+    pub current_content_md: String,
+    pub contributors: Vec<LiveDraftContributorView>,
+    pub pending_proposal_id: Option<String>,
+    pub created_by_uid: String,
+    pub created_by_display_name: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLiveDraftInput {
+    #[serde(default)]
+    pub initial_update_b64: Option<String>,
+    #[serde(default)]
+    pub expected_base_revision_number: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLiveDraftOutcome {
+    pub created: bool,
+    pub draft: SharedLiveDraftView,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDraftDiffResponse {
+    pub draft: SharedLiveDraftView,
+    pub missing_update_b64: String,
+    pub server_vector_b64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDraftUpdateInput {
+    pub draft_id: String,
+    pub draft_version: i64,
+    pub client_conn_id: String,
+    pub client_op_seq: i64,
+    pub update_b64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDraftUpdateOutcome {
+    pub accepted: bool,
+    pub duplicate: bool,
+    pub draft_version: i64,
+    pub checkpoint_seq: i64,
+    pub checkpoint_id: String,
+    pub server_seq: i64,
+    pub accepted_update_b64: String,
+    pub contributors: Vec<LiveDraftContributorView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitLiveDraftInput {
+    pub expected_draft_id: String,
+    pub expected_draft_version: i64,
+    pub expected_checkpoint_id: String,
+    pub summary: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveDraftRebaseMode {
+    CarryDraft,
+    RestartFromCurrent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseLiveDraftInput {
+    pub expected_draft_id: String,
+    pub expected_draft_version: i64,
+    pub expected_checkpoint_id: String,
+    pub expected_base_revision_number: i64,
+    pub mode: LiveDraftRebaseMode,
+    #[serde(default)]
+    pub rebased_title: Option<String>,
+    #[serde(default)]
+    pub rebased_content_md: Option<String>,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedProjectMessageView {
+    pub message_id: String,
+    pub thread_id: String,
+    pub author_uid: String,
+    pub author_display_name: String,
+    pub body: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedProjectThreadView {
+    pub thread_id: String,
+    pub workspace_id: String,
+    pub project_id: String,
+    pub author_uid: String,
+    pub author_display_name: String,
+    pub status: ThreadStatus,
+    pub resolved_at_ms: Option<i64>,
+    pub resolved_by_display_name: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub messages: Vec<SharedProjectMessageView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectThreadInput {
+    pub body: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyProjectThreadInput {
+    pub body: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeCatchupEvent {
+    pub event_seq: i64,
+    pub workspace_id: String,
+    pub event_type: String,
+    pub project_id: Option<String>,
+    pub page_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub proposal_id: Option<String>,
+    pub draft_id: Option<String>,
+    pub payload_json: serde_json::Value,
+    pub created_at_ms: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PagedList<T> {
@@ -547,6 +760,16 @@ pub enum SharedContentError {
     StaleSubmission(String),
     #[error("{0}")]
     StaleProposal(String),
+    #[error("This live draft is locked while a submission is pending review.")]
+    LiveDraftFrozen,
+    #[error("{0}")]
+    StaleDraftVersion(String),
+    #[error("{0}")]
+    StaleDraftCheckpoint(String),
+    #[error("{0}")]
+    StaleDraftBase(String),
+    #[error("This live draft was not found or is no longer active.")]
+    LiveDraftNotFound,
     #[error("This request identifier was already used with different input.")]
     IdempotencyConflict,
     #[error("Invalid pagination cursor.")]
@@ -834,6 +1057,124 @@ pub trait SharedContentStore: Send + Sync {
         input: &DetachProjectPageInput,
         now_ms: i64,
     ) -> Result<SharedProjectDetails, SharedContentError>;
+
+    fn open_or_create_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &OpenLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<OpenLiveDraftOutcome, SharedContentError>;
+
+    fn get_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+    ) -> Result<Option<SharedLiveDraftView>, SharedContentError>;
+
+    fn get_live_draft_diff(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+        client_state_vector_b64: Option<&str>,
+    ) -> Result<Option<LiveDraftDiffResponse>, SharedContentError>;
+
+    fn apply_live_draft_update(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &LiveDraftUpdateInput,
+        now_ms: i64,
+    ) -> Result<LiveDraftUpdateOutcome, SharedContentError>;
+
+    fn submit_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &SubmitLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<SharedProposalDetails, SharedContentError>;
+
+    fn rebase_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &RebaseLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<SharedLiveDraftView, SharedContentError>;
+
+    fn list_project_threads(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedProjectThreadView>, SharedContentError>;
+
+    fn create_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &CreateProjectThreadInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn reply_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        input: &ReplyProjectThreadInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn reopen_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError>;
+
+    fn list_realtime_events(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        after_seq: i64,
+        limit: Option<usize>,
+    ) -> Result<Vec<RealtimeCatchupEvent>, SharedContentError>;
 }
 
 #[derive(Clone)]
@@ -842,7 +1183,7 @@ pub struct SqliteSharedContentStore {
 }
 
 impl SqliteSharedContentStore {
-    /// Attaches CW2 shared-content tables (migrations v2 and v3) inside the existing CW1
+    /// Attaches CW2/CW3 shared-content tables (migrations v2, v3, v4) inside the existing CW1
     /// membership SQLite database so authorization and content mutations share a single ACID
     /// transaction.
     pub fn enable_on_membership_store(
@@ -853,6 +1194,7 @@ impl SqliteSharedContentStore {
             let guard = conn.lock().expect("workspace db lock poisoned");
             migrate_v2(&guard)?;
             migrate_v3(&guard)?;
+            migrate_v4(&guard)?;
         }
         Ok(Self { conn })
     }
@@ -1109,6 +1451,157 @@ fn migrate_v3(conn: &Connection) -> Result<(), SharedContentError> {
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at_ms)
          VALUES (3, 'cw2_shared_projects_v3', ?1)",
+        params![crate::now_epoch_ms()],
+    )?;
+    Ok(())
+}
+
+fn migrate_v4(conn: &Connection) -> Result<(), SharedContentError> {
+    conn.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+
+        CREATE TABLE IF NOT EXISTS shared_live_drafts (
+            draft_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            page_id TEXT NOT NULL,
+            base_revision_number INTEGER NOT NULL,
+            draft_version INTEGER NOT NULL DEFAULT 1 CHECK (draft_version >= 1),
+            checkpoint_seq INTEGER NOT NULL DEFAULT 0 CHECK (checkpoint_seq >= 0),
+            status TEXT NOT NULL CHECK (status IN ('editing', 'pending_review', 'applied')),
+            snapshot_update_blob BLOB NOT NULL,
+            pending_proposal_id TEXT,
+            created_by_uid TEXT NOT NULL,
+            created_by_display_name TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            FOREIGN KEY (workspace_id, page_id)
+                REFERENCES shared_pages(workspace_id, page_id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_live_drafts_active
+            ON shared_live_drafts (workspace_id, page_id)
+            WHERE status IN ('editing', 'pending_review');
+
+        CREATE TABLE IF NOT EXISTS shared_live_draft_updates (
+            server_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_id TEXT NOT NULL REFERENCES shared_live_drafts(draft_id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            page_id TEXT NOT NULL,
+            client_conn_id TEXT NOT NULL,
+            client_op_seq INTEGER NOT NULL,
+            author_uid TEXT NOT NULL,
+            author_display_name TEXT NOT NULL,
+            update_blob BLOB NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE (draft_id, client_conn_id, client_op_seq)
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_live_draft_updates_draft
+            ON shared_live_draft_updates (draft_id, server_seq ASC);
+
+        CREATE TABLE IF NOT EXISTS shared_live_draft_contributors (
+            draft_id TEXT NOT NULL REFERENCES shared_live_drafts(draft_id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            uid TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            contribution_count INTEGER NOT NULL DEFAULT 1,
+            first_edited_at_ms INTEGER NOT NULL,
+            last_edited_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (draft_id, uid)
+        );
+
+        CREATE TABLE IF NOT EXISTS shared_project_threads (
+            thread_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            author_uid TEXT NOT NULL,
+            author_display_name TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+            resolved_at_ms INTEGER,
+            resolved_by_uid TEXT,
+            resolved_by_display_name TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            FOREIGN KEY (workspace_id, project_id)
+                REFERENCES shared_projects(workspace_id, project_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_project_threads_project
+            ON shared_project_threads (workspace_id, project_id, updated_at_ms DESC, thread_id DESC);
+
+        CREATE TABLE IF NOT EXISTS shared_project_messages (
+            message_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL REFERENCES shared_project_threads(thread_id) ON DELETE CASCADE,
+            author_uid TEXT NOT NULL,
+            author_display_name TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_project_messages_thread
+            ON shared_project_messages (workspace_id, thread_id, created_at_ms ASC, message_id ASC);
+
+        CREATE TABLE IF NOT EXISTS shared_realtime_events (
+            event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            project_id TEXT,
+            page_id TEXT,
+            thread_id TEXT,
+            proposal_id TEXT,
+            draft_id TEXT,
+            payload_json TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_realtime_ws_seq
+            ON shared_realtime_events (workspace_id, event_seq ASC);
+        ",
+    )?;
+
+    let ensure_col = |table: &str, col: &str, ddl: &str| -> Result<(), SharedContentError> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        if !cols.iter().any(|c| c == col) {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {ddl}"), [])?;
+        }
+        Ok(())
+    };
+    ensure_col(
+        "shared_change_proposals",
+        "live_draft_id",
+        "live_draft_id TEXT",
+    )?;
+    ensure_col(
+        "shared_change_proposals",
+        "draft_version",
+        "draft_version INTEGER",
+    )?;
+    ensure_col(
+        "shared_change_proposals",
+        "contributor_uids_json",
+        "contributor_uids_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_col(
+        "shared_change_proposals",
+        "contributor_names_json",
+        "contributor_names_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_col(
+        "shared_page_revisions",
+        "contributor_names_json",
+        "contributor_names_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_col(
+        "shared_live_drafts",
+        "checkpoint_seq",
+        "checkpoint_seq INTEGER NOT NULL DEFAULT 0",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at_ms)
+         VALUES (4, 'cw3_live_collab_discussions_v4', ?1)",
         params![crate::now_epoch_ms()],
     )?;
     Ok(())
@@ -1476,6 +1969,19 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
         let thread = load_thread_by_id(&tx, workspace_id, page_id, &thread_id)?;
+        let thread_json = serde_json::to_value(&thread).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "page_thread_updated",
+            None,
+            Some(page_id),
+            Some(&thread_id),
+            None,
+            None,
+            &thread_json,
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -1569,6 +2075,19 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
         let thread = load_thread_by_id(&tx, workspace_id, page_id, thread_id)?;
+        let thread_json = serde_json::to_value(&thread).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "page_thread_updated",
+            None,
+            Some(page_id),
+            Some(thread_id),
+            None,
+            None,
+            &thread_json,
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -1822,6 +2341,12 @@ impl SharedContentStore for SqliteSharedContentStore {
             return Err(SharedContentError::Forbidden);
         }
         let existing = load_proposal_row(&tx, workspace_id, proposal_id)?;
+        if existing.live_draft_id.is_some() {
+            return Err(SharedContentError::InvalidInput(
+                "This proposal came from a live shared draft. Reopen and submit from Edit together."
+                    .into(),
+            ));
+        }
         if existing.author_uid != caller.uid {
             return Err(SharedContentError::Forbidden);
         }
@@ -1979,6 +2504,18 @@ impl SharedContentStore for SqliteSharedContentStore {
              WHERE workspace_id = ?2 AND proposal_id = ?3",
             params![now_ms, workspace_id, proposal_id],
         )?;
+        if let Some(ref draft_id) = existing.live_draft_id {
+            tx.execute(
+                "UPDATE shared_live_drafts
+                 SET status = 'editing',
+                     draft_version = draft_version + 1,
+                     checkpoint_seq = checkpoint_seq + 1,
+                     pending_proposal_id = NULL,
+                     updated_at_ms = ?1
+                 WHERE workspace_id = ?2 AND draft_id = ?3 AND status = 'pending_review'",
+                params![now_ms, workspace_id, draft_id],
+            )?;
+        }
         tx.execute(
             "INSERT INTO shared_proposal_decisions (
                 decision_id, workspace_id, proposal_id, submission_number, action,
@@ -2014,6 +2551,23 @@ impl SharedContentStore for SqliteSharedContentStore {
         )?;
         let details =
             load_proposal_details(&tx, workspace_id, proposal_id, &caller.uid, member.role)?;
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "proposal_updated",
+            None,
+            Some(&page.page_id),
+            None,
+            Some(proposal_id),
+            existing.live_draft_id.as_deref(),
+            &serde_json::json!({
+                "proposalId": proposal_id,
+                "pageId": page.page_id,
+                "status": "withdrawn",
+                "draftId": existing.live_draft_id,
+            }),
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -2062,7 +2616,9 @@ impl SharedContentStore for SqliteSharedContentStore {
             return Err(SharedContentError::Forbidden);
         }
         let existing = load_proposal_row(&tx, workspace_id, proposal_id)?;
-        if existing.author_uid == caller.uid {
+        if existing.author_uid == caller.uid
+            || existing.contributor_uids.iter().any(|u| u == &caller.uid)
+        {
             return Err(SharedContentError::SelfReviewForbidden);
         }
         if let Some(cached) = lookup_idempotent_response::<SharedProposalDetails>(
@@ -2105,13 +2661,22 @@ impl SharedContentStore for SqliteSharedContentStore {
                 let next_rev_num = page.current_revision_number + 1;
                 let rev_id = format!("rev_{}", Uuid::new_v4().simple());
                 let content_sha = sha256_hex(&existing.proposed_content_md);
+                let contributor_names_json = if existing.live_draft_id.is_some() {
+                    let mut names = existing.contributor_names.clone();
+                    if !names.iter().any(|n| n == &existing.author_display_name) {
+                        names.push(existing.author_display_name.clone());
+                    }
+                    serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())
+                } else {
+                    "[]".into()
+                };
 
                 tx.execute(
                     "INSERT INTO shared_page_revisions (
                         revision_id, workspace_id, page_id, revision_number, title, content_md,
                         content_sha256, change_summary, author_uid, author_display_name,
-                        reviewer_uid, reviewer_display_name, proposal_id, created_at_ms
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                        reviewer_uid, reviewer_display_name, proposal_id, contributor_names_json, created_at_ms
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         rev_id,
                         workspace_id,
@@ -2126,9 +2691,19 @@ impl SharedContentStore for SqliteSharedContentStore {
                         caller.uid,
                         actor_display,
                         proposal_id,
+                        contributor_names_json,
                         now_ms,
                     ],
                 )?;
+
+                if let Some(ref draft_id) = existing.live_draft_id {
+                    tx.execute(
+                        "UPDATE shared_live_drafts
+                         SET status = 'applied', updated_at_ms = ?1
+                         WHERE workspace_id = ?2 AND draft_id = ?3",
+                        params![now_ms, workspace_id, draft_id],
+                    )?;
+                }
 
                 tx.execute(
                     "UPDATE shared_pages
@@ -2239,6 +2814,34 @@ impl SharedContentStore for SqliteSharedContentStore {
                         proposal_id,
                     ],
                 )?;
+                if let Some(ref draft_id) = existing.live_draft_id {
+                    match input.action {
+                        ProposalReviewAction::RequestChanges => {
+                            tx.execute(
+                                "UPDATE shared_live_drafts
+                                 SET status = 'editing',
+                                     draft_version = draft_version + 1,
+                                     checkpoint_seq = checkpoint_seq + 1,
+                                     updated_at_ms = ?1
+                                 WHERE workspace_id = ?2 AND draft_id = ?3",
+                                params![now_ms, workspace_id, draft_id],
+                            )?;
+                        }
+                        ProposalReviewAction::Reject => {
+                            tx.execute(
+                                "UPDATE shared_live_drafts
+                                 SET status = 'editing',
+                                     draft_version = draft_version + 1,
+                                     checkpoint_seq = checkpoint_seq + 1,
+                                     pending_proposal_id = NULL,
+                                     updated_at_ms = ?1
+                                 WHERE workspace_id = ?2 AND draft_id = ?3",
+                                params![now_ms, workspace_id, draft_id],
+                            )?;
+                        }
+                        ProposalReviewAction::Apply => unreachable!(),
+                    }
+                }
                 tx.execute(
                     "INSERT INTO shared_proposal_decisions (
                         decision_id, workspace_id, proposal_id, submission_number, action,
@@ -2279,6 +2882,23 @@ impl SharedContentStore for SqliteSharedContentStore {
 
         let details =
             load_proposal_details(&tx, workspace_id, proposal_id, &caller.uid, member.role)?;
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "proposal_updated",
+            None,
+            Some(&page.page_id),
+            None,
+            Some(proposal_id),
+            existing.live_draft_id.as_deref(),
+            &serde_json::json!({
+                "proposalId": proposal_id,
+                "pageId": page.page_id,
+                "status": details.proposal.status.as_str(),
+                "draftId": existing.live_draft_id,
+            }),
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -2944,6 +3564,1168 @@ impl SharedContentStore for SqliteSharedContentStore {
         tx.commit()?;
         Ok(details)
     }
+
+    fn open_or_create_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &OpenLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<OpenLiveDraftOutcome, SharedContentError> {
+        let actor_display = caller_display_name(caller);
+        let initial_bytes = if let Some(ref b64) = input.initial_update_b64 {
+            let decoded = crdt::decode_b64(b64).map_err(SharedContentError::InvalidInput)?;
+            crdt::validate_yjs_update(&decoded).map_err(SharedContentError::InvalidInput)?;
+            let (raw_title, raw_md) = crdt::extract_title_and_markdown(&decoded)
+                .map_err(SharedContentError::InvalidInput)?;
+            if !raw_title.is_empty() {
+                sanitize_page_title(&raw_title)?;
+            }
+            if !raw_md.trim().is_empty() {
+                sanitize_page_content(&raw_md)?;
+            }
+            Some(decoded)
+        } else {
+            None
+        };
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+
+        if let Some(existing) = load_active_live_draft_view(&tx, workspace_id, page_id)? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(OpenLiveDraftOutcome {
+                created: false,
+                draft: existing,
+            });
+        }
+
+        if let Some(expected_rev) = input.expected_base_revision_number {
+            if expected_rev != page.current_revision_number {
+                return Err(SharedContentError::StaleDraftBase(format!(
+                    "The page updated to rev {} while opening the live draft (expected rev {expected_rev}). Refresh before opening.",
+                    page.current_revision_number
+                )));
+            }
+        }
+
+        let base_rev = load_revision_row(&tx, workspace_id, page_id, page.current_revision_number)?;
+        if let Some(bytes) = initial_bytes {
+            crdt::verify_seed_matches_revision(&bytes, &base_rev.title, &base_rev.content_md)
+                .map_err(SharedContentError::InvalidInput)?;
+        }
+        // Use the published revision as the authority even when a legacy client supplies
+        // an equivalent seed. A rendered comparison cannot validate arbitrary CRDT state.
+        let snapshot_blob = crdt::seed_basic_yjs_update(&base_rev.title, &base_rev.content_md);
+        let draft_id = format!("drf_{}", Uuid::new_v4().simple());
+        tx.execute(
+            "INSERT INTO shared_live_drafts (
+                draft_id, workspace_id, page_id, base_revision_number, draft_version,
+                checkpoint_seq, status, snapshot_update_blob, pending_proposal_id, created_by_uid,
+                created_by_display_name, created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, 1, 0, 'editing', ?5, NULL, ?6, ?7, ?8, ?8)",
+            params![
+                draft_id,
+                workspace_id,
+                page_id,
+                base_rev.revision_number,
+                snapshot_blob,
+                caller.uid,
+                actor_display,
+                now_ms,
+            ],
+        )?;
+        let view = load_live_draft_view_by_id(&tx, workspace_id, &draft_id)?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(OpenLiveDraftOutcome {
+            created: true,
+            draft: view,
+        })
+    }
+
+    fn get_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+    ) -> Result<Option<SharedLiveDraftView>, SharedContentError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+        let draft = load_active_live_draft_view(&tx, workspace_id, page_id)?;
+        tx.commit()?;
+        Ok(draft)
+    }
+
+    fn get_live_draft_diff(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+        client_state_vector_b64: Option<&str>,
+    ) -> Result<Option<LiveDraftDiffResponse>, SharedContentError> {
+        let client_sv = match client_state_vector_b64 {
+            Some(raw) if !raw.trim().is_empty() => {
+                crdt::decode_b64(raw).map_err(SharedContentError::InvalidInput)?
+            }
+            _ => Vec::new(),
+        };
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+        let Some(draft) = load_active_live_draft_view(&tx, workspace_id, page_id)? else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let state_bytes = crdt::decode_b64(&draft.snapshot_state_b64)
+            .map_err(SharedContentError::InvalidInput)?;
+        let missing_bytes = crdt::diff_from_state_vector(&state_bytes, &client_sv)
+            .map_err(SharedContentError::InvalidInput)?;
+        let server_vector_b64 = draft.snapshot_vector_b64.clone();
+        tx.commit()?;
+        Ok(Some(LiveDraftDiffResponse {
+            draft,
+            missing_update_b64: crdt::encode_b64(&missing_bytes),
+            server_vector_b64,
+        }))
+    }
+
+    fn apply_live_draft_update(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &LiveDraftUpdateInput,
+        now_ms: i64,
+    ) -> Result<LiveDraftUpdateOutcome, SharedContentError> {
+        let client_conn_id = sanitize_client_conn_id(&input.client_conn_id)?;
+        if input.client_op_seq <= 0 {
+            return Err(SharedContentError::InvalidInput(
+                "Collaborative operation sequence must be positive.".into(),
+            ));
+        }
+        let update_bytes =
+            crdt::decode_b64(&input.update_b64).map_err(SharedContentError::InvalidInput)?;
+        crdt::validate_yjs_update(&update_bytes).map_err(SharedContentError::InvalidInput)?;
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+
+        let row = tx
+            .query_row(
+                "SELECT draft_id, draft_version, checkpoint_seq, status, snapshot_update_blob
+                 FROM shared_live_drafts
+                 WHERE workspace_id = ?1 AND page_id = ?2 AND draft_id = ?3",
+                params![workspace_id, page_id, input.draft_id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Vec<u8>>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((draft_id, draft_version, prev_checkpoint_seq, status_raw, existing_snapshot)) =
+            row
+        else {
+            return Err(SharedContentError::LiveDraftNotFound);
+        };
+        let status = LiveDraftStatus::from_db(&status_raw)?;
+        match status {
+            LiveDraftStatus::Editing => {}
+            LiveDraftStatus::PendingReview => return Err(SharedContentError::LiveDraftFrozen),
+            LiveDraftStatus::Applied => return Err(SharedContentError::LiveDraftNotFound),
+        }
+        if draft_version != input.draft_version {
+            return Err(SharedContentError::StaleDraftVersion(format!(
+                "This live draft advanced to version {draft_version}. Reload the latest draft state before editing."
+            )));
+        }
+
+        if let Some((existing_seq, existing_blob)) = tx
+            .query_row(
+                "SELECT server_seq, update_blob
+                 FROM shared_live_draft_updates
+                 WHERE draft_id = ?1 AND client_conn_id = ?2 AND client_op_seq = ?3",
+                params![draft_id, client_conn_id, input.client_op_seq],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?
+        {
+            let contributors = query_live_draft_contributors(&tx, &draft_id)?;
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(LiveDraftUpdateOutcome {
+                accepted: true,
+                duplicate: true,
+                draft_version,
+                checkpoint_seq: prev_checkpoint_seq,
+                checkpoint_id: format_live_checkpoint_id(
+                    &draft_id,
+                    draft_version,
+                    prev_checkpoint_seq,
+                ),
+                server_seq: existing_seq,
+                accepted_update_b64: crdt::encode_b64(&existing_blob),
+                contributors,
+            });
+        }
+
+        let merged_snapshot = crdt::merge_yjs_updates(Some(&existing_snapshot), &[&update_bytes])
+            .map_err(SharedContentError::InvalidInput)?;
+        let (extracted_title, extracted_md) = crdt::extract_title_and_markdown(&merged_snapshot)
+            .map_err(SharedContentError::InvalidInput)?;
+        if !extracted_title.is_empty() {
+            sanitize_page_title(&extracted_title)?;
+        }
+        if !extracted_md.trim().is_empty() {
+            sanitize_page_content(&extracted_md)?;
+        }
+
+        let next_checkpoint_seq = prev_checkpoint_seq + 1;
+        tx.execute(
+            "UPDATE shared_live_drafts
+             SET snapshot_update_blob = ?1, checkpoint_seq = ?2, updated_at_ms = ?3
+             WHERE workspace_id = ?4 AND draft_id = ?5",
+            params![
+                merged_snapshot,
+                next_checkpoint_seq,
+                now_ms,
+                workspace_id,
+                draft_id
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO shared_live_draft_updates (
+                draft_id, workspace_id, page_id, client_conn_id, client_op_seq,
+                author_uid, author_display_name, update_blob, created_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                draft_id,
+                workspace_id,
+                page_id,
+                client_conn_id,
+                input.client_op_seq,
+                caller.uid,
+                actor_display,
+                update_bytes,
+                now_ms,
+            ],
+        )?;
+        let server_seq = tx.last_insert_rowid();
+
+        tx.execute(
+            "INSERT INTO shared_live_draft_contributors (
+                draft_id, workspace_id, uid, display_name, contribution_count, first_edited_at_ms, last_edited_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+             ON CONFLICT(draft_id, uid) DO UPDATE SET
+                display_name = excluded.display_name,
+                contribution_count = shared_live_draft_contributors.contribution_count + 1,
+                last_edited_at_ms = excluded.last_edited_at_ms",
+            params![draft_id, workspace_id, caller.uid, actor_display, now_ms],
+        )?;
+
+        let contributors = query_live_draft_contributors(&tx, &draft_id)?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(LiveDraftUpdateOutcome {
+            accepted: true,
+            duplicate: false,
+            draft_version,
+            checkpoint_seq: next_checkpoint_seq,
+            checkpoint_id: format_live_checkpoint_id(&draft_id, draft_version, next_checkpoint_seq),
+            server_seq,
+            accepted_update_b64: crdt::encode_b64(&update_bytes),
+            contributors,
+        })
+    }
+
+    fn submit_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &SubmitLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<SharedProposalDetails, SharedContentError> {
+        let summary = sanitize_proposal_summary(&input.summary)?;
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let expected_draft_id = input.expected_draft_id.trim();
+        let expected_checkpoint_id = input.expected_checkpoint_id.trim();
+        if expected_draft_id.is_empty() || expected_checkpoint_id.is_empty() {
+            return Err(SharedContentError::InvalidInput(
+                "Live draft checkpoint details are required to submit.".into(),
+            ));
+        }
+        let op = format!("submit_live_draft:{page_id}:{expected_draft_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "page_id": page_id,
+            "expected_draft_id": expected_draft_id,
+            "expected_draft_version": input.expected_draft_version,
+            "expected_checkpoint_id": expected_checkpoint_id,
+            "summary": summary,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProposalDetails>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+        let Some(draft) = load_active_live_draft_view(&tx, workspace_id, page_id)? else {
+            return Err(SharedContentError::LiveDraftNotFound);
+        };
+        if draft.draft_id != expected_draft_id {
+            return Err(SharedContentError::StaleDraftCheckpoint(
+                "This live draft was replaced by a newer draft. Reload before confirming submission."
+                    .into(),
+            ));
+        }
+        if draft.status != LiveDraftStatus::Editing {
+            return Err(SharedContentError::LiveDraftFrozen);
+        }
+        if draft.draft_version != input.expected_draft_version {
+            return Err(SharedContentError::StaleDraftVersion(format!(
+                "Draft version mismatch: expected v{}, found v{}. Refresh before submitting.",
+                input.expected_draft_version, draft.draft_version
+            )));
+        }
+        if draft.checkpoint_id != expected_checkpoint_id {
+            return Err(SharedContentError::StaleDraftCheckpoint(
+                "Newer live edits arrived after your last synced checkpoint. Review the updated draft before confirming submission."
+                    .into(),
+            ));
+        }
+
+        let proposed_title = sanitize_page_title(&draft.current_title)?;
+        let proposed_content_md = sanitize_page_content(&draft.current_content_md)?;
+        let base_rev = load_revision_row(&tx, workspace_id, page_id, draft.base_revision_number)?;
+
+        let contributor_uids: Vec<String> =
+            draft.contributors.iter().map(|c| c.uid.clone()).collect();
+        let contributor_names: Vec<String> = draft
+            .contributors
+            .iter()
+            .map(|c| c.display_name.clone())
+            .collect();
+        let contributor_uids_json =
+            serde_json::to_string(&contributor_uids).unwrap_or_else(|_| "[]".into());
+        let contributor_names_json =
+            serde_json::to_string(&contributor_names).unwrap_or_else(|_| "[]".into());
+
+        let reopen_existing_proposal = match draft.pending_proposal_id.as_deref() {
+            Some(pid) => load_proposal_row(&tx, workspace_id, pid)
+                .ok()
+                .filter(|p| p.status == ProposalStatus::ChangesRequested),
+            None => None,
+        };
+
+        let decision_id = format!("dec_{}", Uuid::new_v4().simple());
+        let proposal_id = if let Some(prev) = reopen_existing_proposal {
+            let next_submission = prev.submission_count + 1;
+            tx.execute(
+                "UPDATE shared_change_proposals
+                 SET base_revision_number = ?1, base_title = ?2, base_content_md = ?3,
+                     proposed_title = ?4, proposed_content_md = ?5, summary = ?6,
+                     author_uid = ?7, author_display_name = ?8,
+                     status = 'pending', submission_count = ?9, updated_at_ms = ?10,
+                     reviewed_at_ms = NULL, reviewer_uid = NULL, reviewer_display_name = NULL,
+                     reviewer_note = NULL, live_draft_id = ?11, draft_version = ?12,
+                     contributor_uids_json = ?13, contributor_names_json = ?14
+                 WHERE workspace_id = ?15 AND proposal_id = ?16",
+                params![
+                    base_rev.revision_number,
+                    base_rev.title,
+                    base_rev.content_md,
+                    proposed_title,
+                    proposed_content_md,
+                    summary,
+                    caller.uid,
+                    actor_display,
+                    next_submission,
+                    now_ms,
+                    draft.draft_id,
+                    draft.draft_version,
+                    contributor_uids_json,
+                    contributor_names_json,
+                    workspace_id,
+                    prev.proposal_id,
+                ],
+            )?;
+            tx.execute(
+                "INSERT INTO shared_proposal_decisions (
+                    decision_id, workspace_id, proposal_id, submission_number, action,
+                    actor_uid, actor_display_name, note, base_revision_number,
+                    submitted_title, submitted_content_md, created_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, 'resubmitted', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    decision_id,
+                    workspace_id,
+                    prev.proposal_id,
+                    next_submission,
+                    caller.uid,
+                    actor_display,
+                    summary,
+                    base_rev.revision_number,
+                    proposed_title,
+                    proposed_content_md,
+                    now_ms,
+                ],
+            )?;
+            prev.proposal_id
+        } else {
+            let pid = format!("prp_{}", Uuid::new_v4().simple());
+            tx.execute(
+                "INSERT INTO shared_change_proposals (
+                    proposal_id, workspace_id, page_id, base_revision_number,
+                    base_title, base_content_md, proposed_title, proposed_content_md,
+                    summary, author_uid, author_display_name, status, submission_count,
+                    created_at_ms, updated_at_ms, live_draft_id, draft_version,
+                    contributor_uids_json, contributor_names_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12, ?13, ?14, ?15, ?16)",
+                params![
+                    pid,
+                    workspace_id,
+                    page_id,
+                    base_rev.revision_number,
+                    base_rev.title,
+                    base_rev.content_md,
+                    proposed_title,
+                    proposed_content_md,
+                    summary,
+                    caller.uid,
+                    actor_display,
+                    now_ms,
+                    draft.draft_id,
+                    draft.draft_version,
+                    contributor_uids_json,
+                    contributor_names_json,
+                ],
+            )?;
+            tx.execute(
+                "INSERT INTO shared_proposal_decisions (
+                    decision_id, workspace_id, proposal_id, submission_number, action,
+                    actor_uid, actor_display_name, note, base_revision_number,
+                    submitted_title, submitted_content_md, created_at_ms
+                 ) VALUES (?1, ?2, ?3, 1, 'submitted', ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    decision_id,
+                    workspace_id,
+                    pid,
+                    caller.uid,
+                    actor_display,
+                    summary,
+                    base_rev.revision_number,
+                    proposed_title,
+                    proposed_content_md,
+                    now_ms,
+                ],
+            )?;
+            pid
+        };
+
+        tx.execute(
+            "UPDATE shared_live_drafts
+             SET status = 'pending_review',
+                 pending_proposal_id = ?1,
+                 updated_at_ms = ?2
+             WHERE workspace_id = ?3 AND draft_id = ?4",
+            params![proposal_id, now_ms, workspace_id, draft.draft_id],
+        )?;
+
+        insert_activity(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "live_draft_submitted",
+            "proposal",
+            Some(page_id),
+            Some(&page.title),
+            Some(&proposal_id),
+            None,
+            &format!("Submitted live shared draft for review on “{}”", page.title),
+            now_ms,
+        )?;
+        let details =
+            load_proposal_details(&tx, workspace_id, &proposal_id, &caller.uid, member.role)?;
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "proposal_updated",
+            None,
+            Some(page_id),
+            None,
+            Some(&proposal_id),
+            Some(&draft.draft_id),
+            &serde_json::json!({
+                "proposalId": proposal_id,
+                "pageId": page_id,
+                "status": "pending",
+                "draftId": draft.draft_id,
+                "draftVersion": draft.draft_version,
+            }),
+            now_ms,
+        )?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &details,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(details)
+    }
+
+    fn rebase_live_draft(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        page_id: &str,
+        input: &RebaseLiveDraftInput,
+        now_ms: i64,
+    ) -> Result<SharedLiveDraftView, SharedContentError> {
+        let expected_draft_id = input.expected_draft_id.trim();
+        if expected_draft_id.is_empty() {
+            return Err(SharedContentError::InvalidInput(
+                "Expected draft identifier is required to rebase.".into(),
+            ));
+        }
+        let expected_checkpoint_id = input.expected_checkpoint_id.trim();
+        if expected_checkpoint_id.is_empty() {
+            return Err(SharedContentError::InvalidInput(
+                "Expected checkpoint identifier is required to rebase.".into(),
+            ));
+        }
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let clean_title = input
+            .rebased_title
+            .as_deref()
+            .map(sanitize_page_title)
+            .transpose()?;
+        let clean_content = input
+            .rebased_content_md
+            .as_deref()
+            .map(sanitize_page_content)
+            .transpose()?;
+
+        let op = format!("rebase_live_draft:{page_id}:{expected_draft_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "expected_draft_id": expected_draft_id,
+            "expected_draft_version": input.expected_draft_version,
+            "expected_checkpoint_id": expected_checkpoint_id,
+            "expected_base_revision_number": input.expected_base_revision_number,
+            "mode": match input.mode {
+                LiveDraftRebaseMode::CarryDraft => "carryDraft",
+                LiveDraftRebaseMode::RestartFromCurrent => "restartFromCurrent",
+            },
+            "rebased_title": clean_title,
+            "rebased_content_md": clean_content,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedLiveDraftView>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+        let Some(draft) = load_active_live_draft_view(&tx, workspace_id, page_id)? else {
+            return Err(SharedContentError::LiveDraftNotFound);
+        };
+        if draft.draft_id != expected_draft_id {
+            return Err(SharedContentError::LiveDraftNotFound);
+        }
+        if draft.draft_version != input.expected_draft_version {
+            return Err(SharedContentError::StaleDraftVersion(format!(
+                "Draft version mismatch: expected v{}, found v{}. Refresh before rebasing.",
+                input.expected_draft_version, draft.draft_version
+            )));
+        }
+        if draft.checkpoint_id != expected_checkpoint_id {
+            return Err(SharedContentError::StaleDraftCheckpoint(format!(
+                "Live draft changed while preparing rebase (expected {}, found {}). Refresh the comparison and try again.",
+                expected_checkpoint_id, draft.checkpoint_id
+            )));
+        }
+        if page.current_revision_number != input.expected_base_revision_number {
+            return Err(SharedContentError::StaleDraftBase(format!(
+                "The page advanced to rev {} before rebase completed (expected rev {}). Refresh and try rebasing again.",
+                page.current_revision_number, input.expected_base_revision_number
+            )));
+        }
+        if page.current_revision_number <= draft.base_revision_number {
+            return Err(SharedContentError::InvalidInput(
+                "This live draft is already based on the latest published revision.".into(),
+            ));
+        }
+
+        let target_rev =
+            load_revision_row(&tx, workspace_id, page_id, page.current_revision_number)?;
+        let next_blob = match input.mode {
+            LiveDraftRebaseMode::CarryDraft => {
+                let carried_title = clean_title.unwrap_or_else(|| draft.current_title.clone());
+                let carried_content =
+                    clean_content.unwrap_or_else(|| draft.current_content_md.clone());
+                tx.execute(
+                    "INSERT INTO shared_live_draft_contributors (
+                        draft_id, workspace_id, uid, display_name, contribution_count, first_edited_at_ms, last_edited_at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+                     ON CONFLICT(draft_id, uid) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        contribution_count = shared_live_draft_contributors.contribution_count + 1,
+                        last_edited_at_ms = excluded.last_edited_at_ms",
+                    params![draft.draft_id, workspace_id, caller.uid, actor_display, now_ms],
+                )?;
+                crdt::seed_basic_yjs_update(&carried_title, &carried_content)
+            }
+            LiveDraftRebaseMode::RestartFromCurrent => {
+                tx.execute(
+                    "DELETE FROM shared_live_draft_contributors WHERE draft_id = ?1",
+                    params![draft.draft_id],
+                )?;
+                crdt::seed_basic_yjs_update(&target_rev.title, &target_rev.content_md)
+            }
+        };
+
+        tx.execute(
+            "UPDATE shared_live_drafts
+             SET base_revision_number = ?1,
+                 draft_version = draft_version + 1,
+                 checkpoint_seq = checkpoint_seq + 1,
+                 status = 'editing',
+                 snapshot_update_blob = ?2,
+                 updated_at_ms = ?3
+             WHERE workspace_id = ?4 AND draft_id = ?5",
+            params![
+                target_rev.revision_number,
+                next_blob,
+                now_ms,
+                workspace_id,
+                draft.draft_id,
+            ],
+        )?;
+
+        if let Some(ref pid) = draft.pending_proposal_id {
+            if let Ok(prev_prop) = load_proposal_row(&tx, workspace_id, pid) {
+                if matches!(
+                    prev_prop.status,
+                    ProposalStatus::Pending | ProposalStatus::ChangesRequested
+                ) {
+                    tx.execute(
+                        "UPDATE shared_change_proposals
+                         SET status = 'changes_requested', updated_at_ms = ?1
+                         WHERE workspace_id = ?2 AND proposal_id = ?3",
+                        params![now_ms, workspace_id, pid],
+                    )?;
+                    let decision_id = format!("dec_{}", Uuid::new_v4().simple());
+                    let note_txt = match input.mode {
+                        LiveDraftRebaseMode::CarryDraft => format!(
+                            "Rebased live draft from rev {} onto rev {} carrying edits.",
+                            draft.base_revision_number, target_rev.revision_number
+                        ),
+                        LiveDraftRebaseMode::RestartFromCurrent => format!(
+                            "Restarted live draft cleanly from current rev {}.",
+                            target_rev.revision_number
+                        ),
+                    };
+                    tx.execute(
+                        "INSERT INTO shared_proposal_decisions (
+                            decision_id, workspace_id, proposal_id, submission_number, action,
+                            actor_uid, actor_display_name, note, base_revision_number,
+                            submitted_title, submitted_content_md, created_at_ms
+                         ) VALUES (?1, ?2, ?3, ?4, 'rebased', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        params![
+                            decision_id,
+                            workspace_id,
+                            pid,
+                            prev_prop.submission_count,
+                            caller.uid,
+                            actor_display,
+                            note_txt,
+                            target_rev.revision_number,
+                            prev_prop.proposed_title,
+                            prev_prop.proposed_content_md,
+                            now_ms,
+                        ],
+                    )?;
+                    insert_realtime_event(
+                        &tx,
+                        workspace_id,
+                        "proposal_updated",
+                        None,
+                        Some(page_id),
+                        None,
+                        Some(pid),
+                        Some(&draft.draft_id),
+                        &serde_json::json!({
+                            "proposalId": pid,
+                            "pageId": page_id,
+                            "status": "changes_requested",
+                            "draftId": draft.draft_id,
+                            "baseRevisionNumber": target_rev.revision_number,
+                        }),
+                        now_ms,
+                    )?;
+                }
+            }
+        }
+
+        insert_activity(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "live_draft_rebased",
+            "page",
+            Some(page_id),
+            Some(&page.title),
+            draft.pending_proposal_id.as_deref(),
+            None,
+            &format!(
+                "Rebased live draft for “{}” onto rev {}",
+                page.title, target_rev.revision_number
+            ),
+            now_ms,
+        )?;
+        let updated = load_live_draft_view_by_id(&tx, workspace_id, &draft.draft_id)?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &updated,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    fn list_project_threads(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedProjectThreadView>, SharedContentError> {
+        let limit = clamp_limit(limit);
+        let parsed = parse_time_id_cursor(cursor)?;
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _project = load_project_summary(&tx, workspace_id, project_id)?;
+        let rows = query_project_threads(
+            &tx,
+            workspace_id,
+            project_id,
+            parsed.as_ref().map(|(ts, id)| (*ts, id.as_str())),
+            limit + 1,
+        )?;
+        let (items, next_cursor) = paginate(rows, limit, |t| {
+            format!("{}:{}", t.updated_at_ms, t.thread_id)
+        });
+        tx.commit()?;
+        Ok(PagedList { items, next_cursor })
+    }
+
+    fn create_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &CreateProjectThreadInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError> {
+        let body = sanitize_comment_body(&input.body)?;
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let op = format!("create_project_thread:{project_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "body": body,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectThreadView>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if project.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectArchived);
+        }
+        let thread_id = format!("pthr_{}", Uuid::new_v4().simple());
+        let msg_id = format!("pmsg_{}", Uuid::new_v4().simple());
+        tx.execute(
+            "INSERT INTO shared_project_threads (
+                thread_id, workspace_id, project_id, author_uid, author_display_name,
+                status, created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6, ?6)",
+            params![
+                thread_id,
+                workspace_id,
+                project_id,
+                caller.uid,
+                actor_display,
+                now_ms
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO shared_project_messages (
+                message_id, workspace_id, project_id, thread_id, author_uid,
+                author_display_name, body, created_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                msg_id,
+                workspace_id,
+                project_id,
+                thread_id,
+                caller.uid,
+                actor_display,
+                body,
+                now_ms,
+            ],
+        )?;
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_discussion_started",
+            "project_thread",
+            Some(project_id),
+            Some(&project.name),
+            None,
+            None,
+            None,
+            Some(&thread_id),
+            &format!("Started a discussion in project “{}”", project.name),
+            now_ms,
+        )?;
+        let thread = load_project_thread_by_id(&tx, workspace_id, project_id, &thread_id)?;
+        let thread_json = serde_json::to_value(&thread).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "project_thread_updated",
+            Some(project_id),
+            None,
+            Some(&thread_id),
+            None,
+            None,
+            &thread_json,
+            now_ms,
+        )?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &thread,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(thread)
+    }
+
+    fn reply_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        input: &ReplyProjectThreadInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError> {
+        let body = sanitize_comment_body(&input.body)?;
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let op = format!("reply_project_thread:{project_id}:{thread_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "thread_id": thread_id,
+            "body": body,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectThreadView>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if project.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectArchived);
+        }
+        let _existing = load_project_thread_by_id(&tx, workspace_id, project_id, thread_id)?;
+        let msg_id = format!("pmsg_{}", Uuid::new_v4().simple());
+        tx.execute(
+            "INSERT INTO shared_project_messages (
+                message_id, workspace_id, project_id, thread_id, author_uid,
+                author_display_name, body, created_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                msg_id,
+                workspace_id,
+                project_id,
+                thread_id,
+                caller.uid,
+                actor_display,
+                body,
+                now_ms,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE shared_project_threads SET updated_at_ms = ?1
+             WHERE workspace_id = ?2 AND project_id = ?3 AND thread_id = ?4",
+            params![now_ms, workspace_id, project_id, thread_id],
+        )?;
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_discussion_replied",
+            "project_thread",
+            Some(project_id),
+            Some(&project.name),
+            None,
+            None,
+            None,
+            Some(thread_id),
+            &format!("Replied in discussion for project “{}”", project.name),
+            now_ms,
+        )?;
+        let thread = load_project_thread_by_id(&tx, workspace_id, project_id, thread_id)?;
+        let thread_json = serde_json::to_value(&thread).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "project_thread_updated",
+            Some(project_id),
+            None,
+            Some(thread_id),
+            None,
+            None,
+            &thread_json,
+            now_ms,
+        )?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &thread,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(thread)
+    }
+
+    fn resolve_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError> {
+        self.set_project_thread_resolved(
+            caller,
+            recheck_session,
+            workspace_id,
+            project_id,
+            thread_id,
+            true,
+            idempotency_key,
+            now_ms,
+        )
+    }
+
+    fn reopen_project_thread(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError> {
+        self.set_project_thread_resolved(
+            caller,
+            recheck_session,
+            workspace_id,
+            project_id,
+            thread_id,
+            false,
+            idempotency_key,
+            now_ms,
+        )
+    }
+
+    fn list_realtime_events(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        after_seq: i64,
+        limit: Option<usize>,
+    ) -> Result<Vec<RealtimeCatchupEvent>, SharedContentError> {
+        let limit = clamp_limit(limit);
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let mut stmt = tx.prepare(
+            "SELECT event_seq, workspace_id, event_type, project_id, page_id,
+                    thread_id, proposal_id, draft_id, payload_json, created_at_ms
+             FROM shared_realtime_events
+             WHERE workspace_id = ?1 AND event_seq > ?2
+             ORDER BY event_seq ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![workspace_id, after_seq.max(0), limit as i64], |r| {
+            let raw_payload: String = r.get(8)?;
+            let payload_json =
+                serde_json::from_str(&raw_payload).unwrap_or(serde_json::Value::Null);
+            Ok(RealtimeCatchupEvent {
+                event_seq: r.get(0)?,
+                workspace_id: r.get(1)?,
+                event_type: r.get(2)?,
+                project_id: r.get(3)?,
+                page_id: r.get(4)?,
+                thread_id: r.get(5)?,
+                proposal_id: r.get(6)?,
+                draft_id: r.get(7)?,
+                payload_json,
+                created_at_ms: r.get(9)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(out)
+    }
 }
 
 impl SqliteSharedContentStore {
@@ -3046,6 +4828,22 @@ impl SqliteSharedContentStore {
         }
 
         let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            if archive {
+                "project_archived"
+            } else {
+                "project_restored"
+            },
+            Some(project_id),
+            None,
+            None,
+            None,
+            None,
+            &serde_json::json!({ "projectId": project_id, "archived": archive }),
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3161,6 +4959,19 @@ impl SqliteSharedContentStore {
             now_ms,
         )?;
         let updated = load_thread_by_id(&tx, workspace_id, page_id, thread_id)?;
+        let updated_json = serde_json::to_value(&updated).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "page_thread_updated",
+            None,
+            Some(page_id),
+            Some(thread_id),
+            None,
+            None,
+            &updated_json,
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3267,6 +5078,22 @@ impl SqliteSharedContentStore {
             )?;
         }
         let details = load_page_details(&tx, workspace_id, page_id)?;
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            if archive {
+                "page_archived"
+            } else {
+                "page_restored"
+            },
+            None,
+            Some(page_id),
+            None,
+            None,
+            None,
+            &serde_json::json!({ "pageId": page_id, "archived": archive }),
+            now_ms,
+        )?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3280,6 +5107,136 @@ impl SqliteSharedContentStore {
         let _ = recheck_session()?;
         tx.commit()?;
         Ok(details)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_project_thread_resolved(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        resolved: bool,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectThreadView, SharedContentError> {
+        let idempotency_key = sanitize_idempotency_key(idempotency_key)?;
+        let verb = if resolved {
+            "resolve_project_thread"
+        } else {
+            "reopen_project_thread"
+        };
+        let op = format!("{verb}:{project_id}:{thread_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "thread_id": thread_id,
+            "resolved": resolved,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let thread = load_project_thread_by_id(&tx, workspace_id, project_id, thread_id)?;
+        if !member.role.can_moderate_or_review() && thread.author_uid != caller.uid {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectThreadView>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if resolved {
+            tx.execute(
+                "UPDATE shared_project_threads
+                 SET status = 'resolved', resolved_at_ms = ?1, resolved_by_uid = ?2,
+                     resolved_by_display_name = ?3, updated_at_ms = ?1
+                 WHERE workspace_id = ?4 AND project_id = ?5 AND thread_id = ?6",
+                params![
+                    now_ms,
+                    caller.uid,
+                    actor_display,
+                    workspace_id,
+                    project_id,
+                    thread_id,
+                ],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE shared_project_threads
+                 SET status = 'open', resolved_at_ms = NULL, resolved_by_uid = NULL,
+                     resolved_by_display_name = NULL, updated_at_ms = ?1
+                 WHERE workspace_id = ?2 AND project_id = ?3 AND thread_id = ?4",
+                params![now_ms, workspace_id, project_id, thread_id],
+            )?;
+        }
+        let moderated = thread.author_uid != caller.uid;
+        let action_name = match (resolved, moderated) {
+            (true, true) => "project_discussion_moderated_resolved",
+            (true, false) => "project_discussion_resolved",
+            (false, true) => "project_discussion_moderated_reopened",
+            (false, false) => "project_discussion_reopened",
+        };
+        let detail = if resolved {
+            format!("Resolved discussion in project “{}”", project.name)
+        } else {
+            format!("Reopened discussion in project “{}”", project.name)
+        };
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            action_name,
+            "project_thread",
+            Some(project_id),
+            Some(&project.name),
+            None,
+            None,
+            None,
+            Some(thread_id),
+            &detail,
+            now_ms,
+        )?;
+        let updated = load_project_thread_by_id(&tx, workspace_id, project_id, thread_id)?;
+        let updated_json = serde_json::to_value(&updated).unwrap_or_default();
+        insert_realtime_event(
+            &tx,
+            workspace_id,
+            "project_thread_updated",
+            Some(project_id),
+            None,
+            Some(thread_id),
+            None,
+            None,
+            &updated_json,
+            now_ms,
+        )?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &updated,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(updated)
     }
 }
 
@@ -3302,6 +5259,404 @@ struct ProposalRow {
     reviewed_at_ms: Option<i64>,
     reviewer_display_name: Option<String>,
     applied_revision_number: Option<i64>,
+    live_draft_id: Option<String>,
+    draft_version: Option<i64>,
+    contributor_uids: Vec<String>,
+    contributor_names: Vec<String>,
+}
+
+fn sanitize_client_conn_id(raw: &str) -> Result<String, SharedContentError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return Err(SharedContentError::InvalidInput(
+            "Valid client connection identifier is required.".into(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(SharedContentError::InvalidInput(
+            "Client connection identifier contains invalid characters.".into(),
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_realtime_event(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    event_type: &str,
+    project_id: Option<&str>,
+    page_id: Option<&str>,
+    thread_id: Option<&str>,
+    proposal_id: Option<&str>,
+    draft_id: Option<&str>,
+    payload: &serde_json::Value,
+    now_ms: i64,
+) -> Result<i64, SharedContentError> {
+    let payload_json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".into());
+    tx.execute(
+        "INSERT INTO shared_realtime_events (
+            workspace_id, event_type, project_id, page_id, thread_id,
+            proposal_id, draft_id, payload_json, created_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            workspace_id,
+            event_type,
+            project_id,
+            page_id,
+            thread_id,
+            proposal_id,
+            draft_id,
+            payload_json,
+            now_ms,
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
+fn query_live_draft_contributors(
+    tx: &Transaction<'_>,
+    draft_id: &str,
+) -> Result<Vec<LiveDraftContributorView>, SharedContentError> {
+    let mut stmt = tx.prepare(
+        "SELECT uid, display_name, contribution_count, last_edited_at_ms
+         FROM shared_live_draft_contributors
+         WHERE draft_id = ?1
+         ORDER BY first_edited_at_ms ASC, uid ASC",
+    )?;
+    let rows = stmt.query_map(params![draft_id], |r| {
+        Ok(LiveDraftContributorView {
+            uid: r.get(0)?,
+            display_name: r.get(1)?,
+            contribution_count: r.get(2)?,
+            last_edited_at_ms: r.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+struct RawLiveDraftRow {
+    draft_id: String,
+    workspace_id: String,
+    page_id: String,
+    base_revision_number: i64,
+    draft_version: i64,
+    checkpoint_seq: i64,
+    status_raw: String,
+    snapshot_blob: Vec<u8>,
+    pending_proposal_id: Option<String>,
+    created_by_uid: String,
+    created_by_display_name: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+fn format_live_checkpoint_id(draft_id: &str, draft_version: i64, checkpoint_seq: i64) -> String {
+    format!("chk:{draft_id}:v{draft_version}:s{checkpoint_seq}")
+}
+
+fn map_live_draft_row(
+    tx: &Transaction<'_>,
+    row: RawLiveDraftRow,
+) -> Result<SharedLiveDraftView, SharedContentError> {
+    let status = LiveDraftStatus::from_db(&row.status_raw)?;
+    let base_rev = load_revision_row(
+        tx,
+        &row.workspace_id,
+        &row.page_id,
+        row.base_revision_number,
+    )?;
+    let vector_bytes =
+        crdt::state_vector_bytes(&row.snapshot_blob).map_err(SharedContentError::InvalidInput)?;
+    let (current_title, current_content_md) = crdt::extract_title_and_markdown(&row.snapshot_blob)
+        .map_err(SharedContentError::InvalidInput)?;
+    let contributors = query_live_draft_contributors(tx, &row.draft_id)?;
+    let checkpoint_id =
+        format_live_checkpoint_id(&row.draft_id, row.draft_version, row.checkpoint_seq);
+    Ok(SharedLiveDraftView {
+        draft_id: row.draft_id,
+        workspace_id: row.workspace_id,
+        page_id: row.page_id,
+        base_revision_number: row.base_revision_number,
+        draft_version: row.draft_version,
+        checkpoint_seq: row.checkpoint_seq,
+        checkpoint_id,
+        status,
+        snapshot_state_b64: crdt::encode_b64(&row.snapshot_blob),
+        snapshot_vector_b64: crdt::encode_b64(&vector_bytes),
+        base_title: base_rev.title.clone(),
+        base_content_md: base_rev.content_md,
+        current_title: if current_title.is_empty() {
+            base_rev.title
+        } else {
+            current_title
+        },
+        current_content_md,
+        contributors,
+        pending_proposal_id: row.pending_proposal_id,
+        created_by_uid: row.created_by_uid,
+        created_by_display_name: row.created_by_display_name,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+    })
+}
+
+fn load_live_draft_view_by_id(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    draft_id: &str,
+) -> Result<SharedLiveDraftView, SharedContentError> {
+    let row = tx
+        .query_row(
+            "SELECT draft_id, workspace_id, page_id, base_revision_number, draft_version,
+                    checkpoint_seq, status, snapshot_update_blob, pending_proposal_id, created_by_uid,
+                    created_by_display_name, created_at_ms, updated_at_ms
+             FROM shared_live_drafts
+             WHERE workspace_id = ?1 AND draft_id = ?2",
+            params![workspace_id, draft_id],
+            |r| {
+                Ok(RawLiveDraftRow {
+                    draft_id: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    page_id: r.get(2)?,
+                    base_revision_number: r.get(3)?,
+                    draft_version: r.get(4)?,
+                    checkpoint_seq: r.get(5)?,
+                    status_raw: r.get(6)?,
+                    snapshot_blob: r.get(7)?,
+                    pending_proposal_id: r.get(8)?,
+                    created_by_uid: r.get(9)?,
+                    created_by_display_name: r.get(10)?,
+                    created_at_ms: r.get(11)?,
+                    updated_at_ms: r.get(12)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(SharedContentError::LiveDraftNotFound)?;
+    map_live_draft_row(tx, row)
+}
+
+fn load_active_live_draft_view(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    page_id: &str,
+) -> Result<Option<SharedLiveDraftView>, SharedContentError> {
+    let row = tx
+        .query_row(
+            "SELECT draft_id, workspace_id, page_id, base_revision_number, draft_version,
+                    checkpoint_seq, status, snapshot_update_blob, pending_proposal_id, created_by_uid,
+                    created_by_display_name, created_at_ms, updated_at_ms
+             FROM shared_live_drafts
+             WHERE workspace_id = ?1 AND page_id = ?2 AND status IN ('editing', 'pending_review')
+             LIMIT 1",
+            params![workspace_id, page_id],
+            |r| {
+                Ok(RawLiveDraftRow {
+                    draft_id: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    page_id: r.get(2)?,
+                    base_revision_number: r.get(3)?,
+                    draft_version: r.get(4)?,
+                    checkpoint_seq: r.get(5)?,
+                    status_raw: r.get(6)?,
+                    snapshot_blob: r.get(7)?,
+                    pending_proposal_id: r.get(8)?,
+                    created_by_uid: r.get(9)?,
+                    created_by_display_name: r.get(10)?,
+                    created_at_ms: r.get(11)?,
+                    updated_at_ms: r.get(12)?,
+                })
+            },
+        )
+        .optional()?;
+    row.map(|r| map_live_draft_row(tx, r)).transpose()
+}
+
+fn query_project_thread_messages(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    thread_id: &str,
+) -> Result<Vec<SharedProjectMessageView>, SharedContentError> {
+    let mut stmt = tx.prepare(
+        "SELECT message_id, thread_id, author_uid, author_display_name, body, created_at_ms
+         FROM shared_project_messages
+         WHERE workspace_id = ?1 AND thread_id = ?2
+         ORDER BY created_at_ms ASC, message_id ASC",
+    )?;
+    let rows = stmt.query_map(params![workspace_id, thread_id], |r| {
+        Ok(SharedProjectMessageView {
+            message_id: r.get(0)?,
+            thread_id: r.get(1)?,
+            author_uid: r.get(2)?,
+            author_display_name: r.get(3)?,
+            body: r.get(4)?,
+            created_at_ms: r.get(5)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+fn load_project_thread_by_id(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    thread_id: &str,
+) -> Result<SharedProjectThreadView, SharedContentError> {
+    let row = tx
+        .query_row(
+            "SELECT thread_id, workspace_id, project_id, author_uid, author_display_name,
+                    status, resolved_at_ms, resolved_by_display_name, created_at_ms, updated_at_ms
+             FROM shared_project_threads
+             WHERE workspace_id = ?1 AND project_id = ?2 AND thread_id = ?3",
+            params![workspace_id, project_id, thread_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, i64>(8)?,
+                    r.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        tid,
+        wid,
+        pid,
+        author_uid,
+        author_display_name,
+        status_raw,
+        resolved_at_ms,
+        resolved_by_display_name,
+        created_at_ms,
+        updated_at_ms,
+    )) = row
+    else {
+        return Err(SharedContentError::ThreadNotFound);
+    };
+    let status = ThreadStatus::from_db(&status_raw)?;
+    let messages = query_project_thread_messages(tx, workspace_id, &tid)?;
+    Ok(SharedProjectThreadView {
+        thread_id: tid,
+        workspace_id: wid,
+        project_id: pid,
+        author_uid,
+        author_display_name,
+        status,
+        resolved_at_ms,
+        resolved_by_display_name,
+        created_at_ms,
+        updated_at_ms,
+        messages,
+    })
+}
+
+fn query_project_threads(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    cursor: Option<(i64, &str)>,
+    limit: usize,
+) -> Result<Vec<SharedProjectThreadView>, SharedContentError> {
+    let sql = if cursor.is_some() {
+        format!(
+            "SELECT thread_id, workspace_id, project_id, author_uid, author_display_name,
+                    status, resolved_at_ms, resolved_by_display_name, created_at_ms, updated_at_ms
+             FROM shared_project_threads
+             WHERE workspace_id = ?1 AND project_id = ?2
+               AND (updated_at_ms < ?3 OR (updated_at_ms = ?3 AND thread_id < ?4))
+             ORDER BY updated_at_ms DESC, thread_id DESC
+             LIMIT {}",
+            limit
+        )
+    } else {
+        format!(
+            "SELECT thread_id, workspace_id, project_id, author_uid, author_display_name,
+                    status, resolved_at_ms, resolved_by_display_name, created_at_ms, updated_at_ms
+             FROM shared_project_threads
+             WHERE workspace_id = ?1 AND project_id = ?2
+             ORDER BY updated_at_ms DESC, thread_id DESC
+             LIMIT {}",
+            limit
+        )
+    };
+    let mut stmt = tx.prepare(&sql)?;
+    let mut headers = Vec::new();
+    let map_hdr = |r: &rusqlite::Row<'_>| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, Option<i64>>(6)?,
+            r.get::<_, Option<String>>(7)?,
+            r.get::<_, i64>(8)?,
+            r.get::<_, i64>(9)?,
+        ))
+    };
+    if let Some((ts, id)) = cursor {
+        let rows = stmt.query_map(params![workspace_id, project_id, ts, id], map_hdr)?;
+        for r in rows {
+            headers.push(r?);
+        }
+    } else {
+        let rows = stmt.query_map(params![workspace_id, project_id], map_hdr)?;
+        for r in rows {
+            headers.push(r?);
+        }
+    }
+    drop(stmt);
+    let mut out = Vec::with_capacity(headers.len());
+    for (
+        thread_id,
+        wid,
+        pid,
+        author_uid,
+        author_display_name,
+        status_raw,
+        resolved_at_ms,
+        resolved_by_display_name,
+        created_at_ms,
+        updated_at_ms,
+    ) in headers
+    {
+        let status = ThreadStatus::from_db(&status_raw)?;
+        let messages = query_project_thread_messages(tx, workspace_id, &thread_id)?;
+        out.push(SharedProjectThreadView {
+            thread_id,
+            workspace_id: wid,
+            project_id: pid,
+            author_uid,
+            author_display_name,
+            status,
+            resolved_at_ms,
+            resolved_by_display_name,
+            created_at_ms,
+            updated_at_ms,
+            messages,
+        });
+    }
+    Ok(out)
 }
 
 fn clamp_limit(limit: Option<usize>) -> usize {
@@ -3372,7 +5727,7 @@ fn sanitize_page_title(raw: &str) -> Result<String, SharedContentError> {
     Ok(cleaned)
 }
 
-fn sanitize_page_content(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_page_content(raw: &str) -> Result<String, SharedContentError> {
     let normalized = raw.replace("\r\n", "\n");
     if normalized.trim().is_empty() {
         return Err(SharedContentError::InvalidInput(
@@ -4242,7 +6597,8 @@ fn load_revision_row(
         .query_row(
             "SELECT revision_id, workspace_id, page_id, revision_number, title, content_md,
                     content_sha256, change_summary, author_uid, author_display_name,
-                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms
+                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms,
+                    COALESCE(contributor_names_json, '[]')
              FROM shared_page_revisions
              WHERE workspace_id = ?1 AND page_id = ?2 AND revision_number = ?3",
             params![workspace_id, page_id, revision_number],
@@ -4253,6 +6609,9 @@ fn load_revision_row(
 }
 
 fn map_revision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SharedPageRevisionView> {
+    let raw_contributors: String = r.get(14)?;
+    let contributor_names: Vec<String> =
+        serde_json::from_str(&raw_contributors).unwrap_or_default();
     Ok(SharedPageRevisionView {
         revision_id: r.get(0)?,
         workspace_id: r.get(1)?,
@@ -4267,6 +6626,7 @@ fn map_revision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SharedPageRevisio
         reviewer_uid: r.get(10)?,
         reviewer_display_name: r.get(11)?,
         proposal_id: r.get(12)?,
+        contributor_names,
         created_at_ms: r.get(13)?,
     })
 }
@@ -4282,7 +6642,8 @@ fn query_revisions(
         tx.prepare(
             "SELECT revision_id, workspace_id, page_id, revision_number, title, content_md,
                     content_sha256, change_summary, author_uid, author_display_name,
-                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms
+                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms,
+                    COALESCE(contributor_names_json, '[]')
              FROM shared_page_revisions
              WHERE workspace_id = ?1 AND page_id = ?2 AND revision_number < ?3
              ORDER BY revision_number DESC
@@ -4292,7 +6653,8 @@ fn query_revisions(
         tx.prepare(
             "SELECT revision_id, workspace_id, page_id, revision_number, title, content_md,
                     content_sha256, change_summary, author_uid, author_display_name,
-                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms
+                    reviewer_uid, reviewer_display_name, proposal_id, created_at_ms,
+                    COALESCE(contributor_names_json, '[]')
              FROM shared_page_revisions
              WHERE workspace_id = ?1 AND page_id = ?2
              ORDER BY revision_number DESC
@@ -4519,7 +6881,8 @@ fn load_proposal_row(
                     base_title, base_content_md, proposed_title, proposed_content_md,
                     summary, author_uid, author_display_name, status, submission_count,
                     created_at_ms, updated_at_ms, reviewed_at_ms, reviewer_display_name,
-                    applied_revision_number
+                    applied_revision_number, live_draft_id, draft_version,
+                    COALESCE(contributor_uids_json, '[]'), COALESCE(contributor_names_json, '[]')
              FROM shared_change_proposals
              WHERE workspace_id = ?1 AND proposal_id = ?2",
             params![workspace_id, proposal_id],
@@ -4543,6 +6906,10 @@ fn load_proposal_row(
                     r.get::<_, Option<i64>>(15)?,
                     r.get::<_, Option<String>>(16)?,
                     r.get::<_, Option<i64>>(17)?,
+                    r.get::<_, Option<String>>(18)?,
+                    r.get::<_, Option<i64>>(19)?,
+                    r.get::<_, String>(20)?,
+                    r.get::<_, String>(21)?,
                 ))
             },
         )
@@ -4566,10 +6933,16 @@ fn load_proposal_row(
         reviewed_at_ms,
         reviewer_display_name,
         applied_revision_number,
+        live_draft_id,
+        draft_version,
+        raw_uids,
+        raw_names,
     )) = row
     else {
         return Err(SharedContentError::ProposalNotFound);
     };
+    let contributor_uids: Vec<String> = serde_json::from_str(&raw_uids).unwrap_or_default();
+    let contributor_names: Vec<String> = serde_json::from_str(&raw_names).unwrap_or_default();
     Ok(ProposalRow {
         proposal_id,
         workspace_id,
@@ -4589,6 +6962,10 @@ fn load_proposal_row(
         reviewed_at_ms,
         reviewer_display_name,
         applied_revision_number,
+        live_draft_id,
+        draft_version,
+        contributor_uids,
+        contributor_names,
     })
 }
 
@@ -4608,7 +6985,9 @@ fn query_proposal_summaries(
         "SELECT pr.proposal_id, pr.workspace_id, pr.page_id, p.title, pr.base_revision_number,
                 pr.summary, pr.author_uid, pr.author_display_name, pr.status, pr.submission_count,
                 p.current_revision_number, pr.created_at_ms, pr.updated_at_ms,
-                pr.reviewed_at_ms, pr.reviewer_display_name, pr.applied_revision_number
+                pr.reviewed_at_ms, pr.reviewer_display_name, pr.applied_revision_number,
+                pr.live_draft_id, pr.draft_version,
+                COALESCE(pr.contributor_uids_json, '[]'), COALESCE(pr.contributor_names_json, '[]')
          FROM shared_change_proposals pr
          JOIN shared_pages p ON p.workspace_id = pr.workspace_id AND p.page_id = pr.page_id
          WHERE pr.workspace_id = ?1 AND pr.page_id = ?2 {cursor_clause}
@@ -4627,6 +7006,10 @@ fn query_proposal_summaries(
         let cur_rev: i64 = r.get(10)?;
         let is_stale = matches!(status, ProposalStatus::Pending | ProposalStatus::ChangesRequested)
             && base_rev != cur_rev;
+        let raw_uids: String = r.get(18)?;
+        let raw_names: String = r.get(19)?;
+        let contributor_uids: Vec<String> = serde_json::from_str(&raw_uids).unwrap_or_default();
+        let contributor_names: Vec<String> = serde_json::from_str(&raw_names).unwrap_or_default();
         Ok(Ok(SharedProposalSummary {
             proposal_id: r.get(0)?,
             workspace_id: r.get(1)?,
@@ -4644,6 +7027,10 @@ fn query_proposal_summaries(
             reviewed_at_ms: r.get(13)?,
             reviewer_display_name: r.get(14)?,
             applied_revision_number: r.get(15)?,
+            live_draft_id: r.get(16)?,
+            draft_version: r.get(17)?,
+            contributor_uids,
+            contributor_names,
         }))
     };
     let mut out = Vec::new();
@@ -4704,11 +7091,45 @@ fn load_proposal_details(
     }
 
     let page_archived = page.archived_at_ms.is_some();
+    let mut elig_stmt = tx.prepare(
+        "SELECT uid FROM workspace_memberships
+         WHERE workspace_id = ?1 AND removed_at_ms IS NULL AND role IN ('owner', 'admin')",
+    )?;
+    let eligible_admins: Vec<String> = elig_stmt
+        .query_map(params![workspace_id], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(elig_stmt);
+    let has_eligible_reviewer = eligible_admins
+        .iter()
+        .any(|uid| uid != &row.author_uid && !row.contributor_uids.iter().any(|c| c == uid));
+    let caller_is_contributor = row.contributor_uids.iter().any(|c| c == caller_uid);
     let can_review = !page_archived
         && row.status == ProposalStatus::Pending
         && caller_role.can_moderate_or_review()
-        && row.author_uid != caller_uid;
+        && row.author_uid != caller_uid
+        && !caller_is_contributor;
+    let ineligible_reason = if page_archived || row.status != ProposalStatus::Pending {
+        None
+    } else if caller_role.can_moderate_or_review()
+        && (row.author_uid == caller_uid || caller_is_contributor)
+    {
+        if !has_eligible_reviewer {
+            Some("No other Owner or Admin is eligible to approve this draft because all current reviewers contributed to or submitted it. Promote another member to Admin or invite an Owner/Admin reviewer.".into())
+        } else if caller_is_contributor {
+            Some("You contributed edits to this shared draft, so another Owner or Admin must review and apply it.".into())
+        } else {
+            Some(
+                "You submitted this proposal, so another Owner or Admin must review and apply it."
+                    .into(),
+            )
+        }
+    } else if !has_eligible_reviewer {
+        Some("No other eligible Owner or Admin is currently available in this workspace to review this submission.".into())
+    } else {
+        None
+    };
     let can_author_edit = !page_archived
+        && row.live_draft_id.is_none()
         && matches!(
             row.status,
             ProposalStatus::Pending | ProposalStatus::ChangesRequested
@@ -4734,6 +7155,10 @@ fn load_proposal_details(
             reviewed_at_ms: row.reviewed_at_ms,
             reviewer_display_name: row.reviewer_display_name,
             applied_revision_number: row.applied_revision_number,
+            live_draft_id: row.live_draft_id,
+            draft_version: row.draft_version,
+            contributor_uids: row.contributor_uids,
+            contributor_names: row.contributor_names,
         },
         base_title: row.base_title,
         base_content_md: row.base_content_md,
@@ -4745,6 +7170,8 @@ fn load_proposal_details(
         page_archived,
         can_review,
         can_author_edit,
+        has_eligible_reviewer,
+        ineligible_reason,
         decisions,
     })
 }

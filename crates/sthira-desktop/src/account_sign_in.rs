@@ -219,6 +219,9 @@ pub(crate) async fn cmd_google_sign_out<R: Runtime>(
         .try_lock()
         .map_err(|_| "An account operation is already in progress.")?;
     let store = open_session_store(&app, &config).await?;
+    if let Some(mgr) = app.try_state::<crate::live_collab::LiveCollabManager>() {
+        mgr.disconnect_all().await;
+    }
     store.local_sign_out(&config).await?;
     *attempt.terminal_notice_in_process.lock().unwrap() = None;
     Ok(())

@@ -9,8 +9,8 @@ The owner has prioritized finishing the remaining AE5 implementation batch befor
 | 1 | AE5 completion batch | Add migration-agent guidance, selective review, scalable history and representative export validation. | Implemented; native/live follow-up remains |
 | 2 | UX1 — Guided onboarding and Help | Learn the application through an optional tour and searchable in-app documentation. | Dedicated walkthroughs and offline articles implemented. See UX1 acceptance below. |
 | 3 | CW1 — Accounts and workspace membership | Sign in, manage an account, create/join a team workspace, and manage members and roles. | Linux pilot sign-off includes per-device revocation and workspace membership. |
-| 4 | CW2 — Shared work and synchronization | Work asynchronously on shared pages and projects with comments, reviewed changes, attribution and conflict handling. | Local Linux shared-page pilot signed off. Shared project grouping is next. |
-| Later follow-up | CW3 — Live co-editing | Edit the same document simultaneously with presence and collaborator cursors. | Planned after CW2; scheduling relative to other follow-ups remains open |
+| 4 | CW2 — Shared work and synchronization | Work asynchronously on shared pages and projects with comments, reviewed changes, attribution and conflict handling. | Local Linux shared-page pilot signed off. Shared project grouping passed local acceptance. |
+| 5 | CW3 — Live co-editing | Edit the same document simultaneously with presence and collaborator cursors. | Local Linux pilot signed off. |
 
 Firebase Authentication with Google sign-in is selected for the CW1 pilot. Hosting, the production shared-workspace database, and synchronization architecture are open. [Product policy](policies/product.md) governs ownership and local-first behavior. [Verification policy](policies/verification.md) governs acceptance evidence.
 
@@ -110,7 +110,7 @@ Native Linux acceptance passed all six membership checks with both loopback iden
 
 ## CW2 — Shared work and synchronization
 
-The owner signed off on the CW2 local Linux shared-page pilot. Its verified journey covers publishing a reviewed page copy, discussion, proposal review, and seeing the accepted revision on a second client. [Shared project grouping](#shared-project-grouping) is the next CW2 slice. Scoped shared Agent/MCP work remains a later slice, and simultaneous co-editing belongs in CW3.
+The owner signed off on the CW2 local Linux shared-page pilot. Its verified journey covers publishing a reviewed page copy, discussion, proposal review, and seeing the accepted revision on a second client. [Shared project grouping](#shared-project-grouping) passed local acceptance. [Scoped shared Agent/MCP](#scoped-shared-agent-and-mcp-participation) remains open.
 
 ### Shared pages
 
@@ -209,9 +209,18 @@ Production shared database and hosting remain open. The SQLite adapter gives the
 
 ## CW3 — Live co-editing follow-up
 
-After the first shared-workspace release, add simultaneous document editing, presence and collaborator cursors. Evaluate a CRDT-based editor synchronization design compatible with TipTap; [Yjs/Hocuspocus](https://tiptap.dev/docs/hocuspocus/getting-started/overview) is a candidate, not a selected backend.
+CW3 adds live shared drafts, bulk invitations, and page and project discussions to the local Linux pilot. The service owns the draft and publication state. The desktop keeps bearer credentials in the Rust session bridge and Personal vault data separate.
 
-Prototype schema compatibility, persistence, offline merging, reconnect, per-user undo, authorization/revocation and Markdown round-trip before adoption. Editor merge convergence does not establish business-level correctness: revisions, source fingerprints, AI proposal bases, attribution, relationship changes and guarded undo still need their own integration design. Keep page synchronization and other domain operations consistent without bypassing their validation.
+1. **Drafts and independent review.** The service seeds Yjs from the published revision. Optional client seeds are validated against that revision. Code block whitespace and fence metadata, reference links and linked images, list numbering, and table alignment survive supported Markdown round-trips. Submit requires the exact checkpoint applied by the editor. Submitters and contributors cannot approve their own changes.
+2. **Recovery and rebase.** Same-account pending edits become recoverable when the draft advances during a restart. Other accounts in the same profile cannot see those edits. The recovery panel allows copying or bringing over additions while preserving peer edits. Stale rebases keep the attempted text and require confirmation of the updated comparison before carrying changes forward.
+3. **Presence and access.** Per-user undo preserves peer edits. Cursors use Yjs relative positions and a 35-second presence TTL with heartbeats. Draft updates and acknowledgments are scoped to the authorized draft, page, and version. A downgrade to Viewer ends draft editing while preserving discussion access.
+4. **Invitations and discussions.** Bulk invitations report results per recipient and support safe retries. Page and project discussions resume after a disconnect with bounded backoff. A failed catch-up page preserves earlier changes for the next refresh even if the final retry returns an empty page. Activity links use the specific project and thread identities.
+
+The owner signed off on the local Linux pilot after all seven scenarios passed across runs of the same desktop and service binaries. The harness used two isolated Linux profiles, a third independent reviewer where required, and loopback OIDC/Firebase and session service fixtures. The shared database and hosting decisions, live Sthira Auth QA for CW3, and non-Linux acceptance remain open. Live web Research and Inkling 2 Mini remain deferred.
+
+## Scoped shared Agent and MCP participation
+
+This is the remaining planned collaboration slice. Start with explicit permission to read selected shared pages in one team project. Let authorized members use an agent to prepare a proposal for independent human review. Record the initiating member, the agent or client, and the exact source revisions. Verify permission checks, workspace isolation, revocation, and stale proposals with two local Linux profiles and deterministic fixtures.
 
 ## Open decisions for shared-workspace deployment
 

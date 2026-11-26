@@ -19,6 +19,7 @@ pub const INVITE_RATE_LIMIT_MAX_ATTEMPTS: usize = 20;
 const MAX_WORKSPACE_NAME_LEN: usize = 80;
 const MAX_EMAIL_LEN: usize = 254;
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 128;
+pub const MAX_BATCH_INVITE_RECIPIENTS: usize = 25;
 
 pub type SessionRecheck<'a> = &'a (dyn Fn() -> Result<VerifiedSession, StoreError> + Sync);
 
@@ -336,6 +337,44 @@ pub struct WorkspaceAuditRecord {
     pub created_at_ms: i64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatchInviteItemOutcome {
+    Created,
+    AlreadyMember,
+    AlreadyPending,
+    InvalidEmail,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchInvitationItemResult {
+    pub email: String,
+    pub outcome: BatchInviteItemOutcome,
+    pub message: String,
+    pub invitation: Option<WorkspaceInvitationView>,
+    pub invite_code: Option<String>,
+    pub replayed: bool,
+}
+
+impl fmt::Debug for BatchInvitationItemResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BatchInvitationItemResult")
+            .field("email", &"[redacted]")
+            .field("outcome", &self.outcome)
+            .field("replayed", &self.replayed)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchInvitationOutcome {
+    pub offered_role: WorkspaceRole,
+    pub replayed: bool,
+    pub results: Vec<BatchInvitationItemResult>,
+}
+
 /// Persistence contract independent of the future production shared-workspace database.
 pub trait WorkspaceMembershipStore: Send + Sync {
     fn list_workspaces(
@@ -380,6 +419,19 @@ pub trait WorkspaceMembershipStore: Send + Sync {
         now_ms: i64,
         ttl_ms: i64,
     ) -> Result<CreatedInvitation, MembershipError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_invitation_batch(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        recipient_emails: &[String],
+        offered_role: WorkspaceRole,
+        idempotency_key: &str,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<BatchInvitationOutcome, MembershipError>;
 
     fn revoke_invitation(
         &self,
@@ -591,6 +643,16 @@ impl SqliteWorkspaceMembershipStore {
             CREATE INDEX IF NOT EXISTS idx_workspace_audit_ws
                 ON workspace_audit_logs (workspace_id, created_at_ms ASC);
 
+            CREATE TABLE IF NOT EXISTS workspace_invite_batches (
+                actor_uid TEXT NOT NULL,
+                workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+                idempotency_key TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                results_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (actor_uid, workspace_id, idempotency_key)
+            );
+
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -598,6 +660,17 @@ impl SqliteWorkspaceMembershipStore {
             );
             ",
         )?;
+        let mut stmt = conn.prepare("PRAGMA table_info(workspace_memberships)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        if !cols.iter().any(|c| c == "email_norm") {
+            conn.execute(
+                "ALTER TABLE workspace_memberships ADD COLUMN email_norm TEXT",
+                [],
+            )?;
+        }
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at_ms)
              VALUES (1, 'cw1_membership_v1', ?1)",
@@ -704,9 +777,16 @@ impl WorkspaceMembershipStore for SqliteWorkspaceMembershipStore {
         )?;
         tx.execute(
             "INSERT INTO workspace_memberships
-                (membership_id, workspace_id, uid, display_name, role, joined_at_ms, updated_at_ms, removed_at_ms, removed_by_uid)
-             VALUES (?1, ?2, ?3, ?4, 'owner', ?5, ?5, NULL, NULL)",
-            params![membership_id, workspace_id, caller.uid, actor_display, now_ms],
+                (membership_id, workspace_id, uid, display_name, role, joined_at_ms, updated_at_ms, removed_at_ms, removed_by_uid, email_norm)
+             VALUES (?1, ?2, ?3, ?4, 'owner', ?5, ?5, NULL, NULL, ?6)",
+            params![
+                membership_id,
+                workspace_id,
+                caller.uid,
+                actor_display,
+                now_ms,
+                canonical_email(&caller.email)
+            ],
         )?;
         record_audit(
             &tx,
@@ -823,6 +903,216 @@ impl WorkspaceMembershipStore for SqliteWorkspaceMembershipStore {
         let _ = recheck_session()?;
         tx.commit()?;
         Ok(created)
+    }
+
+    fn create_invitation_batch(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        recipient_emails: &[String],
+        offered_role: WorkspaceRole,
+        idempotency_key: &str,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<BatchInvitationOutcome, MembershipError> {
+        if ttl_ms <= 0 {
+            return Err(MembershipError::InvalidInput(
+                "Invitation TTL must be positive.".into(),
+            ));
+        }
+        let idempotency_key = sanitize_idempotency_key(idempotency_key)?;
+        let deduped = deduplicate_batch_emails(recipient_emails)?;
+        let payload_digest = sha256_hex(
+            &serde_json::json!({
+                "workspace_id": workspace_id,
+                "offered_role": offered_role.as_str(),
+                "emails": deduped.iter().map(|e| e.to_ascii_lowercase()).collect::<Vec<_>>(),
+            })
+            .to_string(),
+        );
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let actor = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !actor.role.can_grant_invite_role(offered_role) {
+            return Err(MembershipError::Forbidden);
+        }
+
+        if let Some((stored_digest, stored_json)) = tx
+            .query_row(
+                "SELECT payload_sha256, results_json FROM workspace_invite_batches
+                 WHERE actor_uid = ?1 AND workspace_id = ?2 AND idempotency_key = ?3",
+                params![caller.uid, workspace_id, idempotency_key],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?
+        {
+            if stored_digest != payload_digest {
+                return Err(MembershipError::InvalidInput(
+                    "Idempotency key was reused with different invitation recipients or role."
+                        .into(),
+                ));
+            }
+            let stored_records: Vec<StoredBatchInviteEntry> =
+                serde_json::from_str(&stored_json).map_err(|_| MembershipError::Random)?;
+            let mut replayed_results = Vec::with_capacity(stored_records.len());
+            for rec in stored_records {
+                let inv = match rec.invitation_id {
+                    Some(ref inv_id) => load_invitation_by_id(&tx, workspace_id, inv_id)
+                        .ok()
+                        .map(|r| r.into_view(now_ms)),
+                    None => None,
+                };
+                let message = match rec.outcome {
+                    BatchInviteItemOutcome::Created => {
+                        "Invitation already created for this address (single-use code was shown once)."
+                            .into()
+                    }
+                    _ => rec.message,
+                };
+                replayed_results.push(BatchInvitationItemResult {
+                    email: rec.email,
+                    outcome: rec.outcome,
+                    message,
+                    invitation: inv,
+                    invite_code: None,
+                    replayed: true,
+                });
+            }
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(BatchInvitationOutcome {
+                offered_role,
+                replayed: true,
+                results: replayed_results,
+            });
+        }
+
+        let mut results = Vec::with_capacity(deduped.len());
+        let mut stored_records = Vec::with_capacity(deduped.len());
+
+        for raw in &deduped {
+            match sanitize_email(raw) {
+                Err(_) => {
+                    let msg = "Enter a valid email address.".to_owned();
+                    results.push(BatchInvitationItemResult {
+                        email: raw.clone(),
+                        outcome: BatchInviteItemOutcome::InvalidEmail,
+                        message: msg.clone(),
+                        invitation: None,
+                        invite_code: None,
+                        replayed: false,
+                    });
+                    stored_records.push(StoredBatchInviteEntry {
+                        email: raw.clone(),
+                        outcome: BatchInviteItemOutcome::InvalidEmail,
+                        message: msg,
+                        invitation_id: None,
+                    });
+                }
+                Ok((clean_email, norm_email)) => {
+                    if let Some(existing_role) =
+                        find_active_member_role_by_email(&tx, workspace_id, &norm_email)?
+                    {
+                        let msg =
+                            format!("Already a workspace member ({}).", existing_role.as_str());
+                        results.push(BatchInvitationItemResult {
+                            email: clean_email.clone(),
+                            outcome: BatchInviteItemOutcome::AlreadyMember,
+                            message: msg.clone(),
+                            invitation: None,
+                            invite_code: None,
+                            replayed: false,
+                        });
+                        stored_records.push(StoredBatchInviteEntry {
+                            email: clean_email,
+                            outcome: BatchInviteItemOutcome::AlreadyMember,
+                            message: msg,
+                            invitation_id: None,
+                        });
+                        continue;
+                    }
+                    if let Some(pending) = find_active_pending_invitation_by_email(
+                        &tx,
+                        workspace_id,
+                        &norm_email,
+                        now_ms,
+                    )? {
+                        let inv_id = pending.invitation_id.clone();
+                        let view = pending.into_view(now_ms);
+                        let msg = format!(
+                            "Pending {} invitation already exists.",
+                            view.offered_role.as_str()
+                        );
+                        results.push(BatchInvitationItemResult {
+                            email: clean_email.clone(),
+                            outcome: BatchInviteItemOutcome::AlreadyPending,
+                            message: msg.clone(),
+                            invitation: Some(view),
+                            invite_code: None,
+                            replayed: false,
+                        });
+                        stored_records.push(StoredBatchInviteEntry {
+                            email: clean_email,
+                            outcome: BatchInviteItemOutcome::AlreadyPending,
+                            message: msg,
+                            invitation_id: Some(inv_id),
+                        });
+                        continue;
+                    }
+                    let created = insert_invitation_in_tx(
+                        &tx,
+                        workspace_id,
+                        &actor,
+                        &clean_email,
+                        &norm_email,
+                        offered_role,
+                        now_ms,
+                        ttl_ms,
+                    )?;
+                    let inv_id = created.invitation.invitation_id.clone();
+                    let msg = format!("Invited as {}.", created.invitation.offered_role.as_str());
+                    results.push(BatchInvitationItemResult {
+                        email: clean_email.clone(),
+                        outcome: BatchInviteItemOutcome::Created,
+                        message: msg.clone(),
+                        invitation: Some(created.invitation),
+                        invite_code: Some(created.invite_code),
+                        replayed: false,
+                    });
+                    stored_records.push(StoredBatchInviteEntry {
+                        email: clean_email,
+                        outcome: BatchInviteItemOutcome::Created,
+                        message: msg,
+                        invitation_id: Some(inv_id),
+                    });
+                }
+            }
+        }
+
+        let stored_json =
+            serde_json::to_string(&stored_records).map_err(|_| MembershipError::Random)?;
+        tx.execute(
+            "INSERT INTO workspace_invite_batches
+                (actor_uid, workspace_id, idempotency_key, payload_sha256, results_json, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                caller.uid,
+                workspace_id,
+                idempotency_key,
+                payload_digest,
+                stored_json,
+                now_ms
+            ],
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(BatchInvitationOutcome {
+            offered_role,
+            replayed: false,
+            results,
+        })
     }
 
     fn revoke_invitation(
@@ -1117,15 +1407,16 @@ impl WorkspaceMembershipStore for SqliteWorkspaceMembershipStore {
             let new_membership_id = Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO workspace_memberships
-                    (membership_id, workspace_id, uid, display_name, role, joined_at_ms, updated_at_ms, removed_at_ms, removed_by_uid)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL, NULL)",
+                    (membership_id, workspace_id, uid, display_name, role, joined_at_ms, updated_at_ms, removed_at_ms, removed_by_uid, email_norm)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL, NULL, ?7)",
                 params![
                     new_membership_id,
                     inv.workspace_id,
                     caller.uid,
                     display_name,
                     inv.offered_role.as_str(),
-                    now_ms
+                    now_ms,
+                    caller_email_norm
                 ],
             )?;
             (false, new_membership_id, inv.offered_role)
@@ -2386,6 +2677,116 @@ fn build_workspace_details(
     })
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct StoredBatchInviteEntry {
+    email: String,
+    outcome: BatchInviteItemOutcome,
+    message: String,
+    invitation_id: Option<String>,
+}
+
+fn deduplicate_batch_emails(recipient_emails: &[String]) -> Result<Vec<String>, MembershipError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in recipient_emails {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(trimmed.to_owned());
+        }
+    }
+    if out.is_empty() {
+        return Err(MembershipError::InvalidInput(
+            "Enter at least one recipient email address.".into(),
+        ));
+    }
+    if out.len() > MAX_BATCH_INVITE_RECIPIENTS {
+        return Err(MembershipError::InvalidInput(format!(
+            "Invite at most {MAX_BATCH_INVITE_RECIPIENTS} recipients per batch."
+        )));
+    }
+    Ok(out)
+}
+
+fn find_active_member_role_by_email(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    email_norm: &str,
+) -> Result<Option<WorkspaceRole>, MembershipError> {
+    let raw: Option<String> = tx
+        .query_row(
+            "SELECT role FROM workspace_memberships
+             WHERE workspace_id = ?1 AND removed_at_ms IS NULL AND email_norm != '' AND email_norm = ?2
+             LIMIT 1",
+            params![workspace_id, email_norm],
+            |r| r.get(0),
+        )
+        .optional()?;
+    raw.map(|r| WorkspaceRole::from_db(&r)).transpose()
+}
+
+fn find_active_pending_invitation_by_email(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    email_norm: &str,
+    now_ms: i64,
+) -> Result<Option<InvitationRow>, MembershipError> {
+    let row = tx
+        .query_row(
+            "SELECT invitation_id, workspace_id, recipient_email, recipient_email_norm, offered_role,
+                    invited_by_membership_id, invited_by_uid, invited_by_display_name,
+                    created_at_ms, expires_at_ms, accepted_at_ms, accepted_by_uid, revoked_at_ms
+             FROM workspace_invitations
+             WHERE workspace_id = ?1
+               AND recipient_email_norm = ?2
+               AND accepted_at_ms IS NULL
+               AND revoked_at_ms IS NULL
+               AND expires_at_ms >= ?3
+             ORDER BY created_at_ms DESC, rowid DESC
+             LIMIT 1",
+            params![workspace_id, email_norm, now_ms],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, i64>(8)?,
+                    r.get::<_, i64>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, Option<i64>>(12)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    Ok(Some(InvitationRow {
+        invitation_id: r.0,
+        workspace_id: r.1,
+        recipient_email: r.2,
+        recipient_email_norm: r.3,
+        offered_role: WorkspaceRole::from_db(&r.4)?,
+        invited_by_membership_id: r.5,
+        invited_by_uid: r.6,
+        invited_by_display_name: r.7,
+        created_at_ms: r.8,
+        expires_at_ms: r.9,
+        accepted_at_ms: r.10,
+        accepted_by_uid: r.11,
+        revoked_at_ms: r.12,
+    }))
+}
+
 /// Pure in-memory adapter backing tests that verify storage-provider independence of `WorkspaceMembershipStore`.
 #[derive(Default, Clone)]
 pub struct InMemoryWorkspaceMembershipStore {
@@ -2397,6 +2798,7 @@ struct InMemoryState {
     workspaces: HashMap<String, MemWorkspace>,
     members: HashMap<String, MemMember>,
     invitations: HashMap<String, MemInvite>,
+    batches: HashMap<(String, String, String), (String, Vec<StoredBatchInviteEntry>)>,
     transfers: HashMap<String, MemTransfer>,
     rate_limits: HashMap<(String, String), Vec<i64>>,
     audit_logs: Vec<WorkspaceAuditRecord>,
@@ -2417,6 +2819,7 @@ struct MemMember {
     membership_id: String,
     workspace_id: String,
     uid: String,
+    email_norm: String,
     display_name: String,
     role: WorkspaceRole,
     joined_at_ms: i64,
@@ -2712,6 +3115,7 @@ impl WorkspaceMembershipStore for InMemoryWorkspaceMembershipStore {
                 membership_id: membership_id.clone(),
                 workspace_id: workspace_id.clone(),
                 uid: caller.uid.clone(),
+                email_norm: canonical_email(&caller.email),
                 display_name: caller_display_name(caller),
                 role: WorkspaceRole::Owner,
                 joined_at_ms: now_ms,
@@ -2865,6 +3269,267 @@ impl WorkspaceMembershipStore for InMemoryWorkspaceMembershipStore {
                 revoked_at_ms: None,
             },
             invite_code,
+        })
+    }
+
+    fn create_invitation_batch(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        recipient_emails: &[String],
+        offered_role: WorkspaceRole,
+        idempotency_key: &str,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<BatchInvitationOutcome, MembershipError> {
+        if ttl_ms <= 0 {
+            return Err(MembershipError::InvalidInput(
+                "Invitation TTL must be positive.".into(),
+            ));
+        }
+        let idempotency_key = sanitize_idempotency_key(idempotency_key)?;
+        let deduped = deduplicate_batch_emails(recipient_emails)?;
+        let payload_digest = sha256_hex(
+            &serde_json::json!({
+                "workspace_id": workspace_id,
+                "offered_role": offered_role.as_str(),
+                "emails": deduped.iter().map(|e| e.to_ascii_lowercase()).collect::<Vec<_>>(),
+            })
+            .to_string(),
+        );
+        let mut state = self.inner.lock().unwrap();
+        let actor = Self::active_member(&state, workspace_id, &caller.uid)
+            .cloned()
+            .ok_or(MembershipError::Forbidden)?;
+        if !actor.role.can_grant_invite_role(offered_role) {
+            return Err(MembershipError::Forbidden);
+        }
+        let batch_key = (caller.uid.clone(), workspace_id.to_owned(), idempotency_key);
+        if let Some((stored_digest, stored_records)) = state.batches.get(&batch_key).cloned() {
+            if stored_digest != payload_digest {
+                return Err(MembershipError::InvalidInput(
+                    "Idempotency key was reused with different invitation recipients or role."
+                        .into(),
+                ));
+            }
+            let _ = recheck_session()?;
+            let replayed_results = stored_records
+                .into_iter()
+                .map(|rec| {
+                    let inv = rec.invitation_id.and_then(|inv_id| {
+                        state.invitations.get(&inv_id).map(|i| {
+                            let status = if i.accepted_at_ms.is_some() {
+                                InvitationStatus::Accepted
+                            } else if i.revoked_at_ms.is_some() {
+                                InvitationStatus::Revoked
+                            } else if now_ms > i.expires_at_ms {
+                                InvitationStatus::Expired
+                            } else {
+                                InvitationStatus::Pending
+                            };
+                            WorkspaceInvitationView {
+                                invitation_id: i.invitation_id.clone(),
+                                workspace_id: i.workspace_id.clone(),
+                                recipient_email: i.recipient_email.clone(),
+                                offered_role: i.offered_role,
+                                status,
+                                invited_by_membership_id: i.invited_by_membership_id.clone(),
+                                invited_by_display_name: i.invited_by_display_name.clone(),
+                                created_at_ms: i.created_at_ms,
+                                expires_at_ms: i.expires_at_ms,
+                                accepted_at_ms: i.accepted_at_ms,
+                                revoked_at_ms: i.revoked_at_ms,
+                            }
+                        })
+                    });
+                    let message = match rec.outcome {
+                        BatchInviteItemOutcome::Created => {
+                            "Invitation already created for this address (single-use code was shown once)."
+                                .into()
+                        }
+                        _ => rec.message,
+                    };
+                    BatchInvitationItemResult {
+                        email: rec.email,
+                        outcome: rec.outcome,
+                        message,
+                        invitation: inv,
+                        invite_code: None,
+                        replayed: true,
+                    }
+                })
+                .collect();
+            return Ok(BatchInvitationOutcome {
+                offered_role,
+                replayed: true,
+                results: replayed_results,
+            });
+        }
+        let _ = recheck_session()?;
+        let mut results = Vec::with_capacity(deduped.len());
+        let mut stored_records = Vec::with_capacity(deduped.len());
+        for raw in &deduped {
+            match sanitize_email(raw) {
+                Err(_) => {
+                    let msg = "Enter a valid email address.".to_owned();
+                    results.push(BatchInvitationItemResult {
+                        email: raw.clone(),
+                        outcome: BatchInviteItemOutcome::InvalidEmail,
+                        message: msg.clone(),
+                        invitation: None,
+                        invite_code: None,
+                        replayed: false,
+                    });
+                    stored_records.push(StoredBatchInviteEntry {
+                        email: raw.clone(),
+                        outcome: BatchInviteItemOutcome::InvalidEmail,
+                        message: msg,
+                        invitation_id: None,
+                    });
+                }
+                Ok((clean_email, norm_email)) => {
+                    if let Some(existing_member) = state.members.values().find(|m| {
+                        m.workspace_id == workspace_id
+                            && m.removed_at_ms.is_none()
+                            && !m.email_norm.is_empty()
+                            && m.email_norm == norm_email
+                    }) {
+                        let msg = format!(
+                            "Already a workspace member ({}).",
+                            existing_member.role.as_str()
+                        );
+                        results.push(BatchInvitationItemResult {
+                            email: clean_email.clone(),
+                            outcome: BatchInviteItemOutcome::AlreadyMember,
+                            message: msg.clone(),
+                            invitation: None,
+                            invite_code: None,
+                            replayed: false,
+                        });
+                        stored_records.push(StoredBatchInviteEntry {
+                            email: clean_email,
+                            outcome: BatchInviteItemOutcome::AlreadyMember,
+                            message: msg,
+                            invitation_id: None,
+                        });
+                        continue;
+                    }
+                    if let Some(pending) = state.invitations.values().find(|i| {
+                        i.workspace_id == workspace_id
+                            && i.recipient_email_norm == norm_email
+                            && i.accepted_at_ms.is_none()
+                            && i.revoked_at_ms.is_none()
+                            && i.expires_at_ms >= now_ms
+                    }) {
+                        let view = WorkspaceInvitationView {
+                            invitation_id: pending.invitation_id.clone(),
+                            workspace_id: pending.workspace_id.clone(),
+                            recipient_email: pending.recipient_email.clone(),
+                            offered_role: pending.offered_role,
+                            status: InvitationStatus::Pending,
+                            invited_by_membership_id: pending.invited_by_membership_id.clone(),
+                            invited_by_display_name: pending.invited_by_display_name.clone(),
+                            created_at_ms: pending.created_at_ms,
+                            expires_at_ms: pending.expires_at_ms,
+                            accepted_at_ms: pending.accepted_at_ms,
+                            revoked_at_ms: pending.revoked_at_ms,
+                        };
+                        let inv_id = view.invitation_id.clone();
+                        let msg = format!(
+                            "Pending {} invitation already exists.",
+                            view.offered_role.as_str()
+                        );
+                        results.push(BatchInvitationItemResult {
+                            email: clean_email.clone(),
+                            outcome: BatchInviteItemOutcome::AlreadyPending,
+                            message: msg.clone(),
+                            invitation: Some(view),
+                            invite_code: None,
+                            replayed: false,
+                        });
+                        stored_records.push(StoredBatchInviteEntry {
+                            email: clean_email,
+                            outcome: BatchInviteItemOutcome::AlreadyPending,
+                            message: msg,
+                            invitation_id: Some(inv_id),
+                        });
+                        continue;
+                    }
+                    let invitation_id = Uuid::new_v4().to_string();
+                    let invite_code = random_invite_code()?;
+                    let code_digest = sha256_hex(&invite_code);
+                    let expires_at_ms = now_ms.saturating_add(ttl_ms);
+                    state.invitations.insert(
+                        invitation_id.clone(),
+                        MemInvite {
+                            invitation_id: invitation_id.clone(),
+                            workspace_id: workspace_id.to_owned(),
+                            code_digest,
+                            recipient_email: clean_email.clone(),
+                            recipient_email_norm: norm_email,
+                            offered_role,
+                            invited_by_membership_id: actor.membership_id.clone(),
+                            invited_by_uid: caller.uid.clone(),
+                            invited_by_display_name: actor.display_name.clone(),
+                            created_at_ms: now_ms,
+                            expires_at_ms,
+                            accepted_at_ms: None,
+                            accepted_by_uid: None,
+                            revoked_at_ms: None,
+                        },
+                    );
+                    state.audit_logs.push(WorkspaceAuditRecord {
+                        log_id: Uuid::new_v4().to_string(),
+                        workspace_id: workspace_id.to_owned(),
+                        action: "invitation_created".into(),
+                        actor_uid: caller.uid.clone(),
+                        actor_membership_id: Some(actor.membership_id.clone()),
+                        target_uid: None,
+                        target_membership_id: None,
+                        invitation_id: Some(invitation_id.clone()),
+                        detail_json: serde_json::json!({ "offered_role": offered_role.as_str() })
+                            .to_string(),
+                        created_at_ms: now_ms,
+                    });
+                    let view = WorkspaceInvitationView {
+                        invitation_id: invitation_id.clone(),
+                        workspace_id: workspace_id.to_owned(),
+                        recipient_email: clean_email.clone(),
+                        offered_role,
+                        status: InvitationStatus::Pending,
+                        invited_by_membership_id: actor.membership_id.clone(),
+                        invited_by_display_name: actor.display_name.clone(),
+                        created_at_ms: now_ms,
+                        expires_at_ms,
+                        accepted_at_ms: None,
+                        revoked_at_ms: None,
+                    };
+                    let msg = format!("Invited as {}.", view.offered_role.as_str());
+                    results.push(BatchInvitationItemResult {
+                        email: clean_email.clone(),
+                        outcome: BatchInviteItemOutcome::Created,
+                        message: msg.clone(),
+                        invitation: Some(view),
+                        invite_code: Some(invite_code),
+                        replayed: false,
+                    });
+                    stored_records.push(StoredBatchInviteEntry {
+                        email: clean_email,
+                        outcome: BatchInviteItemOutcome::Created,
+                        message: msg,
+                        invitation_id: Some(invitation_id),
+                    });
+                }
+            }
+        }
+        state
+            .batches
+            .insert(batch_key, (payload_digest, stored_records));
+        Ok(BatchInvitationOutcome {
+            offered_role,
+            replayed: false,
+            results,
         })
     }
 
@@ -3125,6 +3790,7 @@ impl WorkspaceMembershipStore for InMemoryWorkspaceMembershipStore {
                     membership_id: new_id.clone(),
                     workspace_id: inv.workspace_id.clone(),
                     uid: caller.uid.clone(),
+                    email_norm: canonical_email(&caller.email),
                     display_name: caller_display_name(caller),
                     role: inv.offered_role,
                     joined_at_ms: now_ms,

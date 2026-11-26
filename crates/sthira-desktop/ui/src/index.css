@@ -46,3 +46,40 @@ html.dark ::-webkit-scrollbar-thumb {
 html.dark ::-webkit-scrollbar-thumb:hover {
   background: #3E4238;
 }
+
+/* Collaborative live carets & selections */
+.collaboration-carets__caret,
+.ProseMirror-yjs-cursor {
+  position: relative;
+  border-left: 2px solid;
+  border-right: none;
+  margin-left: -1px;
+  margin-right: -1px;
+  word-break: normal;
+  pointer-events: none;
+  display: inline;
+}
+
+.collaboration-carets__label,
+.ProseMirror-yjs-cursor > div {
+  position: absolute;
+  top: -1.45em;
+  left: -1px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.25;
+  user-select: none;
+  white-space: nowrap;
+  color: #FFFFFF;
+  padding: 1px 6px;
+  border-radius: 4px 4px 4px 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  z-index: 20;
+}
+
+.collaboration-carets__selection,
+.ProseMirror-yjs-selection {
+  border-radius: 2px;
+}

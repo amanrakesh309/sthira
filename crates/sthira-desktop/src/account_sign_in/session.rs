@@ -280,14 +280,17 @@ impl SessionStore {
         .await
     }
 
-    pub(super) async fn clear_all_credentials(&self) -> Result<(), String> {
+    async fn clear_all_credentials(
+        &self,
+        cleanup: crate::shared_drafts::DraftCleanup,
+    ) -> Result<(), String> {
         let backend = Arc::clone(&self.backend);
         let slot = self.slot.clone();
         let data_dir = self.data_dir.clone();
         keyring_task(move || {
             let new_res = backend.delete_secret(SERVICE, &slot);
             let legacy_res = backend.delete_secret(LEGACY_FIREBASE_SERVICE, &slot);
-            crate::shared_drafts::clear_session_account_and_drafts(&data_dir);
+            crate::shared_drafts::clear_session_account_and_drafts(&data_dir, cleanup);
             new_res?;
             legacy_res?;
             Ok(())
@@ -494,7 +497,8 @@ impl SessionStore {
                     .await;
             }
         }
-        self.clear_all_credentials().await
+        self.clear_all_credentials(crate::shared_drafts::DraftCleanup::KeepLiveRecovery)
+            .await
     }
 
     pub(crate) async fn handle_unauthorized(
@@ -527,7 +531,8 @@ impl SessionStore {
                 });
             }
         };
-        self.clear_all_credentials().await?;
+        self.clear_all_credentials(crate::shared_drafts::DraftCleanup::All)
+            .await?;
         Ok(SessionStatus::SignedOut {
             reason: Some(reason),
         })

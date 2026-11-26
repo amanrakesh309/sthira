@@ -9,13 +9,29 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Image from '@tiptap/extension-image';
 import Blockquote from '@tiptap/extension-blockquote';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
+import type * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
 import { InternalReference } from '../editor/internalReferences';
 import { parseEntityHref } from '../api/connections';
 import { plainPageMarkdown } from '../editor/plainPageMarkdown';
 import { SLASH_QUERY_PATTERN } from '../editor/slashQuery';
+import { CollaborativeCodeBlock, CollaborativeImage, CollaborativeLink } from '../editor/yjsCollab';
 import type { EntityRef, ObjectType } from '../types/sthira';
 import type { EmbeddedObjectData } from './objects/EmbeddedObjectCard';
+
+const documentLinkOptions = {
+  openOnClick: false,
+  protocols: ['sthira'],
+  HTMLAttributes: {
+    target: '_blank',
+    rel: 'noopener noreferrer nofollow',
+    class: 'document-inline-link',
+    tabindex: '0',
+  },
+};
 
 export type DocumentFormat = 'bold' | 'italic' | 'h1' | 'h2' | 'todo' | 'code' | 'table' | 'slash';
 export interface DocumentEditorHandle {
@@ -24,6 +40,15 @@ export interface DocumentEditorHandle {
   insertMarkdown: (markdown: string, replaceSlash?: boolean) => void;
   insertLink: (label: string, href: string) => void;
   startInsertion: () => { replace: (markdown: string) => void };
+  undo: () => boolean;
+  redo: () => boolean;
+  getEditor: () => Editor | null;
+}
+export interface DocumentCollabConfig {
+  ydoc: Y.Doc;
+  awareness: Awareness;
+  user: { name: string; color: string };
+  field?: string;
 }
 interface Props {
   content: string;
@@ -36,6 +61,8 @@ interface Props {
   objectTypes: ObjectType[];
   onRecordDecision?: (text: string) => void;
   disabled?: boolean;
+  collab?: DocumentCollabConfig | null;
+  onSelectionRange?: (from: number, to: number) => void;
 }
 
 /** Keep non-Markdown HTML/comments intact when editing surrounding Markdown. */
@@ -116,119 +143,148 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
     }
     latest.current.onSlash(match[1], position);
   };
-  const editor = useEditor({
-    immediatelyRender: true,
-    extensions: [
-      StarterKit.configure({
-        codeBlock: false,
-        blockquote: false,
-        link: {
-          openOnClick: false,
-          protocols: ['sthira'],
-          HTMLAttributes: {
-            target: '_blank',
-            rel: 'noopener noreferrer nofollow',
-            class: 'document-inline-link',
-            tabindex: '0',
+  const editor = useEditor(
+    {
+      immediatelyRender: true,
+      extensions: [
+        StarterKit.configure({
+          codeBlock: false,
+          blockquote: false,
+          ...(props.collab ? { undoRedo: false } : {}),
+          link: props.collab ? false : documentLinkOptions,
+          trailingNode: false,
+        }),
+        Markdown, InternalReference, TableKit, TaskList, TaskItem.configure({ nested: true }),
+        props.collab ? CollaborativeImage : Image, RawHtml, RawInlineHtml,
+        ...(props.collab ? [CollaborativeLink.configure(documentLinkOptions)] : []),
+        Blockquote.extend({
+          addNodeView() {
+            return ReactNodeViewRenderer(({ node }: NodeViewProps) => <NodeViewWrapper as="blockquote">
+              <NodeViewContent />
+              {/decision:|trade-off/i.test(node.textContent) && latest.current.onRecordDecision && <button type="button" contentEditable={false} onClick={() => latest.current.onRecordDecision?.(node.textContent)}>Add to Decisions</button>}
+            </NodeViewWrapper>);
           },
-        },
-        trailingNode: false,
-      }),
-      Markdown, InternalReference, TableKit, TaskList, TaskItem.configure({ nested: true }), Image, RawHtml, RawInlineHtml,
-      Blockquote.extend({
-        addNodeView() {
-          return ReactNodeViewRenderer(({ node }: NodeViewProps) => <NodeViewWrapper as="blockquote">
-            <NodeViewContent />
-            {/decision:|trade-off/i.test(node.textContent) && latest.current.onRecordDecision && <button type="button" contentEditable={false} onClick={() => latest.current.onRecordDecision?.(node.textContent)}>Add to Decisions</button>}
-          </NodeViewWrapper>);
-        },
-      }),
-      CodeBlock.extend({
-        addNodeView() {
-          const CodeView = ({ node, editor: viewEditor, getPos }: NodeViewProps) => {
-            const language = String(node.attrs.language || '');
-            if (language === 'sthira-object' || language === 'mermaid') {
-              const updateObject = (data: EmbeddedObjectData) => {
-                const pos = getPos(); if (pos === undefined) return;
-                viewEditor.commands.insertContentAt({ from: pos, to: pos + node.nodeSize }, {
-                  type: 'codeBlock', attrs: node.attrs, content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-                });
-              };
-              return <NodeViewWrapper className="document-embedded-block" contentEditable={false}>
-                <RichDocumentRenderer content={`\`\`\`${language}\n${node.textContent}\n\`\`\``} objectTypes={latest.current.objectTypes} onUpdateObject={updateObject} onOpenEntity={latest.current.onOpenEntity} />
+        }),
+        (props.collab ? CollaborativeCodeBlock : CodeBlock).extend({
+          addNodeView() {
+            const CodeView = ({ node, editor: viewEditor, getPos }: NodeViewProps) => {
+              const language = String(node.attrs.language || '');
+              if (language === 'sthira-object' || language === 'mermaid') {
+                const updateObject = (data: EmbeddedObjectData) => {
+                  const pos = getPos(); if (pos === undefined) return;
+                  viewEditor.commands.insertContentAt({ from: pos, to: pos + node.nodeSize }, {
+                    type: 'codeBlock', attrs: node.attrs, content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+                  });
+                };
+                return <NodeViewWrapper className="document-embedded-block" contentEditable={false}>
+                  <RichDocumentRenderer content={`\`\`\`${language}\n${node.textContent}\n\`\`\``} objectTypes={latest.current.objectTypes} onUpdateObject={updateObject} onOpenEntity={latest.current.onOpenEntity} />
+                </NodeViewWrapper>;
+              }
+              return <NodeViewWrapper>
+                <pre><NodeViewContent<'code'> as="code" /></pre>
               </NodeViewWrapper>;
-            }
-            return <NodeViewWrapper>
-              <pre><NodeViewContent<'code'> as="code" /></pre>
-            </NodeViewWrapper>;
-          };
-          return ReactNodeViewRenderer(CodeView);
+            };
+            return ReactNodeViewRenderer(CodeView);
+          },
+        }),
+        ...(props.collab
+          ? [
+              Collaboration.configure({
+                document: props.collab.ydoc,
+                field: props.collab.field ?? 'default',
+              }),
+              CollaborationCaret.configure({
+                provider: { awareness: props.collab.awareness },
+                user: props.collab.user,
+                render: (user: Record<string, unknown>) => {
+                  const color = typeof user.color === 'string' && user.color ? user.color : '#0B6E4F';
+                  const displayName =
+                    typeof user.name === 'string' && user.name ? user.name : 'Collaborator';
+                  const cursor = document.createElement('span');
+                  cursor.classList.add('collaboration-carets__caret');
+                  cursor.style.borderColor = color;
+                  const label = document.createElement('div');
+                  label.classList.add('collaboration-carets__label');
+                  label.style.backgroundColor = color;
+                  label.setAttribute('data-collaborator-caret', displayName);
+                  label.textContent = displayName;
+                  cursor.appendChild(label);
+                  return cursor;
+                },
+              }),
+            ]
+          : []),
+      ],
+      ...(props.collab
+        ? {}
+        : { content: splitTitle(plainPageMarkdown(props.content)), contentType: 'markdown' }),
+      editable: !props.disabled,
+      editorProps: {
+        attributes: { role: 'textbox', 'aria-label': 'Document content', 'aria-multiline': 'true', 'data-testid': 'document-editor', class: 'focus-prose document-rich-editor' },
+        handlePaste: (view, event) => {
+          if (view.state.selection.$from.parent.type.spec.code || !event.clipboardData) return false;
+          const markdown = event.clipboardData.getData('text/markdown');
+          const plain = markdown || event.clipboardData.getData('text/plain');
+          if (!markdown && event.clipboardData.getData('text/html')) return false;
+          if (!markdown && !plain.includes('sthira://') && !/^(?:#{1,6} |[-*+] |\d+\. |> |```|~~~|\|.+\|)/m.test(plain) && !/\[[^\]]+\]\([^)]+\)/.test(plain)) return false;
+          event.preventDefault();
+          editor?.commands.insertContent(plainPageMarkdown(plain), { contentType: 'markdown' });
+          return true;
         },
-      }),
-    ],
-    content: splitTitle(plainPageMarkdown(props.content)), contentType: 'markdown',
-    editable: !props.disabled,
-    editorProps: {
-      attributes: { role: 'textbox', 'aria-label': 'Document content', 'aria-multiline': 'true', 'data-testid': 'document-editor', class: 'focus-prose document-rich-editor' },
-      handlePaste: (view, event) => {
-        if (view.state.selection.$from.parent.type.spec.code || !event.clipboardData) return false;
-        const markdown = event.clipboardData.getData('text/markdown');
-        const plain = markdown || event.clipboardData.getData('text/plain');
-        if (!markdown && event.clipboardData.getData('text/html')) return false;
-        if (!markdown && !plain.includes('sthira://') && !/^(?:#{1,6} |[-*+] |\d+\. |> |```|~~~|\|.+\|)/m.test(plain) && !/\[[^\]]+\]\([^)]+\)/.test(plain)) return false;
-        event.preventDefault();
-        editor?.commands.insertContent(plainPageMarkdown(plain), { contentType: 'markdown' });
-        return true;
-      },
-      handleDOMEvents: { click: (_view, event) => {
-        const link = (event.target as HTMLElement).closest('a');
-        const entity = parseEntityHref(link?.getAttribute('href') || undefined);
-        if (entity) { event.preventDefault(); latest.current.onOpenEntity(entity); return true; }
-        const href = link?.getAttribute('href');
-        if(href?.startsWith('sthira:')){event.preventDefault();return true;}
-        if (href && /^(https?:|mailto:)/i.test(href)) { event.preventDefault(); window.open(href, '_blank', 'noopener,noreferrer'); return true; }
-        return false;
-      } },
-      handleKeyDown: (view, event) => {
-        if (event.isComposing) return false;
-        if (['Enter', ' '].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-          const anchor = (event.target as HTMLElement)?.closest?.('a');
-          if (anchor && anchor !== view.dom && !anchor.closest('pre')) {
-            const href = anchor.getAttribute('href') || undefined;
-            const entity = parseEntityHref(href);
-            if (entity) {
-              event.preventDefault();
-              latest.current.onOpenEntity(entity);
-              return true;
-            }
-            if (href?.startsWith('sthira:')) {
-              event.preventDefault();
-              return true;
-            }
-            if (href && /^(https?:|mailto:)/i.test(href)) {
-              event.preventDefault();
-              window.open(href, '_blank', 'noopener,noreferrer');
-              return true;
+        handleDOMEvents: { click: (_view, event) => {
+          const link = (event.target as HTMLElement).closest('a');
+          const entity = parseEntityHref(link?.getAttribute('href') || undefined);
+          if (entity) { event.preventDefault(); latest.current.onOpenEntity(entity); return true; }
+          const href = link?.getAttribute('href');
+          if(href?.startsWith('sthira:')){event.preventDefault();return true;}
+          if (href && /^(https?:|mailto:)/i.test(href)) { event.preventDefault(); window.open(href, '_blank', 'noopener,noreferrer'); return true; }
+          return false;
+        } },
+        handleKeyDown: (view, event) => {
+          if (event.isComposing) return false;
+          if (['Enter', ' '].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+            const anchor = (event.target as HTMLElement)?.closest?.('a');
+            if (anchor && anchor !== view.dom && !anchor.closest('pre')) {
+              const href = anchor.getAttribute('href') || undefined;
+              const entity = parseEntityHref(href);
+              if (entity) {
+                event.preventDefault();
+                latest.current.onOpenEntity(entity);
+                return true;
+              }
+              if (href?.startsWith('sthira:')) {
+                event.preventDefault();
+                return true;
+              }
+              if (href && /^(https?:|mailto:)/i.test(href)) {
+                event.preventDefault();
+                window.open(href, '_blank', 'noopener,noreferrer');
+                return true;
+              }
             }
           }
-        }
-        // The slash popover owns these keys only while it is actively open.
-        if (latest.current.slashOpen && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) {
-          event.preventDefault();
-          return true;
-        }
-        return false;
+          // The slash popover owns these keys only while it is actively open.
+          if (latest.current.slashOpen && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
       },
+      onUpdate: ({ editor: active }) => {
+        const markdown = latest.current.collab ? active.getMarkdown() : titlePrefix.current + active.getMarkdown();
+        emitted.current = markdown;
+        latest.current.onChange(markdown);
+        notifySlash(active, 'update');
+      },
+      onSelectionUpdate: ({ editor: active }) => {
+        notifySlash(active, 'selection');
+        latest.current.onSelectionRange?.(active.state.selection.from, active.state.selection.to);
+      },
+      onBlur: () => latest.current.onBlur(),
     },
-    onUpdate: ({ editor: active }) => {
-      const markdown = titlePrefix.current + active.getMarkdown();
-      emitted.current = markdown;
-      latest.current.onChange(markdown);
-      notifySlash(active, 'update');
-    },
-    onSelectionUpdate: ({ editor: active }) => notifySlash(active, 'selection'),
-    onBlur: () => latest.current.onBlur(),
-  });
+    [props.collab?.ydoc ?? null, props.collab?.awareness ?? null],
+  );
 
   if (prevSlashOpenRef.current && !props.slashOpen && editor && !editor.isDestroyed) {
     const { $from, from, empty } = editor.state.selection;
@@ -240,7 +296,7 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
   prevSlashOpenRef.current = !!props.slashOpen;
 
   useEffect(() => {
-    if (!editor || props.content === emitted.current) return;
+    if (!editor || latest.current.collab || props.content === emitted.current) return;
     emitted.current = props.content;
     dismissedSlashPosRef.current = null;
     editor.commands.setContent(splitTitle(plainPageMarkdown(props.content)), { contentType: 'markdown', emitUpdate: false });
@@ -249,6 +305,15 @@ export const DocumentEditor = forwardRef<DocumentEditorHandle, Props>(function D
 
   useImperativeHandle(ref, () => ({
     focus: () => { editor?.commands.focus(); },
+    undo: () => {
+      if (!editor) return false;
+      return editor.commands.undo();
+    },
+    redo: () => {
+      if (!editor) return false;
+      return editor.commands.redo();
+    },
+    getEditor: () => editor ?? null,
     insertMarkdown: (markdown, replaceSlash = false) => {
       if (!editor) return;
       if (replaceSlash) removeSlash(editor);
