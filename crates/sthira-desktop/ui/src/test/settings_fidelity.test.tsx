@@ -112,11 +112,13 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     expect(closeBtn).toHaveClass('settings-close-btn');
   });
 
-  it('uses one navigation for models, workflows, search, appearance and data', async () => {
+  it('uses one navigation for models, workflows, search, agent connections, appearance and data', async () => {
     render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
     const navigation = screen.getByRole('navigation', { name: 'Settings categories' });
-    expect(navigation.querySelectorAll('button')).toHaveLength(6);
+    expect(navigation.querySelectorAll('button')).toHaveLength(7);
     expect(document.querySelector('.settings-tabs-row')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Agent connections' }));
+    expect(screen.getByRole('heading', { name: 'Connect an agent' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
     expect(screen.getByTestId('theme-option-system')).toBeInTheDocument();
@@ -243,7 +245,7 @@ describe('Model & Workspace Settings Visual Fidelity and Functionality', () => {
     render(<ThemeProvider><ModelSettingsModal isOpen onClose={vi.fn()} onVaultMutated={vi.fn()} /></ThemeProvider>);
     for (const name of ['Workflows', 'Templates', 'Web Search', 'Appearance', 'Workspace & Data', 'AI & Models']) {
       fireEvent.click(screen.getByRole('button', { name }));
-      expect(screen.getByRole('navigation', { name: 'Settings categories' }).querySelectorAll('button')).toHaveLength(6);
+      expect(screen.getByRole('navigation', { name: 'Settings categories' }).querySelectorAll('button')).toHaveLength(7);
     }
     fireEvent.click(screen.getByRole('button', { name: 'Workspace & Data' }));
     expect(screen.getByText('Delete workspace data').closest('details')).not.toHaveAttribute('open');

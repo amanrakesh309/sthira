@@ -3,7 +3,7 @@ import memoryGuide from '../../../../../docs/features/shared-memory.md?raw';
 import migrationGuide from '../../../../../docs/features/migration.md?raw';
 import proposalGuide from '../../../../../docs/features/agent-workflow-proposals.md?raw';
 
-export type HelpDestination = 'models' | 'workflows' | 'search' | 'vault';
+export type HelpDestination = 'models' | 'workflows' | 'search' | 'agents' | 'vault';
 
 export function helpSection(document: string, heading: string) {
   const lines = document.split(/\r?\n/);
@@ -33,7 +33,7 @@ export const helpArticles = {
   privacy: article('Privacy, scope, and sharing'),
   glossary: article('Glossary'),
   shortcuts: article('Keyboard shortcuts'),
-  cli: article('External clients'),
+  cli: article('External clients', helpGuide, { destination: 'agents', label: 'Open Agent connections' }),
   workspaces: article('Shared workspaces and roles'),
 };
 export type HelpArticleId = keyof typeof helpArticles;

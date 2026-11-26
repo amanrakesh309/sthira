@@ -846,6 +846,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => onSelectTeamTab?.('projects')}
+              aria-current={teamWorkspaceTab === 'projects' ? 'page' : undefined}
+              className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                teamWorkspaceTab === 'projects'
+                  ? 'bg-sthira-primary text-sthira-on-primary font-semibold shadow-xs'
+                  : 'text-sthira-text hover:bg-sthira-surface-muted'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>Projects</span>
+            </button>
+            <button
+              type="button"
               onClick={() => onSelectTeamTab?.('pages')}
               aria-current={teamWorkspaceTab === 'pages' ? 'page' : undefined}
               className={`sidebar-nav-row w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer ${

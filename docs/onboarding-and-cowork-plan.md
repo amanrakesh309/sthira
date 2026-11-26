@@ -9,7 +9,7 @@ The owner has prioritized finishing the remaining AE5 implementation batch befor
 | 1 | AE5 completion batch | Add migration-agent guidance, selective review, scalable history and representative export validation. | Implemented; native/live follow-up remains |
 | 2 | UX1 — Guided onboarding and Help | Learn the application through an optional tour and searchable in-app documentation. | Dedicated walkthroughs and offline articles implemented. See UX1 acceptance below. |
 | 3 | CW1 — Accounts and workspace membership | Sign in, manage an account, create/join a team workspace, and manage members and roles. | Linux pilot sign-off includes per-device revocation and workspace membership. |
-| 4 | CW2 — Shared work and synchronization | Work asynchronously on shared pages/projects with comments, reviewed changes, attribution and conflict handling. | Next implementation phase. |
+| 4 | CW2 — Shared work and synchronization | Work asynchronously on shared pages and projects with comments, reviewed changes, attribution and conflict handling. | Local Linux shared-page pilot signed off. Shared project grouping is next. |
 | Later follow-up | CW3 — Live co-editing | Edit the same document simultaneously with presence and collaborator cursors. | Planned after CW2; scheduling relative to other follow-ups remains open |
 
 Firebase Authentication with Google sign-in is selected for the CW1 pilot. Hosting, the production shared-workspace database, and synchronization architecture are open. [Product policy](policies/product.md) governs ownership and local-first behavior. [Verification policy](policies/verification.md) governs acceptance evidence.
@@ -110,13 +110,13 @@ Native Linux acceptance passed all six membership checks with both loopback iden
 
 ## CW2 — Shared work and synchronization
 
-CW2 starts with asynchronous collaboration on shared pages in the Linux app. The CW2 local shared-page pilot is implemented: create or publish a reviewed page copy → discuss it → propose an edit → review and apply → see the accepted revision on another client. Shared project grouping and scoped shared Agent/MCP contributions remain later CW2 work; simultaneous co-editing belongs separately in CW3.
+The owner signed off on the CW2 local Linux shared-page pilot. Its verified journey covers publishing a reviewed page copy, discussion, proposal review, and seeing the accepted revision on a second client. [Shared project grouping](#shared-project-grouping) is the next CW2 slice. Scoped shared Agent/MCP work remains a later slice, and simultaneous co-editing belongs in CW3.
 
 ### Shared pages
 
 - **Create in a team workspace** or **Publish a copy** of an explicitly selected personal page. Copy preview runs locally before upload, shows destination, team visibility, reviewed content, provenance, and explicit omissions/redactions (`sthira://` / `#/sthira/` links, blocked schemes, local vault paths, internal project/epistemic IDs), and verifies the source did not change between preview and publish. The personal original remains untouched in the user's Personal vault. Shared copies receive stable `shp_*` IDs and independent server revision history (within a 48 KiB UTF-8 Markdown cap per payload).
 - Shared pages use CommonMark and GFM. The service checks link and image destinations, including definitions inside blockquotes and lists. Page copies report omitted raw HTML in the preview. Use Markdown for formatting shared pages. Original provenance is preserved separately from the publisher, revision author, and reviewer.
-- Published pages currently use workspace-wide active-member visibility enforced on every service request. Adding shared pages to team projects (shared project grouping) remains later CW2 work.
+- Published pages currently use workspace-wide active-member visibility enforced on every service request. Shared project grouping will organize pages already published in the same workspace.
 - Owners and Admins have **Archive** and **Restore** controls: archived pages are excluded from active lists unless requested, remain inspectable in history, and refuse new threads, replies, proposals, or approvals until restored. Account removal preserves attribution (`authorDisplayName`, `reviewerDisplayName`, and provenance) and team revisions.
 
 ### Comments and activity
@@ -162,6 +162,50 @@ The production shared-workspace database and hosting decisions remain open; CW2 
 The current CW2 build passed the two-account native Linux journey with loopback OIDC/Firebase. The run verified nested Markdown reference redaction and direct-write rejection, submission-bound review, exact Activity destinations for a comment, a proposal submission, and an approval, workspace and removed-member isolation, and A → B → A switching in one profile. Immediate Back, normal window close, outdated-base rebase, and restart persistence passed. The owner vault checksum matched.
 
 Automated service and UI regressions covered late draft reads and edits during a pending save. An earlier post-cleanup Linux release build also passed its smoke check. Production database and hosting acceptance, shared project grouping, scoped shared Agent/MCP, live Sthira Auth QA, and cross-platform checks remain open. Live web Research and Inkling 2 Mini remain deferred.
+
+### Shared project grouping
+
+**Local Linux pilot passed; production storage, live auth, and platform coverage remain open.** A **Projects** tab in each team workspace groups shared pages that belong to that workspace while preserving workspace-wide member visibility and existing workspace roles. Personal projects and team projects keep separate identities. Each shared page keeps one identity and can belong to multiple projects in its workspace; pages without a project remain in the workspace’s **Pages** list.
+
+Implemented and verified locally across schema v3 (`shared_projects` and `shared_project_pages` with composite workspace-scoped foreign keys and monotonic membership generations), the session service routes, the desktop UI (`SharedProjectsPanel`, project-origin reader navigation, attributed Activity deep-links, offline Help), and two-account loopback OIDC/Firebase native Linux acceptance (multi-project membership, cross-project collaboration with originating filter preservation on Back, detach/reattach generation guard, project/page archive & restore, role matrix in UI and direct API, removed-member clearing, cross-workspace isolation, dirty draft recovery, offline Personal usability, and app+service restart persistence).
+
+#### User journey
+
+1. From the active team workspace, open **Projects**, create a project with a name and optional purpose, and land on its overview.
+2. Use **Add existing page** to search and attach an active shared page. Show the selected workspace in the picker and exclude pages already attached to that project. On the overview, show the saved purpose, active page count, and paginated page rows. Default to recently updated projects or pages with a stable tie-breaker.
+3. Open a page in the existing shared-page reader. Return to the originating project with its filters and page intact. Comments, proposals, and accepted edits are visible from any project containing that page. A direct link from Activity opens its exact project or page. If the original membership ended while the reader was open, preserve a valid return path to the project or workspace.
+4. **Remove from project** detaches that one membership. The page stays in workspace Pages and in any other projects that contain it, with the same revision history, comments, proposals, and attribution. An authorized member can attach it again explicitly.
+5. **Archive project** hides it from active lists and pauses project metadata and membership changes. Authorized members can inspect it in the archived list. **Restore project** recovers the same identity and memberships. Archiving a project leaves its pages available through workspace Pages and other active projects. Archiving a page keeps its memberships and hides it from active project page lists until it is restored.
+
+#### Recommended permissions
+
+| Action | Owner | Admin | Editor | Viewer |
+| --- | --- | --- | --- | --- |
+| Read active projects, their page lists, and archived project details | Yes | Yes | Yes | Yes |
+| Create a project with its initial name and purpose | Yes | Yes | Yes | — |
+| Attach or detach shared pages in an active project | Yes | Yes | Yes | — |
+| Rename a project or update its purpose | Yes | Yes | — | — |
+| Archive or restore a project | Yes | Yes | — | — |
+
+Grouping changes are explicit human actions with attributed Activity events. Page content still follows the existing submission-bound review flow. The pilot starts with flat grouping of shared pages. Project-specific grants, nested projects, bulk publishing of Personal projects, shared objects and canvases, and scoped shared Agent/MCP work are separate decisions.
+
+#### Implementation order
+
+1. **Store and service.** Extend the shared-content API and its storage contract. Add a versioned migration to the opt-in SQLite QA adapter with workspace-scoped project records and a join table for project-page memberships. Enforce same-workspace relationships with composite keys and one active membership per project-page pair. Leave existing shared page IDs and revisions intact when upgrading. Keep project metadata and membership independently versioned where stale writes can overwrite newer decisions.
+2. **Authorization and consistency.** Reuse verified device sessions and current workspace roles. Scope every read, write, picker, Activity item, and retry to the caller’s workspace. In one transaction, check current membership and role, endpoint identities, lifecycle state, and any expected version. Commit the state change, Activity event, and retry receipt together. A retry returns the original authorized result. Keep a membership ID or version that changes on reattachment so a stale detach cannot undo it. Foreign workspace IDs reveal no resource details.
+3. **Desktop.** Add the team Projects directory, overview, page picker, and archive view using existing team navigation, shared-page components, and theme tokens. Reuse the draft leave guard when navigating between pages, Projects, Activity, and Personal. Discard late responses on account or workspace change. Refresh explicitly and on return to a project. Keep Personal usable offline, with team mutations available again after verification reconnects.
+4. **Activity and Help.** Record project creation, metadata changes, attach/detach, archive, and restore with actor and stable project/page IDs as applicable. Route project links to the overview and page links to the exact page with project context when valid. Keep activity and archive access membership-checked. Add short offline Help for project grouping, visibility, and archive behavior.
+
+#### Local sign-off gate
+
+Run on fresh Linux desktop and service builds with two synthetic accounts, separate profiles, two workspaces, and disposable SQLite using loopback OIDC/Firebase.
+
+1. A creates two projects, attaches the same shared page to both, and B finds it after refresh. B comments and submits a change through one project. A approves it. B sees the same page ID, accepted revision, attribution, and discussion through the other project and from workspace Pages.
+2. Detach from one project and verify the other membership and page history survive. Reattach and exercise a duplicate request and a stale detach. Archive and restore the project, then archive and restore the page. Verify grouping, archive state, and attribution after restarting both apps and the service.
+3. Exercise role boundaries with B as Editor and then Viewer. Check blocked mutations through the API as well as the UI. Remove B with a project open and verify refresh clears team access. Try foreign project and page IDs through the service, picker, and Activity routes. Confirm Activity opens the exact project or page and that Personal remains separate and usable offline.
+4. In automated tests, cover fresh and upgraded stores, pagination and duplicate titles, retries and lost responses, concurrent membership mutations, stale metadata writes, archive rules, mid-request revocation, and navigation with a dirty shared draft. Run the standard Rust and UI checks. Record each native assertion separately and compare the owner vault checksum before and after.
+
+Production shared database and hosting remain open. The SQLite adapter gives the local pilot a concrete persistence test and leaves the service contract portable. Use the production guarantees above when evaluating storage and repeat the core journey against the chosen production setup before rollout. Live web Research and Inkling 2 Mini remain deferred.
 
 ## CW3 — Live co-editing follow-up
 

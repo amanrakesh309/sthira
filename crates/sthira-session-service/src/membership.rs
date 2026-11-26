@@ -135,6 +135,10 @@ impl WorkspaceRole {
     pub fn can_archive_shared_page(self) -> bool {
         self.can_moderate_or_review()
     }
+
+    pub fn can_manage_shared_project(self) -> bool {
+        self.can_moderate_or_review()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,6 +2,17 @@
 
 Sthira exposes the existing protected workspace actions to local external agents through a JSON CLI API and an authenticated **stdio MCP server**. Both use the same scopes, complete-source checks, attribution, proposal receipts and owner approval writes as the native agent. This is a local integration foundation; embedded terminals, remote HTTP access, automatic task resumption and automatic delegation are separate work. [Saved AE4 handoffs](cross-agent-continuity.md) now add explicit shared context and native continuation.
 
+## Connect from Sthira on Linux
+
+Open **Settings → Agent connections**, choose an app, and select a personal project. The default is **Can read**. Choose **Can read and suggest changes** if you want proposals in Sthira's review queue.
+
+- **Connect** registers Codex, Antigravity, Claude Code, or Cline through an available client CLI. For Cline's editor extension or a manual Claude Code setup, choose **Use a config file**.
+- **Create setup** gives you a local MCP entry for Kilo Code, OpenCode, and other stdio clients. Select the OpenCode version if needed, then merge the entry into the client's configuration. **Show configuration** reopens the same entry later.
+
+The desktop executable provides the same stdio MCP tools as the standalone CLI. Sthira keeps the token in its private local app data. Exported configuration contains the launcher command and arguments. Keep the installed executable at the configured path. If it moves, disconnect and set up the connection again.
+
+**Test connection** checks local access. **Verified in the client** appears after the launcher answers an MCP tool request. **Disconnect** immediately revokes a grant, including in running clients. Sthira also removes registrations created by the automatic installer if the client is available. For a config-file setup, remove the Sthira entry from the client when cleaning up. A pending proposal from a revoked connection remains visible for inspection and dismissal.
+
 ## Build and choose the vault
 
 From the repository root:

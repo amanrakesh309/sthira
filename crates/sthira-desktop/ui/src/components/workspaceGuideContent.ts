@@ -111,9 +111,9 @@ const overview = {
   },
   external: {
     title: 'Connect an external agent',
-    location: 'Sthira CLI → access commands',
-    text: 'Use the CLI to grant scoped access to a local client. Review proposed changes in Sthira. Use the CLI to revoke access.',
-    target: 'settings',
+    location: 'Settings → Agent connections',
+    text: 'Share a personal project with an agent. Review suggestions in Sthira and disconnect from Settings.',
+    target: 'agents-settings', fallback: 'settings',
   },
   vault: {
     title: 'Manage your local vault',

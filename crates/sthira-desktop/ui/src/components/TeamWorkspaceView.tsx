@@ -7,6 +7,8 @@ import {
   CopyPlus,
   FilePlus,
   FileText,
+  FolderKanban,
+  FolderPlus,
   HardDrive,
   LogOut,
   Mail,
@@ -46,8 +48,9 @@ import {
 import type { GoogleSession } from './AccountModal';
 import { HelpTopicButton } from './HelpTopicButton';
 import { SharedActivityFeed, SharedPagesPanel } from './SharedPagesPanel';
+import { SharedProjectsPanel, type ProjectOpenRequest } from './SharedProjectsPanel';
 
-export type TeamWorkspaceTab = 'overview' | 'pages' | 'activity' | 'members';
+export type TeamWorkspaceTab = 'overview' | 'projects' | 'pages' | 'activity' | 'members';
 
 interface TeamWorkspaceViewProps {
   workspace: WorkspaceSummary;
@@ -112,6 +115,8 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
     proposalId?: string | null;
     mode?: 'newPage' | 'publishCopy';
   } | null>(null);
+  const [pendingProjectRequest, setPendingProjectRequest] =
+    useState<ProjectOpenRequest | null>(null);
 
   // Editable form state preserved across retryable failures
   const [renameDraft, setRenameDraft] = useState(workspace.name);
@@ -153,7 +158,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
       if (!ok) return;
     }
     setTab(next);
-    if (next === 'pages' || next === 'activity') {
+    if (next === 'projects' || next === 'pages' || next === 'activity') {
       setCw2RefreshSignal((n) => n + 1);
     }
     onTabChange?.(next);
@@ -517,7 +522,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             type="button"
             role="tab"
             aria-selected={tab === 'overview'}
-            onClick={() => selectTab('overview')}
+            onClick={() => void selectTab('overview')}
             className={`min-h-[38px] px-4 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
               tab === 'overview'
                 ? 'bg-sthira-primary text-sthira-on-primary'
@@ -529,8 +534,21 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           <button
             type="button"
             role="tab"
+            aria-selected={tab === 'projects'}
+            onClick={() => void selectTab('projects')}
+            className={`min-h-[38px] px-4 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              tab === 'projects'
+                ? 'bg-sthira-primary text-sthira-on-primary'
+                : 'bg-sthira-surface border border-sthira-border text-sthira-text hover:bg-sthira-surface-muted'
+            }`}
+          >
+            Projects
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={tab === 'pages'}
-            onClick={() => selectTab('pages')}
+            onClick={() => void selectTab('pages')}
             className={`min-h-[38px] px-4 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
               tab === 'pages'
                 ? 'bg-sthira-primary text-sthira-on-primary'
@@ -685,8 +703,16 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             <div className="flex flex-wrap items-center gap-2.5 pt-1">
               <button
                 type="button"
-                onClick={() => selectTab('pages')}
+                onClick={() => void selectTab('projects')}
                 className="sthira-button-primary inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <FolderKanban className="w-4 h-4" />
+                <span>Open Projects</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void selectTab('pages')}
+                className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <FileText className="w-4 h-4" />
                 <span>Open Pages</span>
@@ -696,8 +722,19 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      setPendingProjectRequest({ mode: 'newProject' });
+                      void selectTab('projects');
+                    }}
+                    className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <FolderPlus className="w-4 h-4" />
+                    <span>New project</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
                       setPendingOpenRequest({ mode: 'newPage' });
-                      selectTab('pages');
+                      void selectTab('pages');
                     }}
                     className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
                   >
@@ -755,6 +792,27 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           </section>
         )}
 
+        {tab === 'projects' && (
+          <SharedProjectsPanel
+            workspaceId={currentSummary.workspaceId}
+            workspaceName={currentSummary.name}
+            myRole={myRole}
+            currentUid={currentUid ?? myMember?.uid ?? null}
+            authorDisplayName={myMember?.displayName}
+            refreshSignal={cw2RefreshSignal}
+            pendingOpenRequest={pendingProjectRequest}
+            onConsumedOpenRequest={() => setPendingProjectRequest(null)}
+            onFallbackToPages={(pageId, proposalId) => {
+              setPendingOpenRequest({ pageId, proposalId });
+              void selectTab('pages');
+            }}
+            registerBeforeLeave={registerPagesBeforeLeave}
+            onAccessLost={onAccessLost}
+            onSessionChange={onSessionChange}
+            onErrorNotice={setError}
+          />
+        )}
+
         {tab === 'pages' && (
           <SharedPagesPanel
             workspaceId={currentSummary.workspaceId}
@@ -778,7 +836,11 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             refreshSignal={cw2RefreshSignal}
             onOpenPage={(pageId, proposalId) => {
               setPendingOpenRequest({ pageId, proposalId });
-              selectTab('pages');
+              void selectTab('pages');
+            }}
+            onOpenProject={(projectId, pageId, proposalId) => {
+              setPendingProjectRequest({ projectId, pageId, proposalId });
+              void selectTab('projects');
             }}
             onAccessLost={onAccessLost}
             onSessionChange={onSessionChange}

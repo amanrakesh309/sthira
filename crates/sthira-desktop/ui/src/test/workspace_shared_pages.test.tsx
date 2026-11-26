@@ -27,6 +27,7 @@ import { SharedPageDraftEditor } from '../components/SharedPageDraftEditor';
 import { SharedProposalReview } from '../components/SharedProposalReview';
 import type {
   SharedPageDetails,
+  SharedProjectSummary,
   SharedProposalDetails,
   WorkspaceDetails,
   WorkspaceSummary,
@@ -823,5 +824,397 @@ describe('CW2 Shared Pages, Preview Copy, Draft Recovery, and Change Review', ()
     view.unmount();
     render(<SharedPageDraftEditor {...props} />);
     await waitFor(() => expect(screen.getByLabelText('Shared page title')).toHaveValue('Latest edit'));
+  });
+
+  it('supports shared project grouping, role controls, Activity routing, late-response guards, and dirty draft navigation', async () => {
+    const user = userEvent.setup();
+    const project1: SharedProjectSummary = {
+      projectId: 'prj_1',
+      workspaceId: 'ws_1',
+      name: 'Q4 Launch',
+      purpose: 'Coordinate launch checklist',
+      version: 1,
+      activePageCount: 1,
+      createdByUid: 'uid_a',
+      createdByDisplayName: 'Alice Owner',
+      updatedByUid: 'uid_a',
+      updatedByDisplayName: 'Alice Owner',
+      archivedAtMs: null,
+      archivedByDisplayName: null,
+      createdAtMs: 1_700_000_000_000,
+      updatedAtMs: 1_700_000_005_000,
+    };
+    const project2: SharedProjectSummary = {
+      ...project1,
+      projectId: 'prj_2',
+      name: 'Q4 Launch Copy',
+      purpose: '',
+      activePageCount: 0,
+    };
+    let pageAttachedToProject2 = false;
+    let projectsList = [project1, project2];
+    const savedDrafts: Record<string, unknown> = {};
+
+    tauriMocks.invoke.mockImplementation(async (cmd, args: Record<string, unknown>) => {
+      if (cmd === 'cmd_get_workspace') {
+        return { outcome: 'ok', data: ownerDetails };
+      }
+      if (cmd === 'cmd_list_shared_projects') {
+        const q = String(args.searchQuery ?? '').toLowerCase();
+        const inc = Boolean(args.includeArchived);
+        const items = projectsList.filter(
+          (p) => (inc || p.archivedAtMs == null) && (!q || p.name.toLowerCase().includes(q)),
+        );
+        return { outcome: 'ok', data: { items, nextCursor: null } };
+      }
+      if (cmd === 'cmd_create_shared_project') {
+        const created = {
+          ...project1,
+          projectId: 'prj_3',
+          name: String(args.name),
+          purpose: String(args.purpose ?? ''),
+          activePageCount: 0,
+        };
+        projectsList = [created, ...projectsList];
+        return { outcome: 'ok', data: { created: true, project: { project: created, pages: [], pagesNextCursor: null } } };
+      }
+      if (cmd === 'cmd_get_shared_project') {
+        const found = projectsList.find((p) => p.projectId === args.projectId) ?? project1;
+        const members =
+          found.projectId === 'prj_1' || (found.projectId === 'prj_2' && pageAttachedToProject2)
+            ? [{
+                membershipId: `mem_${found.projectId}_shp1`,
+                generation: 1,
+                attachedAtMs: 1_700_000_005_000,
+                attachedByUid: 'uid_a',
+                attachedByDisplayName: 'Alice Owner',
+                page: samplePageDetails.page,
+              }]
+            : [];
+        return { outcome: 'ok', data: { project: found, pages: members, pagesNextCursor: null } };
+      }
+      if (cmd === 'cmd_list_project_picker_pages') {
+        return {
+          outcome: 'ok',
+          data: {
+            items: args.projectId === 'prj_2' && !pageAttachedToProject2 ? [samplePageDetails.page] : [],
+            nextCursor: null,
+          },
+        };
+      }
+      if (cmd === 'cmd_attach_page_to_project') {
+        pageAttachedToProject2 = true;
+        project2.activePageCount = 1;
+        return {
+          outcome: 'ok',
+          data: {
+            attached: true,
+            membershipId: 'mem_prj_2_shp1',
+            generation: 1,
+            project: {
+              project: project2,
+              pages: [{
+                membershipId: 'mem_prj_2_shp1',
+                generation: 1,
+                attachedAtMs: 1_700_000_006_000,
+                attachedByUid: 'uid_a',
+                attachedByDisplayName: 'Alice Owner',
+                page: samplePageDetails.page,
+              }],
+              pagesNextCursor: null,
+            },
+          },
+        };
+      }
+      if (cmd === 'cmd_detach_page_from_project') {
+        if (args.projectId === 'prj_2') {
+          pageAttachedToProject2 = false;
+          project2.activePageCount = 0;
+        }
+        return { outcome: 'ok', data: { project: project2, pages: [], pagesNextCursor: null } };
+      }
+      if (cmd === 'cmd_update_shared_project') {
+        return {
+          outcome: 'error',
+          code: 'stale_project_version',
+          message: 'Project details changed while you were editing. Refresh before saving.',
+        };
+      }
+      if (cmd === 'cmd_archive_shared_project') {
+        project2.archivedAtMs = 1_700_000_007_000;
+        project2.archivedByDisplayName = 'Alice Owner';
+        return {
+          outcome: 'ok',
+          data: {
+            project: project2,
+            pages: pageAttachedToProject2
+              ? [{
+                  membershipId: 'mem_prj_2_shp1',
+                  generation: 1,
+                  attachedAtMs: 1_700_000_006_000,
+                  attachedByUid: 'uid_a',
+                  attachedByDisplayName: 'Alice Owner',
+                  page: samplePageDetails.page,
+                }]
+              : [],
+            pagesNextCursor: null,
+          },
+        };
+      }
+      if (cmd === 'cmd_restore_shared_project') {
+        project2.archivedAtMs = null;
+        project2.archivedByDisplayName = null;
+        return {
+          outcome: 'ok',
+          data: {
+            project: project2,
+            pages: pageAttachedToProject2
+              ? [{
+                  membershipId: 'mem_prj_2_shp1',
+                  generation: 1,
+                  attachedAtMs: 1_700_000_006_000,
+                  attachedByUid: 'uid_a',
+                  attachedByDisplayName: 'Alice Owner',
+                  page: samplePageDetails.page,
+                }]
+              : [],
+            pagesNextCursor: null,
+          },
+        };
+      }
+      if (cmd === 'cmd_get_shared_page') {
+        return { outcome: 'ok', data: samplePageDetails };
+      }
+      if (cmd === 'cmd_list_shared_pages') {
+        return { outcome: 'ok', data: { items: [samplePageDetails.page], nextCursor: null } };
+      }
+      if (cmd === 'cmd_list_workspace_activity') {
+        return {
+          outcome: 'ok',
+          data: {
+            items: [
+              {
+                activityId: 'act_prj',
+                workspaceId: 'ws_1',
+                actorUid: 'uid_a',
+                actorDisplayName: 'Alice Owner',
+                action: 'project_page_attached',
+                targetType: 'project_page',
+                projectId: 'prj_1',
+                projectName: 'Q4 Launch',
+                pageId: 'shp_1',
+                pageTitle: 'Shared Research Brief',
+                proposalId: null,
+                threadId: null,
+                detailText: 'Alice Owner added “Shared Research Brief” to “Q4 Launch”.',
+                createdAtMs: 1_700_000_005_000,
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      if (cmd === 'cmd_get_shared_draft') return null;
+      if (cmd === 'cmd_save_shared_draft') {
+        savedDrafts[String(args.draftKey)] = args;
+        return {
+          accountUid: 'uid_a',
+          workspaceId: 'ws_1',
+          draftKey: args.draftKey,
+          pageId: args.pageId,
+          proposalId: null,
+          baseRevisionNumber: args.baseRevisionNumber,
+          title: args.title,
+          contentMd: args.contentMd,
+          summary: args.summary,
+          updatedAtMs: 999,
+        };
+      }
+      return null;
+    });
+
+    render(
+      <TeamWorkspaceView
+        workspace={wsOwner}
+        initialTab="projects"
+        currentUid="uid_a"
+        onSelectPersonal={vi.fn()}
+        onWorkspaceUpdated={vi.fn()}
+        onAccessLost={vi.fn()}
+        onSessionChange={vi.fn()}
+        onRefreshList={vi.fn()}
+      />,
+    );
+
+    // Directory renders similarly named projects distinctly; open Q4 Launch Copy, attach page, test conflict + archive/restore:
+    expect(await screen.findByText('Q4 Launch')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open Q4 Launch Copy' }));
+    expect(await screen.findByRole('heading', { name: 'Q4 Launch Copy' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add existing page' }));
+    await user.click(await screen.findByRole('button', { name: 'Attach Shared Research Brief' }));
+    expect(await screen.findByText(/Added page to project/i)).toBeInTheDocument();
+
+    // Metadata version conflict offers Refresh project action:
+    await user.click(screen.getByRole('button', { name: 'Edit project' }));
+    await user.click(screen.getByRole('button', { name: 'Save project details' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Project details changed/);
+    expect(screen.getByRole('button', { name: 'Refresh project' })).toBeInTheDocument();
+
+    // Archive & Restore project:
+    await user.click(screen.getByRole('button', { name: 'Archive project' }));
+    expect(await screen.findByText('Archived')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Restore project' }));
+    await waitFor(() => expect(screen.queryByText('Archived')).not.toBeInTheDocument());
+
+    // Open attached page from project overview -> open proposal draft -> Back to Q4 Launch Copy flushes dirty draft!
+    await user.click(screen.getByRole('button', { name: 'Open Shared Research Brief' }));
+    expect(await screen.findByRole('button', { name: 'Back to Q4 Launch Copy' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Propose edit' }));
+    await user.type(await screen.findByLabelText('Change summary'), 'From project reader');
+    await user.click(screen.getByRole('tab', { name: 'Activity' }));
+    await waitFor(() => expect(savedDrafts['page_shp_1']).toEqual(expect.objectContaining({ summary: 'From project reader' })));
+
+    // The loading page also offers Back. Wait for the note before checking its project origin.
+    await user.click(await screen.findByRole('button', { name: 'Open page' }));
+    expect(await screen.findByRole('heading', { name: 'Shared Research Brief' })).toBeInTheDocument();
+    const backToActivityProject = screen.getByRole('button', { name: 'Back to Q4 Launch' });
+    await user.click(backToActivityProject);
+    expect(await screen.findByRole('heading', { name: 'Q4 Launch' })).toBeInTheDocument();
+  });
+
+  it('hides project mutation controls from Viewer and admin-only project actions from Editor', async () => {
+    const project1 = {
+      projectId: 'prj_1',
+      workspaceId: 'ws_1',
+      name: 'Q4 Launch',
+      purpose: 'Shared launch checklist',
+      version: 1,
+      activePageCount: 0,
+      createdByUid: 'uid_a',
+      createdByDisplayName: 'Alice',
+      updatedByUid: 'uid_a',
+      updatedByDisplayName: 'Alice',
+      archivedAtMs: null,
+      archivedByDisplayName: null,
+      createdAtMs: 1_700_000_000_000,
+      updatedAtMs: 1_700_000_000_000,
+    };
+    let activeRole: 'editor' | 'viewer' = 'editor';
+    tauriMocks.invoke.mockImplementation(async (cmd) => {
+      const ws = { ...wsOwner, myRole: activeRole };
+      if (cmd === 'cmd_get_workspace') return { outcome: 'ok', data: { ...ownerDetails, workspace: ws } };
+      if (cmd === 'cmd_list_shared_projects') return { outcome: 'ok', data: { items: [project1], nextCursor: null } };
+      if (cmd === 'cmd_get_shared_project') return { outcome: 'ok', data: { project: project1, pages: [], pagesNextCursor: null } };
+      return null;
+    });
+
+    const user = userEvent.setup();
+    const view = render(
+      <TeamWorkspaceView
+        workspace={{ ...wsOwner, myRole: 'editor' }}
+        initialTab="projects"
+        currentUid="uid_b"
+        onSelectPersonal={vi.fn()}
+        onWorkspaceUpdated={vi.fn()}
+        onAccessLost={vi.fn()}
+        onSessionChange={vi.fn()}
+        onRefreshList={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole('button', { name: 'New project' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open Q4 Launch' }));
+    expect(await screen.findByRole('button', { name: 'Add existing page' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit project' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive project' })).not.toBeInTheDocument();
+
+    activeRole = 'viewer';
+    view.unmount();
+    render(
+      <TeamWorkspaceView
+        workspace={wsViewer}
+        initialTab="projects"
+        currentUid="uid_v"
+        onSelectPersonal={vi.fn()}
+        onWorkspaceUpdated={vi.fn()}
+        onAccessLost={vi.fn()}
+        onSessionChange={vi.fn()}
+        onRefreshList={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText('Q4 Launch')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open Q4 Launch' }));
+    expect(await screen.findByRole('heading', { name: 'Q4 Launch' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add existing page' })).not.toBeInTheDocument();
+  });
+
+  it('ignores late shared-project responses after switching workspaces', async () => {
+    let resolveWs1!: (v: unknown) => void;
+    const ws1Promise = new Promise((r) => { resolveWs1 = r; });
+    const ws2: WorkspaceSummary = { ...wsOwner, workspaceId: 'ws_2', name: 'Workspace Two' };
+
+    tauriMocks.invoke.mockImplementation(async (cmd, args: Record<string, unknown>) => {
+      if (cmd === 'cmd_get_workspace') {
+        return { outcome: 'ok', data: { ...ownerDetails, workspace: args.workspaceId === 'ws_2' ? ws2 : wsOwner } };
+      }
+      if (cmd === 'cmd_list_shared_projects') {
+        if (args.workspaceId === 'ws_1') return ws1Promise;
+        return { outcome: 'ok', data: { items: [], nextCursor: null } };
+      }
+      return null;
+    });
+
+    const { rerender } = render(
+      <TeamWorkspaceView
+        key="ws_1"
+        workspace={wsOwner}
+        initialTab="projects"
+        currentUid="uid_a"
+        onSelectPersonal={vi.fn()}
+        onWorkspaceUpdated={vi.fn()}
+        onAccessLost={vi.fn()}
+        onSessionChange={vi.fn()}
+        onRefreshList={vi.fn()}
+      />,
+    );
+    rerender(
+      <TeamWorkspaceView
+        key="ws_2"
+        workspace={ws2}
+        initialTab="projects"
+        currentUid="uid_a"
+        onSelectPersonal={vi.fn()}
+        onWorkspaceUpdated={vi.fn()}
+        onAccessLost={vi.fn()}
+        onSessionChange={vi.fn()}
+        onRefreshList={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText(/No shared projects yet/i)).toBeInTheDocument();
+    await act(async () => {
+      resolveWs1({
+        outcome: 'ok',
+        data: {
+          items: [{
+            projectId: 'prj_stale',
+            workspaceId: 'ws_1',
+            name: 'Stale Ws1 Project',
+            purpose: '',
+            version: 1,
+            activePageCount: 0,
+            createdByUid: 'uid_a',
+            createdByDisplayName: 'Alice',
+            updatedByUid: 'uid_a',
+            updatedByDisplayName: 'Alice',
+            archivedAtMs: null,
+            archivedByDisplayName: null,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          }],
+          nextCursor: null,
+        },
+      });
+    });
+    expect(screen.queryByText('Stale Ws1 Project')).not.toBeInTheDocument();
   });
 });

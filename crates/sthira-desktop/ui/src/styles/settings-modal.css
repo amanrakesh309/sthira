@@ -1043,3 +1043,56 @@ html[data-theme="dark"] .settings-chip.slate {
 .resume-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .resume-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .project-resume .focus-brief { margin: 0; }
+
+.settings-footer-actions-only { justify-content: flex-end; }
+.settings-agents { display: grid; gap: 20px; width: 100%; max-width: 620px; margin-inline: auto; }
+.settings-agents p { color: var(--sthira-text-muted); font-size: 13px; }
+.settings-agents .settings-agents-error { color: var(--sthira-danger, #ae3f33); }
+.settings-agents-form { display: grid; gap: 14px; max-width: 410px; }
+.settings-agents-form label { display: grid; gap: 5px; color: var(--sthira-text); font-size: 13px; font-weight: 600; }
+.settings-agents-form select {
+  min-height: 40px; max-width: 100%; padding: 7px 10px; border: 1px solid var(--sthira-border);
+  border-radius: var(--sthira-radius-sm); background: var(--sthira-surface); color: var(--sthira-text); font: inherit;
+}
+.settings-agents button { min-height: 40px; }
+.settings-agents button:disabled { opacity: .55; cursor: default; }
+.settings-agents :is(button, select, summary):focus-visible { outline: 2px solid var(--sthira-primary); outline-offset: 3px; }
+.settings-agents-form button { justify-self: start; display: inline-flex; align-items: center; gap: 8px; }
+.settings-agents-list { border-top: 1px solid var(--sthira-border); padding-top: 16px; }
+.settings-agents-list-header, .settings-agents-list li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+}
+.settings-agents-list-header { margin-bottom: 8px; }
+.settings-agents-list h4 { font-size: 15px; font-weight: 650; }
+.settings-agents-list li { padding: 14px 0; border-bottom: 1px solid var(--sthira-border); }
+.settings-agents-list strong { font-size: 13px; overflow-wrap: anywhere; }
+.settings-agents-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-agents details { margin-top: 12px; color: var(--sthira-text); font-size: 13px; }
+.settings-agents summary { cursor: pointer; width: fit-content; }
+.settings-agents details p { margin-top: 6px; }
+.settings-agent-secondary {
+  padding: 6px 12px;
+  border: 1px solid var(--sthira-border-strong);
+  border-radius: var(--sthira-radius-sm);
+  background: var(--sthira-surface);
+  color: var(--sthira-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-agent-secondary:hover:enabled { background: var(--sthira-surface-muted); }
+
+.settings-agents-form .settings-agents-config-toggle { display: flex; align-items: center; gap: 8px; }
+.settings-agent-config {
+  display: grid; gap: 10px; justify-items: start; padding: 16px;
+  border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-md);
+  background: var(--sthira-surface);
+}
+.settings-agent-config .settings-agents-list-header { width: 100%; margin: 0; }
+.settings-agent-config h4 { font-size: 14px; font-weight: 650; }
+.settings-agent-config label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.settings-agent-config textarea {
+  box-sizing: border-box; width: 100%; min-width: 0; resize: vertical;
+  padding: 10px; border: 1px solid var(--sthira-border); border-radius: var(--sthira-radius-sm);
+  background: var(--sthira-surface-muted); color: var(--sthira-text);
+  font: 12px/1.5 var(--sthira-font-mono, monospace);
+}

@@ -929,6 +929,10 @@ pub(crate) struct SharedActivityItem {
     pub(crate) actor_display_name: String,
     pub(crate) action: String,
     pub(crate) target_type: String,
+    #[serde(default)]
+    pub(crate) project_id: Option<String>,
+    #[serde(default)]
+    pub(crate) project_name: Option<String>,
     pub(crate) page_id: Option<String>,
     pub(crate) page_title: Option<String>,
     pub(crate) proposal_id: Option<String>,
@@ -939,13 +943,77 @@ pub(crate) struct SharedActivityItem {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct SharedProjectSummary {
+    pub(crate) project_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) name: String,
+    pub(crate) purpose: String,
+    pub(crate) version: i64,
+    pub(crate) active_page_count: i64,
+    pub(crate) created_by_uid: String,
+    pub(crate) created_by_display_name: String,
+    pub(crate) updated_by_uid: String,
+    pub(crate) updated_by_display_name: String,
+    pub(crate) archived_at_ms: Option<i64>,
+    pub(crate) archived_by_display_name: Option<String>,
+    pub(crate) created_at_ms: i64,
+    pub(crate) updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedProjectPageItem {
+    pub(crate) membership_id: String,
+    pub(crate) generation: i64,
+    pub(crate) attached_by_uid: String,
+    pub(crate) attached_by_display_name: String,
+    pub(crate) attached_at_ms: i64,
+    pub(crate) page: SharedPageSummary,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedProjectDetails {
+    pub(crate) project: SharedProjectSummary,
+    pub(crate) pages: Vec<SharedProjectPageItem>,
+    pub(crate) pages_next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateSharedProjectInput {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) purpose: String,
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateSharedProjectOutcome {
+    pub(crate) created: bool,
+    pub(crate) project: SharedProjectDetails,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectPageMembershipOutcome {
+    pub(crate) attached: bool,
+    pub(crate) membership_id: String,
+    pub(crate) generation: i64,
+    pub(crate) project: SharedProjectDetails,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PagedList<T> {
     pub(crate) items: Vec<T>,
     pub(crate) next_cursor: Option<String>,
 }
 
-fn build_query_suffix(
+fn build_query_suffix_with_search(
     include_archived: Option<bool>,
+    q: Option<&str>,
     cursor: Option<&str>,
     limit: Option<usize>,
 ) -> String {
@@ -955,6 +1023,9 @@ fn build_query_suffix(
             "include_archived".into(),
             if flag { "true" } else { "false" }.into(),
         ));
+    }
+    if let Some(search) = q.map(str::trim).filter(|s| !s.is_empty()) {
+        pairs.push(("q".into(), search.to_owned()));
     }
     if let Some(c) = cursor.map(str::trim).filter(|s| !s.is_empty()) {
         pairs.push(("cursor".into(), c.to_owned()));
@@ -969,6 +1040,226 @@ fn build_query_suffix(
         .extend_pairs(pairs)
         .finish();
     format!("?{encoded}")
+}
+
+fn build_query_suffix(
+    include_archived: Option<bool>,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> String {
+    build_query_suffix_with_search(include_archived, None, cursor, limit)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_list_shared_projects<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    include_archived: Option<bool>,
+    q: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> Result<WorkspaceResponse<PagedList<SharedProjectSummary>>, String> {
+    let qs = build_query_suffix_with_search(
+        Some(include_archived.unwrap_or(false)),
+        q.as_deref(),
+        cursor.as_deref(),
+        limit,
+    );
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/projects{qs}"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_create_shared_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    input: CreateSharedProjectInput,
+) -> Result<WorkspaceResponse<CreateSharedProjectOutcome>, String> {
+    let body = serde_json::to_value(input).map_err(|_| "Invalid shared project input.")?;
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects"),
+        Some(body),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_get_shared_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    q: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> Result<WorkspaceResponse<SharedProjectDetails>, String> {
+    let qs = build_query_suffix_with_search(None, q.as_deref(), cursor.as_deref(), limit);
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}{qs}"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub(crate) async fn cmd_update_shared_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    name: String,
+    purpose: String,
+    expected_version: i64,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectDetails>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::PATCH,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}"),
+        Some(serde_json::json!({
+            "name": name,
+            "purpose": purpose,
+            "expectedVersion": expected_version,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_archive_shared_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectDetails>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/archive"),
+        Some(serde_json::json!({ "idempotency_key": idempotency_key })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_restore_shared_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectDetails>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/restore"),
+        Some(serde_json::json!({ "idempotency_key": idempotency_key })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_list_project_picker_pages<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    q: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> Result<WorkspaceResponse<PagedList<SharedPageSummary>>, String> {
+    let qs = build_query_suffix_with_search(None, q.as_deref(), cursor.as_deref(), limit);
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/page-picker{qs}"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_attach_page_to_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    page_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<ProjectPageMembershipOutcome>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/pages"),
+        Some(serde_json::json!({
+            "pageId": page_id,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_detach_page_from_project<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    project_id: String,
+    page_id: String,
+    membership_id: String,
+    idempotency_key: String,
+) -> Result<WorkspaceResponse<SharedProjectDetails>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &format!("/v1/workspaces/{workspace_id}/projects/{project_id}/pages/{page_id}/detach"),
+        Some(serde_json::json!({
+            "membershipId": membership_id,
+            "idempotencyKey": idempotency_key,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
 }
 
 #[tauri::command]

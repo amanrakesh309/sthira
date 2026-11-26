@@ -1,4 +1,5 @@
 mod account_sign_in;
+pub mod agent_connections;
 pub mod ai_setup;
 pub mod commands;
 pub mod connections;
@@ -59,6 +60,11 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
     builder.invoke_handler(tauri::generate_handler![
         cmd_register_close_guard,
         cmd_confirm_window_close,
+        agent_connections::cmd_get_agent_connections,
+        agent_connections::cmd_connect_agent,
+        agent_connections::cmd_get_agent_connection_config,
+        agent_connections::cmd_test_agent_connection,
+        agent_connections::cmd_disconnect_agent,
         account_sign_in::cmd_get_google_session,
         account_sign_in::cmd_google_sign_in,
         account_sign_in::cmd_google_sign_out,
@@ -99,6 +105,15 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         workspaces::cmd_resubmit_proposal,
         workspaces::cmd_withdraw_proposal,
         workspaces::cmd_review_proposal,
+        workspaces::cmd_list_shared_projects,
+        workspaces::cmd_create_shared_project,
+        workspaces::cmd_get_shared_project,
+        workspaces::cmd_update_shared_project,
+        workspaces::cmd_archive_shared_project,
+        workspaces::cmd_restore_shared_project,
+        workspaces::cmd_list_project_picker_pages,
+        workspaces::cmd_attach_page_to_project,
+        workspaces::cmd_detach_page_from_project,
         workspaces::cmd_list_workspace_activity,
         workspaces::cmd_get_shared_draft,
         workspaces::cmd_save_shared_draft,

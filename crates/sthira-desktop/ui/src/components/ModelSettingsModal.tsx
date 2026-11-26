@@ -1,3 +1,4 @@
+import { AgentConnectionsSettings } from './AgentConnectionsSettings';
 import { MigrationPanel } from './MigrationPanel';
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -21,6 +22,7 @@ import {
   ArrowLeft,
   LibraryBig,
   Compass,
+  Cable,
 } from 'lucide-react';
 import { AIModelsSettings } from './AIModelsSettings';
 import { WorkflowSettingsPanel } from './WorkflowSettingsPanel';
@@ -40,7 +42,7 @@ import type {
   WebSearchResultItem,
 } from '../types/sthira';
 
-export type SettingsSection = 'models' | 'workflows' | 'templates' | 'search' | 'appearance' | 'vault';
+export type SettingsSection = 'models' | 'workflows' | 'templates' | 'search' | 'agents' | 'appearance' | 'vault';
 
 interface ModelSettingsModalProps {
   isOpen: boolean;
@@ -102,7 +104,7 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab') || params.get('settings_tab');
-      if (tabParam === 'workflows' || tabParam === 'search' || tabParam === 'appearance' || tabParam === 'vault') {
+      if (tabParam === 'workflows' || tabParam === 'agents' || tabParam === 'search' || tabParam === 'appearance' || tabParam === 'vault') {
         return tabParam;
       }
     }
@@ -378,13 +380,14 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             <p className="settings-navigation-label">Workspace</p>
             {([
               ['models', 'AI & Models', Server], ['workflows', 'Workflows', Sparkles],
-              ['templates', 'Templates', LibraryBig], ['search', 'Web Search', Globe], ['appearance', 'Appearance', Sun], ['vault', 'Workspace & Data', Layers],
+              ['templates', 'Templates', LibraryBig], ['search', 'Web Search', Globe], ['agents', 'Agent connections', Cable], ['appearance', 'Appearance', Sun], ['vault', 'Workspace & Data', Layers],
             ] as const).map(([id, label, Icon]) => <button key={id} type="button" data-settings-section={id} data-guide-target={`${id}-settings`} aria-current={activeTab === id ? 'page' : undefined} className={activeTab === id ? 'active' : ''} onClick={() => setActiveTab(id)}><Icon size={17} /><span>{label}</span></button>)}
           </nav>
 
           <div className="settings-content-col">
             {activeTab === 'workflows' && <WorkflowSettingsPanel providers={providers} onNavigateTab={(tab) => setActiveTab(tab as SettingsSection)} />}
             {activeTab === 'templates' && <TemplateLibraryManager />}
+            {activeTab === 'agents' && <AgentConnectionsSettings />}
             {activeTab === 'models' && <AIModelsSettings providers={providers} loading={loading} reload={fetchCatalog} onCatalogChanged={onCatalogChanged} />}
 
           {/* 4. WEB SEARCH PROVIDERS TAB */}
@@ -694,8 +697,8 @@ export const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
       </div>
     </div>
 
-        <footer className="settings-footer">
-          <p>Workflow preferences save automatically. Connection changes use their Save button.</p>
+        <footer className={activeTab === 'agents' ? 'settings-footer settings-footer-actions-only' : 'settings-footer'}>
+          {activeTab !== 'agents' && <p>Workflow preferences save automatically. Connection changes use their Save button.</p>}
           <button type="button" onClick={onClose} className="settings-btn-primary" data-testid="btn-save-settings">Done</button>
         </footer>
       </div>

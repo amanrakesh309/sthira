@@ -25,6 +25,9 @@ use uuid::Uuid;
 
 pub const MAX_PAGE_TITLE_LEN: usize = 160;
 pub const MAX_PAGE_CONTENT_BYTES: usize = 48 * 1024;
+pub const MAX_PROJECT_NAME_LEN: usize = 120;
+pub const MAX_PROJECT_PURPOSE_LEN: usize = 500;
+pub const MAX_SEARCH_QUERY_LEN: usize = 120;
 pub const MAX_COMMENT_BODY_BYTES: usize = 8 * 1024;
 pub const MAX_PROPOSAL_SUMMARY_LEN: usize = 280;
 pub const MAX_DECISION_NOTE_LEN: usize = 500;
@@ -392,12 +395,103 @@ pub struct SharedActivityItem {
     pub actor_display_name: String,
     pub action: String,
     pub target_type: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
     pub page_id: Option<String>,
     pub page_title: Option<String>,
     pub proposal_id: Option<String>,
     pub thread_id: Option<String>,
     pub detail_text: String,
     pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedProjectSummary {
+    pub project_id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub purpose: String,
+    pub version: i64,
+    pub active_page_count: i64,
+    pub created_by_uid: String,
+    pub created_by_display_name: String,
+    pub updated_by_uid: String,
+    pub updated_by_display_name: String,
+    pub archived_at_ms: Option<i64>,
+    pub archived_by_display_name: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedProjectPageItem {
+    pub membership_id: String,
+    pub generation: i64,
+    pub attached_by_uid: String,
+    pub attached_by_display_name: String,
+    pub attached_at_ms: i64,
+    pub page: SharedPageSummary,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedProjectDetails {
+    pub project: SharedProjectSummary,
+    pub pages: Vec<SharedProjectPageItem>,
+    pub pages_next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSharedProjectInput {
+    pub name: String,
+    #[serde(default)]
+    pub purpose: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSharedProjectOutcome {
+    pub created: bool,
+    pub project: SharedProjectDetails,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSharedProjectInput {
+    pub name: String,
+    #[serde(default)]
+    pub purpose: String,
+    pub expected_version: i64,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachProjectPageInput {
+    pub page_id: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPageMembershipOutcome {
+    pub attached: bool,
+    pub membership_id: String,
+    pub generation: i64,
+    pub project: SharedProjectDetails,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachProjectPageInput {
+    pub membership_id: String,
+    pub idempotency_key: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -427,12 +521,26 @@ pub enum SharedContentError {
     ThreadNotFound,
     #[error("Proposal was not found in this workspace.")]
     ProposalNotFound,
+    #[error("Shared project was not found in this workspace.")]
+    ProjectNotFound,
     #[error("This page is archived. Restore it before submitting or reviewing changes.")]
     PageArchived,
     #[error("This page is already archived.")]
     AlreadyArchived,
     #[error("This page is not archived.")]
     NotArchived,
+    #[error("This project is archived. Restore it before changing details or pages.")]
+    ProjectArchived,
+    #[error("This project is already archived.")]
+    ProjectAlreadyArchived,
+    #[error("This project is not archived.")]
+    ProjectNotArchived,
+    #[error("This page is already in this project.")]
+    AlreadyProjectMember,
+    #[error("{0}")]
+    StaleProjectVersion(String),
+    #[error("{0}")]
+    StaleMembership(String),
     #[error("This proposal is no longer open for that action.")]
     ProposalNotPending,
     #[error("{0}")]
@@ -635,6 +743,97 @@ pub trait SharedContentStore: Send + Sync {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> Result<PagedList<SharedActivityItem>, SharedContentError>;
+
+    fn list_projects(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        include_archived: bool,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedProjectSummary>, SharedContentError>;
+
+    fn create_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        input: &CreateSharedProjectInput,
+        now_ms: i64,
+    ) -> Result<CreateSharedProjectOutcome, SharedContentError>;
+
+    fn get_project_details(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<SharedProjectDetails, SharedContentError>;
+
+    fn update_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &UpdateSharedProjectInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError>;
+
+    fn archive_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError>;
+
+    fn restore_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError>;
+
+    fn list_project_picker_pages(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedPageSummary>, SharedContentError>;
+
+    fn attach_page_to_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &AttachProjectPageInput,
+        now_ms: i64,
+    ) -> Result<ProjectPageMembershipOutcome, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn detach_page_from_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        page_id: &str,
+        input: &DetachProjectPageInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError>;
 }
 
 #[derive(Clone)]
@@ -643,8 +842,9 @@ pub struct SqliteSharedContentStore {
 }
 
 impl SqliteSharedContentStore {
-    /// Attaches CW2 shared-content tables (migration v2) inside the existing CW1 membership
-    /// SQLite database so authorization and content mutations share a single ACID transaction.
+    /// Attaches CW2 shared-content tables (migrations v2 and v3) inside the existing CW1
+    /// membership SQLite database so authorization and content mutations share a single ACID
+    /// transaction.
     pub fn enable_on_membership_store(
         membership: &SqliteWorkspaceMembershipStore,
     ) -> Result<Self, SharedContentError> {
@@ -652,6 +852,7 @@ impl SqliteSharedContentStore {
         {
             let guard = conn.lock().expect("workspace db lock poisoned");
             migrate_v2(&guard)?;
+            migrate_v3(&guard)?;
         }
         Ok(Self { conn })
     }
@@ -830,6 +1031,84 @@ fn migrate_v2(conn: &Connection) -> Result<(), SharedContentError> {
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at_ms)
          VALUES (2, 'cw2_shared_content_v2', ?1)",
+        params![crate::now_epoch_ms()],
+    )?;
+    Ok(())
+}
+
+fn migrate_v3(conn: &Connection) -> Result<(), SharedContentError> {
+    conn.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_pages_ws_page
+            ON shared_pages (workspace_id, page_id);
+
+        CREATE TABLE IF NOT EXISTS shared_projects (
+            project_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+            created_by_uid TEXT NOT NULL,
+            created_by_display_name TEXT NOT NULL,
+            updated_by_uid TEXT NOT NULL,
+            updated_by_display_name TEXT NOT NULL,
+            archived_at_ms INTEGER,
+            archived_by_uid TEXT,
+            archived_by_display_name TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE (workspace_id, project_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_shared_projects_ws
+            ON shared_projects (workspace_id, archived_at_ms, updated_at_ms DESC, project_id DESC);
+
+        CREATE TABLE IF NOT EXISTS shared_project_pages (
+            membership_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            page_id TEXT NOT NULL,
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            attached_by_uid TEXT NOT NULL,
+            attached_by_display_name TEXT NOT NULL,
+            attached_at_ms INTEGER NOT NULL,
+            detached_at_ms INTEGER,
+            detached_by_uid TEXT,
+            detached_by_display_name TEXT,
+            FOREIGN KEY (workspace_id, project_id)
+                REFERENCES shared_projects(workspace_id, project_id) ON DELETE CASCADE,
+            FOREIGN KEY (workspace_id, page_id)
+                REFERENCES shared_pages(workspace_id, page_id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_project_pages_active
+            ON shared_project_pages (workspace_id, project_id, page_id)
+            WHERE detached_at_ms IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_shared_project_pages_project
+            ON shared_project_pages (workspace_id, project_id, detached_at_ms, attached_at_ms DESC, membership_id DESC);
+        ",
+    )?;
+
+    let mut stmt = conn.prepare("PRAGMA table_info(shared_workspace_activity)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    if !cols.iter().any(|c| c == "project_id") {
+        conn.execute(
+            "ALTER TABLE shared_workspace_activity ADD COLUMN project_id TEXT",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "project_name") {
+        conn.execute(
+            "ALTER TABLE shared_workspace_activity ADD COLUMN project_name TEXT",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at_ms)
+         VALUES (3, 'cw2_shared_projects_v3', ?1)",
         params![crate::now_epoch_ms()],
     )?;
     Ok(())
@@ -2030,7 +2309,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut stmt = if cursor_seq.is_some() {
             tx.prepare(
                 "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
-                        action, target_type, page_id, page_title, proposal_id, thread_id,
+                        action, target_type, project_id, project_name,
+                        page_id, page_title, proposal_id, thread_id,
                         detail_text, created_at_ms
                  FROM shared_workspace_activity
                  WHERE workspace_id = ?1 AND seq < ?2
@@ -2040,7 +2320,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         } else {
             tx.prepare(
                 "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
-                        action, target_type, page_id, page_title, proposal_id, thread_id,
+                        action, target_type, project_id, project_name,
+                        page_id, page_title, proposal_id, thread_id,
                         detail_text, created_at_ms
                  FROM shared_workspace_activity
                  WHERE workspace_id = ?1
@@ -2059,12 +2340,14 @@ impl SharedContentStore for SqliteSharedContentStore {
                     actor_display_name: r.get(4)?,
                     action: r.get(5)?,
                     target_type: r.get(6)?,
-                    page_id: r.get(7)?,
-                    page_title: r.get(8)?,
-                    proposal_id: r.get(9)?,
-                    thread_id: r.get(10)?,
-                    detail_text: r.get(11)?,
-                    created_at_ms: r.get(12)?,
+                    project_id: r.get(7)?,
+                    project_name: r.get(8)?,
+                    page_id: r.get(9)?,
+                    page_title: r.get(10)?,
+                    proposal_id: r.get(11)?,
+                    thread_id: r.get(12)?,
+                    detail_text: r.get(13)?,
+                    created_at_ms: r.get(14)?,
                 },
             ))
         };
@@ -2085,9 +2368,699 @@ impl SharedContentStore for SqliteSharedContentStore {
         tx.commit()?;
         Ok(PagedList { items, next_cursor })
     }
+
+    fn list_projects(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        include_archived: bool,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedProjectSummary>, SharedContentError> {
+        let limit = clamp_limit(limit);
+        let q = sanitize_search_query(search_query)?;
+        let parsed_cursor = parse_time_id_cursor(cursor)?;
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let items_plus_one = query_project_summaries(
+            &tx,
+            workspace_id,
+            include_archived,
+            q.as_deref(),
+            parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
+            limit + 1,
+        )?;
+        let (items, next_cursor) = paginate(items_plus_one, limit, |p| {
+            format!("{}:{}", p.updated_at_ms, p.project_id)
+        });
+        tx.commit()?;
+        Ok(PagedList { items, next_cursor })
+    }
+
+    fn create_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        input: &CreateSharedProjectInput,
+        now_ms: i64,
+    ) -> Result<CreateSharedProjectOutcome, SharedContentError> {
+        let name = sanitize_project_name(&input.name)?;
+        let purpose = sanitize_project_purpose(&input.purpose)?;
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let payload_hash = payload_digest(&serde_json::json!({
+            "name": name,
+            "purpose": purpose,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectDetails>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            "create_project",
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(CreateSharedProjectOutcome {
+                created: false,
+                project: cached,
+            });
+        }
+
+        let project_id = format!("shpprj_{}", Uuid::new_v4().simple());
+        tx.execute(
+            "INSERT INTO shared_projects (
+                project_id, workspace_id, name, purpose, version,
+                created_by_uid, created_by_display_name,
+                updated_by_uid, updated_by_display_name,
+                created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?5, ?6, ?7, ?7)",
+            params![
+                project_id,
+                workspace_id,
+                name,
+                purpose,
+                caller.uid,
+                actor_display,
+                now_ms
+            ],
+        )?;
+
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_created",
+            "project",
+            Some(&project_id),
+            Some(&name),
+            None,
+            None,
+            None,
+            None,
+            &format!("Created project “{name}”"),
+            now_ms,
+        )?;
+
+        let details = load_project_details(&tx, workspace_id, &project_id, None, None, None)?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            "create_project",
+            &idempotency_key,
+            &payload_hash,
+            &details,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(CreateSharedProjectOutcome {
+            created: true,
+            project: details,
+        })
+    }
+
+    fn get_project_details(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        let q = sanitize_search_query(search_query)?;
+        let parsed_cursor = parse_time_id_cursor(cursor)?;
+        let limit = clamp_limit(limit);
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let details = load_project_details(
+            &tx,
+            workspace_id,
+            project_id,
+            q.as_deref(),
+            parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
+            Some(limit),
+        )?;
+        tx.commit()?;
+        Ok(details)
+    }
+
+    fn update_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &UpdateSharedProjectInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        if input.expected_version < 1 {
+            return Err(SharedContentError::InvalidInput(
+                "Expected project version must be at least 1.".into(),
+            ));
+        }
+        let name = sanitize_project_name(&input.name)?;
+        let purpose = sanitize_project_purpose(&input.purpose)?;
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let op = format!("update_project:{project_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "name": name,
+            "purpose": purpose,
+            "expected_version": input.expected_version,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_manage_shared_project() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectDetails>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let existing = load_project_summary(&tx, workspace_id, project_id)?;
+        if existing.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectArchived);
+        }
+        if existing.version != input.expected_version {
+            return Err(SharedContentError::StaleProjectVersion(format!(
+                "Project details changed to v{} while you were editing. Refresh before saving.",
+                existing.version
+            )));
+        }
+
+        tx.execute(
+            "UPDATE shared_projects
+             SET name = ?1, purpose = ?2, version = version + 1,
+                 updated_by_uid = ?3, updated_by_display_name = ?4, updated_at_ms = ?5
+             WHERE workspace_id = ?6 AND project_id = ?7 AND version = ?8 AND archived_at_ms IS NULL",
+            params![
+                name,
+                purpose,
+                caller.uid,
+                actor_display,
+                now_ms,
+                workspace_id,
+                project_id,
+                input.expected_version,
+            ],
+        )?;
+
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_updated",
+            "project",
+            Some(project_id),
+            Some(&name),
+            None,
+            None,
+            None,
+            None,
+            &format!("Updated project “{name}”"),
+            now_ms,
+        )?;
+
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &details,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(details)
+    }
+
+    fn archive_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        self.set_project_archived(
+            caller,
+            recheck_session,
+            workspace_id,
+            project_id,
+            true,
+            idempotency_key,
+            now_ms,
+        )
+    }
+
+    fn restore_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        self.set_project_archived(
+            caller,
+            recheck_session,
+            workspace_id,
+            project_id,
+            false,
+            idempotency_key,
+            now_ms,
+        )
+    }
+
+    fn list_project_picker_pages(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+        search_query: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<PagedList<SharedPageSummary>, SharedContentError> {
+        let limit = clamp_limit(limit);
+        let q = sanitize_search_query(search_query)?;
+        let parsed_cursor = parse_time_id_cursor(cursor)?;
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _project = load_project_summary(&tx, workspace_id, project_id)?;
+        let items_plus_one = query_picker_pages(
+            &tx,
+            workspace_id,
+            project_id,
+            q.as_deref(),
+            parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
+            limit + 1,
+        )?;
+        let (items, next_cursor) = paginate(items_plus_one, limit, |p| {
+            format!("{}:{}", p.updated_at_ms, p.page_id)
+        });
+        tx.commit()?;
+        Ok(PagedList { items, next_cursor })
+    }
+
+    fn attach_page_to_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        input: &AttachProjectPageInput,
+        now_ms: i64,
+    ) -> Result<ProjectPageMembershipOutcome, SharedContentError> {
+        let page_id = input.page_id.trim();
+        if page_id.is_empty() {
+            return Err(SharedContentError::InvalidInput(
+                "Shared page ID is required.".into(),
+            ));
+        }
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let op = format!("attach_project_page:{project_id}:{page_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "page_id": page_id,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(mut cached) = lookup_idempotent_response::<ProjectPageMembershipOutcome>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            cached.attached = false;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if project.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectArchived);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+        if page.archived_at_ms.is_some() {
+            return Err(SharedContentError::PageArchived);
+        }
+
+        let already_active: Option<String> = tx
+            .query_row(
+                "SELECT membership_id FROM shared_project_pages
+                 WHERE workspace_id = ?1 AND project_id = ?2 AND page_id = ?3 AND detached_at_ms IS NULL",
+                params![workspace_id, project_id, page_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if already_active.is_some() {
+            return Err(SharedContentError::AlreadyProjectMember);
+        }
+
+        let max_gen: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(generation), 0)
+             FROM shared_project_pages
+             WHERE workspace_id = ?1 AND project_id = ?2 AND page_id = ?3",
+            params![workspace_id, project_id, page_id],
+            |r| r.get(0),
+        )?;
+        let generation = max_gen + 1;
+        let membership_id = format!("prjmem_{}", Uuid::new_v4().simple());
+
+        tx.execute(
+            "INSERT INTO shared_project_pages (
+                membership_id, workspace_id, project_id, page_id, generation,
+                attached_by_uid, attached_by_display_name, attached_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                membership_id,
+                workspace_id,
+                project_id,
+                page_id,
+                generation,
+                caller.uid,
+                actor_display,
+                now_ms,
+            ],
+        )?;
+
+        tx.execute(
+            "UPDATE shared_projects SET updated_at_ms = ?1
+             WHERE workspace_id = ?2 AND project_id = ?3",
+            params![now_ms, workspace_id, project_id],
+        )?;
+
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_page_attached",
+            "project_page",
+            Some(project_id),
+            Some(&project.name),
+            Some(page_id),
+            Some(&page.title),
+            None,
+            None,
+            &format!("Added “{}” to project “{}”", page.title, project.name),
+            now_ms,
+        )?;
+
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        let outcome = ProjectPageMembershipOutcome {
+            attached: true,
+            membership_id,
+            generation,
+            project: details,
+        };
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &outcome,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    fn detach_page_from_project(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        page_id: &str,
+        input: &DetachProjectPageInput,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        let membership_id = input.membership_id.trim();
+        if membership_id.is_empty() {
+            return Err(SharedContentError::InvalidInput(
+                "Project membership ID is required.".into(),
+            ));
+        }
+        let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let op = format!("detach_project_page:{project_id}:{page_id}:{membership_id}");
+        let payload_hash = payload_digest(&serde_json::json!({
+            "project_id": project_id,
+            "page_id": page_id,
+            "membership_id": membership_id,
+        }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_author_shared_content() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectDetails>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if project.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectArchived);
+        }
+        let page = load_page_row(&tx, workspace_id, page_id)?;
+
+        let affected = tx.execute(
+            "UPDATE shared_project_pages
+             SET detached_at_ms = ?1, detached_by_uid = ?2, detached_by_display_name = ?3
+             WHERE workspace_id = ?4 AND project_id = ?5 AND page_id = ?6
+               AND membership_id = ?7 AND detached_at_ms IS NULL",
+            params![
+                now_ms,
+                caller.uid,
+                actor_display,
+                workspace_id,
+                project_id,
+                page_id,
+                membership_id,
+            ],
+        )?;
+        if affected == 0 {
+            return Err(SharedContentError::StaleMembership(
+                "That project-page membership has already changed. Refresh the project before retrying."
+                    .into(),
+            ));
+        }
+
+        tx.execute(
+            "UPDATE shared_projects SET updated_at_ms = ?1
+             WHERE workspace_id = ?2 AND project_id = ?3",
+            params![now_ms, workspace_id, project_id],
+        )?;
+
+        insert_activity_with_project(
+            &tx,
+            workspace_id,
+            &caller.uid,
+            &actor_display,
+            "project_page_detached",
+            "project_page",
+            Some(project_id),
+            Some(&project.name),
+            Some(page_id),
+            Some(&page.title),
+            None,
+            None,
+            &format!("Removed “{}” from project “{}”", page.title, project.name),
+            now_ms,
+        )?;
+
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &details,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(details)
+    }
 }
 
 impl SqliteSharedContentStore {
+    #[allow(clippy::too_many_arguments)]
+    fn set_project_archived(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        project_id: &str,
+        archive: bool,
+        idempotency_key: &str,
+        now_ms: i64,
+    ) -> Result<SharedProjectDetails, SharedContentError> {
+        let idempotency_key = sanitize_idempotency_key(idempotency_key)?;
+        let verb = if archive {
+            "archive_project"
+        } else {
+            "restore_project"
+        };
+        let op = format!("{verb}:{project_id}");
+        let payload_hash =
+            payload_digest(&serde_json::json!({ "project_id": project_id, "archive": archive }));
+        let actor_display = caller_display_name(caller);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        if !member.role.can_manage_shared_project() {
+            return Err(SharedContentError::Forbidden);
+        }
+        if let Some(cached) = lookup_idempotent_response::<SharedProjectDetails>(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+        )? {
+            let _ = recheck_session()?;
+            tx.commit()?;
+            return Ok(cached);
+        }
+
+        let project = load_project_summary(&tx, workspace_id, project_id)?;
+        if archive && project.archived_at_ms.is_some() {
+            return Err(SharedContentError::ProjectAlreadyArchived);
+        }
+        if !archive && project.archived_at_ms.is_none() {
+            return Err(SharedContentError::ProjectNotArchived);
+        }
+        if archive {
+            tx.execute(
+                "UPDATE shared_projects
+                 SET archived_at_ms = ?1, archived_by_uid = ?2, archived_by_display_name = ?3,
+                     updated_by_uid = ?2, updated_by_display_name = ?3, updated_at_ms = ?1
+                 WHERE workspace_id = ?4 AND project_id = ?5",
+                params![now_ms, caller.uid, actor_display, workspace_id, project_id],
+            )?;
+            insert_activity_with_project(
+                &tx,
+                workspace_id,
+                &caller.uid,
+                &actor_display,
+                "project_archived",
+                "project",
+                Some(project_id),
+                Some(&project.name),
+                None,
+                None,
+                None,
+                None,
+                &format!("Archived project “{}”", project.name),
+                now_ms,
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE shared_projects
+                 SET archived_at_ms = NULL, archived_by_uid = NULL, archived_by_display_name = NULL,
+                     updated_by_uid = ?1, updated_by_display_name = ?2, updated_at_ms = ?3
+                 WHERE workspace_id = ?4 AND project_id = ?5",
+                params![caller.uid, actor_display, now_ms, workspace_id, project_id],
+            )?;
+            insert_activity_with_project(
+                &tx,
+                workspace_id,
+                &caller.uid,
+                &actor_display,
+                "project_restored",
+                "project",
+                Some(project_id),
+                Some(&project.name),
+                None,
+                None,
+                None,
+                None,
+                &format!("Restored project “{}”", project.name),
+                now_ms,
+            )?;
+        }
+
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        save_idempotent_response(
+            &tx,
+            &caller.uid,
+            workspace_id,
+            &op,
+            &idempotency_key,
+            &payload_hash,
+            &details,
+            now_ms,
+        )?;
+        let _ = recheck_session()?;
+        tx.commit()?;
+        Ok(details)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn set_thread_resolved(
         &self,
@@ -2759,12 +3732,48 @@ fn insert_activity(
     detail_text: &str,
     now_ms: i64,
 ) -> Result<(), SharedContentError> {
+    insert_activity_with_project(
+        tx,
+        workspace_id,
+        actor_uid,
+        actor_display_name,
+        action,
+        target_type,
+        None,
+        None,
+        page_id,
+        page_title,
+        proposal_id,
+        thread_id,
+        detail_text,
+        now_ms,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_activity_with_project(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    actor_uid: &str,
+    actor_display_name: &str,
+    action: &str,
+    target_type: &str,
+    project_id: Option<&str>,
+    project_name: Option<&str>,
+    page_id: Option<&str>,
+    page_title: Option<&str>,
+    proposal_id: Option<&str>,
+    thread_id: Option<&str>,
+    detail_text: &str,
+    now_ms: i64,
+) -> Result<(), SharedContentError> {
     let activity_id = format!("act_{}", Uuid::new_v4().simple());
     tx.execute(
         "INSERT INTO shared_workspace_activity (
             activity_id, workspace_id, actor_uid, actor_display_name, action,
-            target_type, page_id, page_title, proposal_id, thread_id, detail_text, created_at_ms
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            target_type, project_id, project_name, page_id, page_title,
+            proposal_id, thread_id, detail_text, created_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             activity_id,
             workspace_id,
@@ -2772,6 +3781,8 @@ fn insert_activity(
             actor_display_name,
             action,
             target_type,
+            project_id,
+            project_name,
             page_id,
             page_title,
             proposal_id,
@@ -2781,6 +3792,305 @@ fn insert_activity(
         ],
     )?;
     Ok(())
+}
+
+fn sanitize_project_name(raw: &str) -> Result<String, SharedContentError> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.is_empty() {
+        return Err(SharedContentError::InvalidInput(
+            "Project name is required.".into(),
+        ));
+    }
+    if cleaned.chars().count() > MAX_PROJECT_NAME_LEN {
+        return Err(SharedContentError::InvalidInput(format!(
+            "Project name must be at most {MAX_PROJECT_NAME_LEN} characters."
+        )));
+    }
+    if contains_disallowed_reference(&cleaned) {
+        return Err(SharedContentError::InvalidInput(
+            "Project name cannot include private file paths or vault URIs.".into(),
+        ));
+    }
+    Ok(cleaned)
+}
+
+fn sanitize_project_purpose(raw: &str) -> Result<String, SharedContentError> {
+    let normalized = raw.replace("\r\n", "\n");
+    let cleaned = normalized.trim();
+    if cleaned.chars().count() > MAX_PROJECT_PURPOSE_LEN {
+        return Err(SharedContentError::InvalidInput(format!(
+            "Project purpose must be at most {MAX_PROJECT_PURPOSE_LEN} characters."
+        )));
+    }
+    if contains_disallowed_reference(cleaned) {
+        return Err(SharedContentError::InvalidInput(
+            "Project purpose cannot include private file paths or vault URIs.".into(),
+        ));
+    }
+    Ok(cleaned.to_owned())
+}
+
+fn sanitize_search_query(raw: Option<&str>) -> Result<Option<String>, SharedContentError> {
+    let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if val.chars().count() > MAX_SEARCH_QUERY_LEN {
+        return Err(SharedContentError::InvalidInput(format!(
+            "Search query must be at most {MAX_SEARCH_QUERY_LEN} characters."
+        )));
+    }
+    Ok(Some(val.to_lowercase()))
+}
+
+fn escape_like_pattern(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 4);
+    for ch in q.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            c => out.push(c),
+        }
+    }
+    format!("%{out}%")
+}
+
+fn map_project_summary(r: &rusqlite::Row<'_>) -> rusqlite::Result<SharedProjectSummary> {
+    Ok(SharedProjectSummary {
+        project_id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        name: r.get(2)?,
+        purpose: r.get(3)?,
+        version: r.get(4)?,
+        created_by_uid: r.get(5)?,
+        created_by_display_name: r.get(6)?,
+        updated_by_uid: r.get(7)?,
+        updated_by_display_name: r.get(8)?,
+        archived_at_ms: r.get(9)?,
+        archived_by_display_name: r.get(10)?,
+        created_at_ms: r.get(11)?,
+        updated_at_ms: r.get(12)?,
+        active_page_count: r.get(13)?,
+    })
+}
+
+fn load_project_summary(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+) -> Result<SharedProjectSummary, SharedContentError> {
+    tx.query_row(
+        "SELECT pr.project_id, pr.workspace_id, pr.name, pr.purpose, pr.version,
+                pr.created_by_uid, pr.created_by_display_name,
+                pr.updated_by_uid, pr.updated_by_display_name,
+                pr.archived_at_ms, pr.archived_by_display_name,
+                pr.created_at_ms, pr.updated_at_ms,
+                (SELECT COUNT(*) FROM shared_project_pages m
+                 JOIN shared_pages p ON p.workspace_id = m.workspace_id AND p.page_id = m.page_id
+                 WHERE m.workspace_id = pr.workspace_id
+                   AND m.project_id = pr.project_id
+                   AND m.detached_at_ms IS NULL
+                   AND p.archived_at_ms IS NULL)
+         FROM shared_projects pr
+         WHERE pr.workspace_id = ?1 AND pr.project_id = ?2",
+        params![workspace_id, project_id],
+        map_project_summary,
+    )
+    .optional()?
+    .ok_or(SharedContentError::ProjectNotFound)
+}
+
+fn query_project_summaries(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    include_archived: bool,
+    search_query: Option<&str>,
+    cursor: Option<(i64, &str)>,
+    limit: usize,
+) -> Result<Vec<SharedProjectSummary>, SharedContentError> {
+    let archive_clause = if include_archived {
+        ""
+    } else {
+        "AND pr.archived_at_ms IS NULL"
+    };
+    let like_pat = search_query.map(escape_like_pattern);
+    let sql = format!(
+        "SELECT pr.project_id, pr.workspace_id, pr.name, pr.purpose, pr.version,
+                pr.created_by_uid, pr.created_by_display_name,
+                pr.updated_by_uid, pr.updated_by_display_name,
+                pr.archived_at_ms, pr.archived_by_display_name,
+                pr.created_at_ms, pr.updated_at_ms,
+                (SELECT COUNT(*) FROM shared_project_pages m
+                 JOIN shared_pages p ON p.workspace_id = m.workspace_id AND p.page_id = m.page_id
+                 WHERE m.workspace_id = pr.workspace_id
+                   AND m.project_id = pr.project_id
+                   AND m.detached_at_ms IS NULL
+                   AND p.archived_at_ms IS NULL)
+         FROM shared_projects pr
+         WHERE pr.workspace_id = ?1
+           {archive_clause}
+           AND (?2 IS NULL OR LOWER(pr.name) LIKE ?2 ESCAPE '\\' OR LOWER(pr.purpose) LIKE ?2 ESCAPE '\\')
+           AND (?3 IS NULL OR (pr.updated_at_ms < ?3 OR (pr.updated_at_ms = ?3 AND pr.project_id < ?4)))
+         ORDER BY pr.updated_at_ms DESC, pr.project_id DESC
+         LIMIT {limit}"
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let cursor_ts = cursor.map(|(ts, _)| ts);
+    let cursor_id = cursor.map(|(_, id)| id);
+    let rows = stmt.query_map(
+        params![workspace_id, like_pat, cursor_ts, cursor_id],
+        map_project_summary,
+    )?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+fn query_project_page_items(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    search_query: Option<&str>,
+    cursor: Option<(i64, &str)>,
+    limit: usize,
+) -> Result<Vec<SharedProjectPageItem>, SharedContentError> {
+    let like_pat = search_query.map(escape_like_pattern);
+    let sql = format!(
+        "SELECT p.page_id, p.workspace_id, p.title, p.current_revision_number, p.entry_mode,
+                p.origin_kind, p.original_author_label, p.ai_model_label, p.source_note,
+                p.omitted_summary_json, p.publisher_uid, p.publisher_display_name,
+                p.last_editor_uid, p.last_editor_display_name,
+                p.last_reviewer_uid, p.last_reviewer_display_name,
+                p.archived_at_ms, p.archived_by_display_name, p.created_at_ms, p.updated_at_ms,
+                (SELECT COUNT(*) FROM shared_comment_threads t
+                 WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
+                (SELECT COUNT(*) FROM shared_change_proposals pr
+                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending'),
+                m.membership_id, m.generation, m.attached_by_uid, m.attached_by_display_name, m.attached_at_ms
+         FROM shared_project_pages m
+         JOIN shared_pages p ON p.workspace_id = m.workspace_id AND p.page_id = m.page_id
+         WHERE m.workspace_id = ?1
+           AND m.project_id = ?2
+           AND m.detached_at_ms IS NULL
+           AND p.archived_at_ms IS NULL
+           AND (?3 IS NULL OR LOWER(p.title) LIKE ?3 ESCAPE '\\')
+           AND (?4 IS NULL OR (p.updated_at_ms < ?4 OR (p.updated_at_ms = ?4 AND m.membership_id < ?5)))
+         ORDER BY p.updated_at_ms DESC, m.membership_id DESC
+         LIMIT {limit}"
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let cursor_ts = cursor.map(|(ts, _)| ts);
+    let cursor_id = cursor.map(|(_, id)| id);
+    let rows = stmt.query_map(
+        params![workspace_id, project_id, like_pat, cursor_ts, cursor_id],
+        |r| {
+            let page_res = map_page_summary(r)?;
+            let membership_id: String = r.get(22)?;
+            let generation: i64 = r.get(23)?;
+            let attached_by_uid: String = r.get(24)?;
+            let attached_by_display_name: String = r.get(25)?;
+            let attached_at_ms: i64 = r.get(26)?;
+            Ok(page_res.map(|page| SharedProjectPageItem {
+                membership_id,
+                generation,
+                attached_by_uid,
+                attached_by_display_name,
+                attached_at_ms,
+                page,
+            }))
+        },
+    )?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r??);
+    }
+    Ok(out)
+}
+
+fn load_project_details(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    search_query: Option<&str>,
+    cursor: Option<(i64, &str)>,
+    limit: Option<usize>,
+) -> Result<SharedProjectDetails, SharedContentError> {
+    let project = load_project_summary(tx, workspace_id, project_id)?;
+    let page_limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+    let rows = query_project_page_items(
+        tx,
+        workspace_id,
+        project_id,
+        search_query,
+        cursor,
+        page_limit + 1,
+    )?;
+    let (pages, pages_next_cursor) = paginate(rows, page_limit, |item| {
+        format!("{}:{}", item.page.updated_at_ms, item.membership_id)
+    });
+    Ok(SharedProjectDetails {
+        project,
+        pages,
+        pages_next_cursor,
+    })
+}
+
+fn query_picker_pages(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    search_query: Option<&str>,
+    cursor: Option<(i64, &str)>,
+    limit: usize,
+) -> Result<Vec<SharedPageSummary>, SharedContentError> {
+    let like_pat = search_query.map(escape_like_pattern);
+    let sql = format!(
+        "SELECT p.page_id, p.workspace_id, p.title, p.current_revision_number, p.entry_mode,
+                p.origin_kind, p.original_author_label, p.ai_model_label, p.source_note,
+                p.omitted_summary_json, p.publisher_uid, p.publisher_display_name,
+                p.last_editor_uid, p.last_editor_display_name,
+                p.last_reviewer_uid, p.last_reviewer_display_name,
+                p.archived_at_ms, p.archived_by_display_name, p.created_at_ms, p.updated_at_ms,
+                (SELECT COUNT(*) FROM shared_comment_threads t
+                 WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
+                (SELECT COUNT(*) FROM shared_change_proposals pr
+                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending')
+         FROM shared_pages p
+         WHERE p.workspace_id = ?1
+           AND p.archived_at_ms IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM shared_project_pages m
+               WHERE m.workspace_id = p.workspace_id
+                 AND m.project_id = ?2
+                 AND m.page_id = p.page_id
+                 AND m.detached_at_ms IS NULL
+           )
+           AND (?3 IS NULL OR LOWER(p.title) LIKE ?3 ESCAPE '\\')
+           AND (?4 IS NULL OR (p.updated_at_ms < ?4 OR (p.updated_at_ms = ?4 AND p.page_id < ?5)))
+         ORDER BY p.updated_at_ms DESC, p.page_id DESC
+         LIMIT {limit}"
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let cursor_ts = cursor.map(|(ts, _)| ts);
+    let cursor_id = cursor.map(|(_, id)| id);
+    let rows = stmt.query_map(
+        params![workspace_id, project_id, like_pat, cursor_ts, cursor_id],
+        map_page_summary,
+    )?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r??);
+    }
+    Ok(out)
 }
 
 fn ensure_revision_exists(

@@ -5,8 +5,9 @@ use crate::{
     },
     now_epoch_ms,
     shared_content::{
-        CreateProposalInput, CreateSharedPageInput, CreateThreadInput, ReplyThreadInput,
-        ReviewProposalInput, SharedContentError, SharedContentStore,
+        AttachProjectPageInput, CreateProposalInput, CreateSharedPageInput,
+        CreateSharedProjectInput, CreateThreadInput, DetachProjectPageInput, ReplyThreadInput,
+        ReviewProposalInput, SharedContentError, SharedContentStore, UpdateSharedProjectInput,
     },
     store::{
         sha256_hex, AuthSessionStore, StoreError, DEFAULT_CHALLENGE_TTL_MS, DEFAULT_SESSION_TTL_MS,
@@ -136,6 +137,7 @@ struct TransferDecisionRequest {
 
 #[derive(Deserialize)]
 struct IdempotencyOnlyRequest {
+    #[serde(alias = "idempotencyKey")]
     idempotency_key: String,
 }
 
@@ -750,8 +752,134 @@ fn route_shared_content(
     };
     let cursor = query_param(query, "cursor");
     let limit = query_usize(query, "limit");
+    let search_q = query_param(query, "q");
 
     match (method, subpath) {
+        ("GET", ["projects"]) => match content_store.list_projects(
+            caller,
+            workspace_id,
+            query_bool(query, "include_archived"),
+            search_q.as_deref(),
+            cursor.as_deref(),
+            limit,
+        ) {
+            Ok(list) => json_ok(&list),
+            Err(err) => shared_content_error(err),
+        },
+        ("POST", ["projects"]) => {
+            let Ok(payload) = serde_json::from_slice::<CreateSharedProjectInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid shared project request.");
+            };
+            match content_store.create_project(caller, recheck, workspace_id, &payload, now_ms) {
+                Ok(out) => json_ok(&out),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["projects", project_id]) => match content_store.get_project_details(
+            caller,
+            workspace_id,
+            project_id,
+            search_q.as_deref(),
+            cursor.as_deref(),
+            limit,
+        ) {
+            Ok(details) => json_ok(&details),
+            Err(err) => shared_content_error(err),
+        },
+        ("PATCH", ["projects", project_id]) => {
+            let Ok(payload) = serde_json::from_slice::<UpdateSharedProjectInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid project update request.");
+            };
+            match content_store.update_project(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(details) => json_ok(&details),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "archive"]) => {
+            let Ok(payload) = serde_json::from_slice::<IdempotencyOnlyRequest>(body) else {
+                return json_error(400, "invalid_request", "Invalid project archive request.");
+            };
+            match content_store.archive_project(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                &payload.idempotency_key,
+                now_ms,
+            ) {
+                Ok(details) => json_ok(&details),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "restore"]) => {
+            let Ok(payload) = serde_json::from_slice::<IdempotencyOnlyRequest>(body) else {
+                return json_error(400, "invalid_request", "Invalid project restore request.");
+            };
+            match content_store.restore_project(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                &payload.idempotency_key,
+                now_ms,
+            ) {
+                Ok(details) => json_ok(&details),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["projects", project_id, "page-picker"]) => {
+            match content_store.list_project_picker_pages(
+                caller,
+                workspace_id,
+                project_id,
+                search_q.as_deref(),
+                cursor.as_deref(),
+                limit,
+            ) {
+                Ok(list) => json_ok(&list),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "pages"]) => {
+            let Ok(payload) = serde_json::from_slice::<AttachProjectPageInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid attach page request.");
+            };
+            match content_store.attach_page_to_project(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(out) => json_ok(&out),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "pages", page_id, "detach"]) => {
+            let Ok(payload) = serde_json::from_slice::<DetachProjectPageInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid detach page request.");
+            };
+            match content_store.detach_page_from_project(
+                caller,
+                recheck,
+                workspace_id,
+                project_id,
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(details) => json_ok(&details),
+                Err(err) => shared_content_error(err),
+            }
+        }
         ("GET", ["pages"]) => match content_store.list_pages(
             caller,
             workspace_id,
@@ -1028,6 +1156,11 @@ fn shared_content_error(err: SharedContentError) -> (u16, String) {
             "proposal_not_found",
             "Proposal was not found in this workspace.",
         ),
+        SharedContentError::ProjectNotFound => json_error(
+            404,
+            "project_not_found",
+            "Shared project was not found in this workspace.",
+        ),
         SharedContentError::PageArchived => json_error(
             409,
             "page_archived",
@@ -1039,6 +1172,28 @@ fn shared_content_error(err: SharedContentError) -> (u16, String) {
         SharedContentError::NotArchived => {
             json_error(409, "not_archived", "This page is not archived.")
         }
+        SharedContentError::ProjectArchived => json_error(
+            409,
+            "project_archived",
+            "This project is archived. Restore it before changing details or pages.",
+        ),
+        SharedContentError::ProjectAlreadyArchived => json_error(
+            409,
+            "project_already_archived",
+            "This project is already archived.",
+        ),
+        SharedContentError::ProjectNotArchived => {
+            json_error(409, "project_not_archived", "This project is not archived.")
+        }
+        SharedContentError::AlreadyProjectMember => json_error(
+            409,
+            "already_attached",
+            "This page is already in this project.",
+        ),
+        SharedContentError::StaleProjectVersion(msg) => {
+            json_error(409, "stale_project_version", &msg)
+        }
+        SharedContentError::StaleMembership(msg) => json_error(409, "stale_membership", &msg),
         SharedContentError::ProposalNotPending => json_error(
             409,
             "proposal_not_pending",

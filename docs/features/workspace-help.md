@@ -101,7 +101,7 @@ Pages, personal work, and app preferences can stay local. A configured provider 
 - **AI proposals** wait for review before they change saved work. Choose Apply to keep the change or Dismiss to clear it from review.
 - **Web sources** come from external pages. Their links and citations describe the evidence used for the proposal.
 
-When giving an agent a goal, choose the smallest project scope you need. Review the workspace-memory and web grants before starting. Use the CLI to revoke a scoped external client when you finish with it.
+When giving an agent a goal, choose the smallest project scope you need. Review the workspace-memory and web grants before starting. Use Agent connections to disconnect a client you set up in Sthira.
 
 ## Shared workspaces and roles
 
@@ -117,6 +117,12 @@ Use the sidebar workspace switcher to move between **Personal** and any team wor
 - **Comments & activity:** Owners, Admins, and Editors can start page-level comment threads (recorded with the revision open at the time), reply, and resolve or reopen their own threads; Owners and Admins can moderate any thread. **Activity** shows recent shared-page, comment, and review events for that workspace.
 - **Proposing edits & review:** Once published, edits go through **Propose edit** → **Change review**. Reviewers (**Owner** or **Admin** other than the proposal author) can **Apply change**, **Request changes**, or **Reject**; authors can **Withdraw proposal** or revise/resubmit. If the page moved to a newer revision first, the proposal marks itself stale so you can explicitly **Rebase & revise**. Owners and Admins can archive or restore shared pages.
 - **Offline drafts & privacy:** Team reads and writes require an active workspace connection and keep no durable offline replica in your Personal vault. Unsent shared-page drafts are stored privately on your device by signed-in account, workspace, and draft key so you can retry or submit manually after reconnect—and they are cleared if you lose access or sign out.
+
+### Shared project grouping
+
+- **Visibility and roles:** Team projects are visible across active workspace members and reuse workspace roles. Owners, Admins, and Editors can create projects (`name` and optional `purpose`) and attach or detach shared pages; only Owners and Admins can rename, edit project purpose, or archive and restore projects; Viewers have read-only access.
+- **Attaching existing pages:** Open a project and select **Add existing page** to attach active shared pages from that workspace. A page keeps one shared identity, revision history, comments, proposals, and workspace **Pages** listing across all projects it belongs to.
+- **Remove from project vs. archiving:** **Remove from project** detaches only that project-page membership while keeping the page available in workspace **Pages** and any other project. **Archive project** hides the project from active lists and pauses project metadata and membership changes while leaving its pages accessible elsewhere; **Restore project** recovers the same project and memberships. Archiving a page preserves its project memberships but hides it from active project lists until restored.
 
 ## Glossary
 
@@ -144,6 +150,6 @@ Settings, Help, and other active dialogs handle their own keyboard controls. Clo
 
 ## External clients
 
-The Sthira CLI can attach to an existing vault. Create a scoped credential with the CLI, then configure a local stdio MCP client or use the CLI API. Keep the token private. Review any proposed changes in Sthira and revoke the grant with the CLI when it is no longer needed.
+On Linux, open **Settings → Agent connections**, choose an app, and select a personal project. Leave access on **Can read** for sharing context. Choose **Can read and suggest changes** to receive proposals for review.
 
-Use matching desktop and CLI builds. Check the configured vault path before granting access.
+Use **Connect** for an installed client or **Create setup** to copy a local MCP configuration. Then open a fresh session in the client and try the starter prompt. Use **Test connection** to check local access and **Disconnect** to revoke it. Advanced local clients can still use the [CLI and MCP setup](cli-and-mcp.md).

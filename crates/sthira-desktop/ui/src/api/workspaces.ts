@@ -463,12 +463,64 @@ export interface SharedActivityItem {
   actorDisplayName: string;
   action: string;
   targetType: string;
+  projectId?: string | null;
+  projectName?: string | null;
   pageId?: string | null;
   pageTitle?: string | null;
   proposalId?: string | null;
   threadId?: string | null;
   detailText: string;
   createdAtMs: number;
+}
+
+export interface SharedProjectSummary {
+  projectId: string;
+  workspaceId: string;
+  name: string;
+  purpose: string;
+  version: number;
+  activePageCount: number;
+  createdByUid: string;
+  createdByDisplayName: string;
+  updatedByUid: string;
+  updatedByDisplayName: string;
+  archivedAtMs?: number | null;
+  archivedByDisplayName?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface SharedProjectPageItem {
+  membershipId: string;
+  generation: number;
+  attachedByUid: string;
+  attachedByDisplayName: string;
+  attachedAtMs: number;
+  page: SharedPageSummary;
+}
+
+export interface SharedProjectDetails {
+  project: SharedProjectSummary;
+  pages: SharedProjectPageItem[];
+  pagesNextCursor?: string | null;
+}
+
+export interface CreateSharedProjectInput {
+  name: string;
+  purpose: string;
+  idempotencyKey: string;
+}
+
+export interface CreateSharedProjectOutcome {
+  created: boolean;
+  project: SharedProjectDetails;
+}
+
+export interface ProjectPageMembershipOutcome {
+  attached: boolean;
+  membershipId: string;
+  generation: number;
+  project: SharedProjectDetails;
 }
 
 export interface PagedList<T> {
@@ -494,6 +546,10 @@ export function canAuthorSharedContent(role: WorkspaceRole): boolean {
 }
 
 export function canReviewOrArchiveSharedContent(role: WorkspaceRole): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
+export function canManageSharedProject(role: WorkspaceRole): boolean {
   return role === 'owner' || role === 'admin';
 }
 
@@ -758,6 +814,145 @@ export async function listWorkspaceActivity(
     workspaceId,
     cursor: cursor ?? null,
     limit: limit ?? null,
+  });
+}
+
+export async function listSharedProjects(
+  workspaceId: string,
+  includeArchived = false,
+  q?: string | null,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedProjectSummary>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedProjectSummary>>>('cmd_list_shared_projects', {
+    workspaceId,
+    includeArchived,
+    q: q ?? null,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function createSharedProject(
+  workspaceId: string,
+  input: CreateSharedProjectInput,
+): Promise<WorkspaceResponse<CreateSharedProjectOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<CreateSharedProjectOutcome>>('cmd_create_shared_project', {
+    workspaceId,
+    input,
+  });
+}
+
+export async function getSharedProject(
+  workspaceId: string,
+  projectId: string,
+  q?: string | null,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<SharedProjectDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectDetails>>('cmd_get_shared_project', {
+    workspaceId,
+    projectId,
+    q: q ?? null,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function updateSharedProject(
+  workspaceId: string,
+  projectId: string,
+  name: string,
+  purpose: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectDetails>>('cmd_update_shared_project', {
+    workspaceId,
+    projectId,
+    name,
+    purpose,
+    expectedVersion,
+    idempotencyKey,
+  });
+}
+
+export async function archiveSharedProject(
+  workspaceId: string,
+  projectId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectDetails>>('cmd_archive_shared_project', {
+    workspaceId,
+    projectId,
+    idempotencyKey,
+  });
+}
+
+export async function restoreSharedProject(
+  workspaceId: string,
+  projectId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectDetails>>('cmd_restore_shared_project', {
+    workspaceId,
+    projectId,
+    idempotencyKey,
+  });
+}
+
+export async function listProjectPickerPages(
+  workspaceId: string,
+  projectId: string,
+  q?: string | null,
+  cursor?: string | null,
+  limit?: number,
+): Promise<WorkspaceResponse<PagedList<SharedPageSummary>>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<PagedList<SharedPageSummary>>>('cmd_list_project_picker_pages', {
+    workspaceId,
+    projectId,
+    q: q ?? null,
+    cursor: cursor ?? null,
+    limit: limit ?? null,
+  });
+}
+
+export async function attachPageToProject(
+  workspaceId: string,
+  projectId: string,
+  pageId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<ProjectPageMembershipOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<ProjectPageMembershipOutcome>>('cmd_attach_page_to_project', {
+    workspaceId,
+    projectId,
+    pageId,
+    idempotencyKey,
+  });
+}
+
+export async function detachPageFromProject(
+  workspaceId: string,
+  projectId: string,
+  pageId: string,
+  membershipId: string,
+  idempotencyKey: string,
+): Promise<WorkspaceResponse<SharedProjectDetails>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<SharedProjectDetails>>('cmd_detach_page_from_project', {
+    workspaceId,
+    projectId,
+    pageId,
+    membershipId,
+    idempotencyKey,
   });
 }
 

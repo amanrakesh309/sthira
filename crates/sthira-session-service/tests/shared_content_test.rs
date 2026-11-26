@@ -177,14 +177,14 @@ async fn create_ws_and_add_member(
 }
 
 #[tokio::test]
-async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_to_v2() {
+async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_from_v1_and_v2_to_v3() {
     let root = TempDir::new().unwrap();
     let auth_db = root.path().join("auth.db");
     let mem_db = root.path().join("membership.db");
     let clock = Arc::new(AtomicI64::new(1_700_000_000_000));
     let http = Client::new();
 
-    // Start CW1-only service (shared content disabled).
+    // 1. Start CW1-only service (shared content disabled).
     let (base1, _auth1, mem1, _none, stop1) =
         start_service(&auth_db, &mem_db, false, Arc::clone(&clock)).await;
     assert_eq!(mem1.schema_version().unwrap(), 1);
@@ -210,7 +210,7 @@ async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_to_v2() {
         .unwrap();
     let ws_id = ws["workspace"]["workspaceId"].as_str().unwrap();
 
-    // CW2 endpoint cleanly returns 503 shared_content_disabled while CW1 works.
+    // Shared routes cleanly return 503 shared_content_disabled while CW1 works.
     let disabled_resp = http
         .get(format!("{base1}/v1/workspaces/{ws_id}/pages"))
         .bearer_auth(&cred_a)
@@ -225,25 +225,155 @@ async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_to_v2() {
     stop1.send(()).unwrap();
     drop(mem1);
 
-    // Reopen existing CW1 DB with CW2 enabled -> additive migration v1 -> v2.
+    // 2. Reopen existing CW1 DB with shared content enabled -> additive migration v1 -> v3.
     let (base2, _auth2, mem2, shared2, stop2) =
         start_service(&auth_db, &mem_db, true, Arc::clone(&clock)).await;
-    assert_eq!(mem2.schema_version().unwrap(), 2);
-    assert_eq!(shared2.unwrap().schema_version().unwrap(), 2);
+    assert_eq!(mem2.schema_version().unwrap(), 3);
+    assert_eq!(shared2.unwrap().schema_version().unwrap(), 3);
 
-    // Existing CW1 workspace still readable and can now create CW2 pages.
-    let pages_resp = http
-        .get(format!("{base2}/v1/workspaces/{ws_id}/pages"))
+    // Populate a CW2 page + revision + comment + proposal + v2-era activity row.
+    let page: Value = http
+        .post(format!("{base2}/v1/workspaces/{ws_id}/pages"))
+        .bearer_auth(&cred_a)
+        .json(&json!({
+            "title": "Existing V2 Page",
+            "contentMd": "# V2 Content\nPreserved across v3 upgrade.",
+            "entryMode": "new",
+            "provenance": { "originKind": "userAuthored" },
+            "idempotencyKey": "k_v2_page"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let page_id = page["page"]["page"]["pageId"].as_str().unwrap().to_owned();
+    let _thr: Value = http
+        .post(format!(
+            "{base2}/v1/workspaces/{ws_id}/pages/{page_id}/threads"
+        ))
+        .bearer_auth(&cred_a)
+        .json(&json!({
+            "baseRevisionNumber": 1,
+            "body": "V2 comment preserved",
+            "idempotencyKey": "k_v2_thr"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    stop2.send(()).unwrap();
+    drop(mem2);
+
+    // 3. Rewind schema cleanly to exact pre-v3 CW2 v2 shape with live CW2 rows intact.
+    {
+        let conn = rusqlite::Connection::open(&mem_db).unwrap();
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            DROP TABLE IF EXISTS shared_project_pages;
+            DROP TABLE IF EXISTS shared_projects;
+            DROP INDEX IF EXISTS idx_shared_pages_ws_page;
+            CREATE TABLE shared_workspace_activity_v2 (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_id TEXT NOT NULL UNIQUE,
+                workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+                actor_uid TEXT NOT NULL,
+                actor_display_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                page_id TEXT,
+                page_title TEXT,
+                proposal_id TEXT,
+                thread_id TEXT,
+                detail_text TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            INSERT INTO shared_workspace_activity_v2 (
+                seq, activity_id, workspace_id, actor_uid, actor_display_name,
+                action, target_type, page_id, page_title, proposal_id, thread_id,
+                detail_text, created_at_ms
+            )
+            SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
+                   action, target_type, page_id, page_title, proposal_id, thread_id,
+                   detail_text, created_at_ms
+            FROM shared_workspace_activity;
+            DROP TABLE shared_workspace_activity;
+            ALTER TABLE shared_workspace_activity_v2 RENAME TO shared_workspace_activity;
+            CREATE INDEX IF NOT EXISTS idx_shared_activity_ws
+                ON shared_workspace_activity (workspace_id, seq DESC);
+            DELETE FROM schema_migrations WHERE version >= 3;
+            PRAGMA foreign_keys = ON;
+            ",
+        )
+        .unwrap();
+        let max_ver: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max_ver, 2);
+    }
+
+    // 4. Reopen v2 DB with current binary -> additive upgrade v2 -> v3 preserving all CW2 records.
+    let (base3, _auth3, mem3, shared3, stop3) =
+        start_service(&auth_db, &mem_db, true, Arc::clone(&clock)).await;
+    assert_eq!(mem3.schema_version().unwrap(), 3);
+    assert_eq!(shared3.unwrap().schema_version().unwrap(), 3);
+
+    let got_page: Value = http
+        .get(format!("{base3}/v1/workspaces/{ws_id}/pages/{page_id}"))
         .bearer_auth(&cred_a)
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(pages_resp.status(), StatusCode::OK);
+    assert_eq!(got_page["page"]["title"], "Existing V2 Page");
     assert_eq!(
-        pages_resp.json::<Value>().await.unwrap()["items"],
-        json!([])
+        got_page["threads"][0]["messages"][0]["body"],
+        "V2 comment preserved"
     );
-    stop2.send(()).unwrap();
+
+    let act: Value = http
+        .get(format!("{base3}/v1/workspaces/{ws_id}/activity?limit=10"))
+        .bearer_auth(&cred_a)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(act["items"].as_array().unwrap().len() >= 2);
+    assert!(act["items"][0]["projectId"].is_null());
+
+    // Pre-existing v2 page can now be attached cleanly to a newly created v3 project!
+    let proj: Value = http
+        .post(format!("{base3}/v1/workspaces/{ws_id}/projects"))
+        .bearer_auth(&cred_a)
+        .json(&json!({ "name": "Post-Upgrade Project", "purpose": "", "idempotencyKey": "k_v3_p" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let prj_id = proj["project"]["project"]["projectId"].as_str().unwrap();
+    let att_resp = http
+        .post(format!(
+            "{base3}/v1/workspaces/{ws_id}/projects/{prj_id}/pages"
+        ))
+        .bearer_auth(&cred_a)
+        .json(&json!({ "pageId": page_id, "idempotencyKey": "k_v3_att" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(att_resp.status(), StatusCode::OK);
+    stop3.send(()).unwrap();
 }
 
 #[tokio::test]
@@ -1425,6 +1555,688 @@ async fn superseded_submission_binding_and_markdown_link_policy_enforced() {
         .await
         .unwrap();
     assert_eq!(final_revs["items"].as_array().unwrap().len(), 2);
+
+    stop.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn shared_project_grouping_roles_isolation_pagination_concurrency_and_lifecycle() {
+    let root = TempDir::new().unwrap();
+    let auth_db = root.path().join("auth.db");
+    let mem_db = root.path().join("membership.db");
+    let clock = Arc::new(AtomicI64::new(1_700_000_000_000));
+    let (base, _auth, _mem, shared_opt, stop) =
+        start_service(&auth_db, &mem_db, true, Arc::clone(&clock)).await;
+    let shared = shared_opt.unwrap();
+    let http = Client::new();
+
+    let (cred_owner, _) = enroll(
+        &http,
+        &base,
+        "dev-owner",
+        "uid-owner",
+        "owner@example.invalid",
+        "Owner Alice",
+    )
+    .await;
+    let (cred_admin, _) = enroll(
+        &http,
+        &base,
+        "dev-admin",
+        "uid-admin",
+        "admin@example.invalid",
+        "Admin Mia",
+    )
+    .await;
+    let (cred_editor, _) = enroll(
+        &http,
+        &base,
+        "dev-editor",
+        "uid-editor",
+        "editor@example.invalid",
+        "Editor Bob",
+    )
+    .await;
+    let (cred_viewer, _) = enroll(
+        &http,
+        &base,
+        "dev-viewer",
+        "uid-viewer",
+        "viewer@example.invalid",
+        "Viewer Eve",
+    )
+    .await;
+
+    let (ws_id, _admin_mem) = create_ws_and_add_member(
+        &http,
+        &base,
+        &cred_owner,
+        "Workspace Alpha",
+        &cred_admin,
+        "admin@example.invalid",
+        "admin",
+        "p_alpha",
+    )
+    .await;
+    for (cred, email, role) in [
+        (&cred_editor, "editor@example.invalid", "editor"),
+        (&cred_viewer, "viewer@example.invalid", "viewer"),
+    ] {
+        let inv: Value = http
+            .post(format!("{base}/v1/workspaces/{ws_id}/invitations"))
+            .bearer_auth(&cred_owner)
+            .json(&json!({ "email": email, "role": role }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let accepted = http
+            .post(format!("{base}/v1/invitations/accept"))
+            .bearer_auth(cred)
+            .json(&json!({ "invite_code": inv["inviteCode"] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+    }
+
+    // Second workspace also with owner as member -> verifies workspace isolation even for dual-member callers.
+    let ws2: Value = http
+        .post(format!("{base}/v1/workspaces"))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "name": "Workspace Beta", "idempotency_key": "ws_beta" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ws2_id = ws2["workspace"]["workspaceId"].as_str().unwrap().to_owned();
+
+    // 1. Similarly named projects stay distinct by projectId; Viewer cannot create, Editor can create.
+    let viewer_create = http
+        .post(format!("{base}/v1/workspaces/{ws_id}/projects"))
+        .bearer_auth(&cred_viewer)
+        .json(&json!({ "name": "Denied", "purpose": "", "idempotencyKey": "v_c" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(viewer_create.status(), StatusCode::FORBIDDEN);
+
+    let p1_resp = http
+        .post(format!("{base}/v1/workspaces/{ws_id}/projects"))
+        .bearer_auth(&cred_editor)
+        .json(&json!({
+            "name": "Q4 Launch",
+            "purpose": "Launch readiness notes",
+            "idempotencyKey": "prj_create_1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(p1_resp.status(), StatusCode::OK);
+    let p1: Value = p1_resp.json().await.unwrap();
+    let prj1_id = p1["project"]["project"]["projectId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Same name, slightly different capitalization / empty optional purpose -> distinct projectId.
+    clock.fetch_add(10, Ordering::SeqCst);
+    let p2: Value = http
+        .post(format!("{base}/v1/workspaces/{ws_id}/projects"))
+        .bearer_auth(&cred_owner)
+        .json(&json!({
+            "name": "Q4 Launch Notes",
+            "purpose": "",
+            "idempotencyKey": "prj_create_2"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let prj2_id = p2["project"]["project"]["projectId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(prj1_id, prj2_id);
+
+    // Extra projects to verify search + cursor pagination on directory.
+    clock.fetch_add(10, Ordering::SeqCst);
+    let p3: Value = http
+        .post(format!("{base}/v1/workspaces/{ws_id}/projects"))
+        .bearer_auth(&cred_admin)
+        .json(&json!({
+            "name": "Architecture Specs",
+            "purpose": "Backend contracts",
+            "idempotencyKey": "prj_create_3"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let prj3_id = p3["project"]["project"]["projectId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let page_dir_1: Value = http
+        .get(format!("{base}/v1/workspaces/{ws_id}/projects?limit=2"))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page_dir_1["items"].as_array().unwrap().len(), 2);
+    let next_cursor = page_dir_1["nextCursor"].as_str().unwrap();
+    let page_dir_2: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects?limit=2&cursor={next_cursor}"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page_dir_2["items"].as_array().unwrap().len(), 1);
+
+    let search_dir: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects?q=Architecture&limit=10"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(search_dir["items"].as_array().unwrap().len(), 1);
+    assert_eq!(search_dir["items"][0]["projectId"], prj3_id);
+
+    // 2. Create 3 pages in Alpha and 1 foreign page in Beta; verify cross-workspace isolation (404).
+    let mut alpha_page_ids = Vec::new();
+    for (idx, title) in ["Alpha Spec", "Bravo Checklist", "Charlie Metrics"]
+        .iter()
+        .enumerate()
+    {
+        clock.fetch_add(10, Ordering::SeqCst);
+        let created: Value = http
+            .post(format!("{base}/v1/workspaces/{ws_id}/pages"))
+            .bearer_auth(&cred_owner)
+            .json(&json!({
+                "title": title,
+                "contentMd": format!("# {title}\nShared content #{idx}"),
+                "entryMode": "new",
+                "provenance": { "originKind": "userAuthored" },
+                "idempotencyKey": format!("pg_alpha_{idx}")
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        alpha_page_ids.push(
+            created["page"]["page"]["pageId"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let ws2_page: Value = http
+        .post(format!("{base}/v1/workspaces/{ws2_id}/pages"))
+        .bearer_auth(&cred_owner)
+        .json(&json!({
+            "title": "Beta Secret Page",
+            "contentMd": "Private to Beta",
+            "entryMode": "new",
+            "provenance": { "originKind": "userAuthored" },
+            "idempotencyKey": "pg_beta_1"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ws2_page_id = ws2_page["page"]["page"]["pageId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Cross-workspace GET/attach/patch return 404 even for dual-member owner.
+    assert_eq!(
+        http.get(format!("{base}/v1/workspaces/{ws2_id}/projects/{prj1_id}"))
+            .bearer_auth(&cred_owner)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        http.post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": ws2_page_id, "idempotencyKey": "cross_att" }))
+        .send()
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // 3. Attach page 0 to BOTH prj1 & prj2, plus pages 1 and 2 to prj1; check picker exclusion & pagination.
+    for pg in &alpha_page_ids {
+        clock.fetch_add(5, Ordering::SeqCst);
+        let resp = http
+            .post(format!(
+                "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages"
+            ))
+            .bearer_auth(&cred_editor)
+            .json(&json!({ "pageId": pg, "idempotencyKey": format!("att1_{pg}") }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+    // Picker for prj1 now has 0 pages (all attached); picker for prj2 has all 3; attach page 0 to prj2 too.
+    let picker1: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/page-picker?limit=10"
+        ))
+        .bearer_auth(&cred_editor)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(picker1["items"], json!([]));
+    let picker2: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}/page-picker?q=Bravo&limit=10"
+        ))
+        .bearer_auth(&cred_editor)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(picker2["items"].as_array().unwrap().len(), 1);
+    assert_eq!(picker2["items"][0]["pageId"], alpha_page_ids[1]);
+
+    let att_p2: Value = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": alpha_page_ids[0], "idempotencyKey": "att2_p0" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(att_p2["attached"].as_bool().unwrap());
+
+    // Project page search & pagination (limit=2 then cursor).
+    let prj1_pg1: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?limit=2"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prj1_pg1["project"]["activePageCount"], 3);
+    assert_eq!(prj1_pg1["pages"].as_array().unwrap().len(), 2);
+    let prj_next = prj1_pg1["pagesNextCursor"].as_str().unwrap();
+    let prj1_pg2: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?limit=2&cursor={prj_next}"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prj1_pg2["pages"].as_array().unwrap().len(), 1);
+    let prj1_search: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?q=Charlie&limit=10"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prj1_search["pages"].as_array().unwrap().len(), 1);
+    assert_eq!(prj1_search["pages"][0]["page"]["pageId"], alpha_page_ids[2]);
+
+    // 4. Duplicate & concurrent attach -> 1 active membership & 1 Activity event; distinct-key duplicate returns 409 already_attached.
+    let dup_attach = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": alpha_page_ids[0], "idempotencyKey": "att2_p0_different" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dup_attach.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        dup_attach.json::<Value>().await.unwrap()["code"],
+        "already_attached"
+    );
+
+    // True concurrent attach of alpha_page_ids[1] into prj2 with two callers/keys:
+    let (r_conc_1, r_conc_2) = tokio::join!(
+        http.post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": alpha_page_ids[1], "idempotencyKey": "conc_k1" }))
+        .send(),
+        http.post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}/pages"
+        ))
+        .bearer_auth(&cred_editor)
+        .json(&json!({ "pageId": alpha_page_ids[1], "idempotencyKey": "conc_k2" }))
+        .send(),
+    );
+    let statuses = [r_conc_1.unwrap().status(), r_conc_2.unwrap().status()];
+    assert!(statuses.contains(&StatusCode::OK));
+    assert!(statuses.contains(&StatusCode::CONFLICT));
+
+    // 5. Detach + Reattach generation increment & delayed stale membership_id detach rejected (409 stale_membership)!
+    let prj1_before: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?limit=10"
+        ))
+        .bearer_auth(&cred_owner)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let p0_mem_1 = prj1_before["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["page"]["pageId"] == alpha_page_ids[0])
+        .unwrap()["membershipId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let det_ok = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages/{}/detach",
+            alpha_page_ids[0]
+        ))
+        .bearer_auth(&cred_editor)
+        .json(&json!({ "membershipId": p0_mem_1, "idempotencyKey": "det_gen1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(det_ok.status(), StatusCode::OK);
+    // Page 0 still belongs to prj2 cleanly:
+    let prj2_still: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj2_id}?limit=10"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(prj2_still["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["page"]["pageId"] == alpha_page_ids[0]));
+
+    // Reattach p0 to prj1 -> generation 2 + new membershipId:
+    let reatt: Value = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": alpha_page_ids[0], "idempotencyKey": "reatt_gen2" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reatt["generation"], 2);
+    assert_ne!(reatt["membershipId"].as_str().unwrap(), p0_mem_1);
+
+    // Delayed detach carrying OLD membershipId from generation 1 fails with 409 stale_membership & keeps generation 2 intact!
+    let stale_det = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages/{}/detach",
+            alpha_page_ids[0]
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "membershipId": p0_mem_1, "idempotencyKey": "delayed_det_gen1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_det.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        stale_det.json::<Value>().await.unwrap()["code"],
+        "stale_membership"
+    );
+
+    // 6. Role matrix for project metadata + archive/restore (Owner/Admin only vs Editor/Viewer 403), expectedVersion conflict, archived block, and archived page preservation:
+    let editor_rename = http
+        .patch(format!("{base}/v1/workspaces/{ws_id}/projects/{prj1_id}"))
+        .bearer_auth(&cred_editor)
+        .json(&json!({
+            "name": "Editor Attempt",
+            "purpose": "No",
+            "expectedVersion": 1,
+            "idempotencyKey": "ed_ren"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(editor_rename.status(), StatusCode::FORBIDDEN);
+    let editor_arch = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/archive"
+        ))
+        .bearer_auth(&cred_editor)
+        .json(&json!({ "idempotencyKey": "ed_arch" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(editor_arch.status(), StatusCode::FORBIDDEN);
+
+    let admin_rename: Value = http
+        .patch(format!("{base}/v1/workspaces/{ws_id}/projects/{prj1_id}"))
+        .bearer_auth(&cred_admin)
+        .json(&json!({
+            "name": "Q4 Launch Updated",
+            "purpose": "Updated purpose",
+            "expectedVersion": 1,
+            "idempotencyKey": "adm_ren_1"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(admin_rename["project"]["version"], 2);
+
+    // Stale expectedVersion returns 409 stale_project_version:
+    let stale_ren = http
+        .patch(format!("{base}/v1/workspaces/{ws_id}/projects/{prj1_id}"))
+        .bearer_auth(&cred_owner)
+        .json(&json!({
+            "name": "Stale Rename",
+            "purpose": "",
+            "expectedVersion": 1,
+            "idempotencyKey": "own_stale_ren"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_ren.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        stale_ren.json::<Value>().await.unwrap()["code"],
+        "stale_project_version"
+    );
+
+    // Archive prj1 -> hidden from active list, visible with includeArchived=true, blocks attach/update with 409 project_archived:
+    let arch_resp = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/archive"
+        ))
+        .bearer_auth(&cred_admin)
+        .json(&json!({ "idempotencyKey": "adm_arch" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(arch_resp.status(), StatusCode::OK);
+    let active_list: Value = http
+        .get(format!("{base}/v1/workspaces/{ws_id}/projects?limit=10"))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!active_list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["projectId"] == prj1_id));
+    let archived_att = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/pages"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "pageId": alpha_page_ids[1], "idempotencyKey": "arch_att" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(archived_att.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        archived_att.json::<Value>().await.unwrap()["code"],
+        "project_archived"
+    );
+
+    // Restore prj1 -> all active memberships return cleanly; also test archiving & restoring a page hides from active project counts/lists while preserving membership:
+    let rest_resp = http
+        .post(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}/restore"
+        ))
+        .bearer_auth(&cred_owner)
+        .json(&json!({ "idempotencyKey": "own_rest" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rest_resp.status(), StatusCode::OK);
+    let restored_prj1 = rest_resp.json::<Value>().await.unwrap();
+    assert_eq!(restored_prj1["project"]["activePageCount"], 3);
+
+    // Archive page 2 -> prj1 activePageCount drops 3 -> 2 & page hidden, then restore -> returns to 3 automatically!
+    http.post(format!(
+        "{base}/v1/workspaces/{ws_id}/pages/{}/archive",
+        alpha_page_ids[2]
+    ))
+    .bearer_auth(&cred_owner)
+    .json(&json!({ "idempotencyKey": "arch_pg2" }))
+    .send()
+    .await
+    .unwrap();
+    let during_pg_arch: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?limit=10"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(during_pg_arch["project"]["activePageCount"], 2);
+    assert_eq!(during_pg_arch["pages"].as_array().unwrap().len(), 2);
+
+    http.post(format!(
+        "{base}/v1/workspaces/{ws_id}/pages/{}/restore",
+        alpha_page_ids[2]
+    ))
+    .bearer_auth(&cred_owner)
+    .json(&json!({ "idempotencyKey": "rest_pg2" }))
+    .send()
+    .await
+    .unwrap();
+    let after_pg_rest: Value = http
+        .get(format!(
+            "{base}/v1/workspaces/{ws_id}/projects/{prj1_id}?limit=10"
+        ))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after_pg_rest["project"]["activePageCount"], 3);
+    assert_eq!(after_pg_rest["pages"].as_array().unwrap().len(), 3);
+
+    // 7. Activity contains projectId/projectName/pageId/pageTitle AND schema_version stays 3:
+    let activity: Value = http
+        .get(format!("{base}/v1/workspaces/{ws_id}/activity?limit=50"))
+        .bearer_auth(&cred_viewer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(activity["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["action"] == "project_page_attached"
+            && a["projectId"] == prj1_id
+            && a["pageId"] == alpha_page_ids[0]));
+    assert!(activity["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["action"] == "project_restored" && a["projectId"] == prj1_id));
+    assert_eq!(shared.schema_version().unwrap(), 3);
 
     stop.send(()).unwrap();
 }

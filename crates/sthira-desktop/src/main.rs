@@ -30,6 +30,13 @@ fn resolve_vault_path() -> PathBuf {
 }
 
 fn main() {
+    if let Some(result) = sthira_desktop::agent_connections::run_if_requested() {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let vault_path = resolve_vault_path();
     let _ = std::fs::create_dir_all(&vault_path);
     let db_path = vault_path.join("sthira.db");

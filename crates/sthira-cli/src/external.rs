@@ -203,7 +203,7 @@ pub async fn dispatch(args: &[String]) -> Result<bool> {
             let failed=response["isError"]==true;print(response)?;
             if failed{return Err(invalid("Workspace tool failed; see the JSON result."));}
         },
-        "mcp"=>{if !rest.is_empty(){return Err(invalid("Usage: mcp (credentials from STHIRA_ACCESS_TOKEN)"));}let auth=token()?;engine.external_status(&auth)?;serve(&engine,&auth,io::stdin().lock(),io::stdout().lock())?;},
+        "mcp"=>{if !rest.is_empty(){return Err(invalid("Usage: mcp (credentials from STHIRA_ACCESS_TOKEN)"));}let auth=token()?;engine.external_status(&auth)?;serve(&engine,&auth,io::stdin().lock(),io::stdout().lock(), || {})?;},
         "migration"=>{
             use sthira_core::migration::ImportDraft;
             match rest.first().map(String::as_str){
@@ -280,14 +280,16 @@ fn frame(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
         }
     }
 }
-fn serve(
+pub fn serve(
     engine: &Engine,
     token: &str,
     mut reader: impl BufRead,
     mut writer: impl Write,
+    mut on_client_ready: impl FnMut(),
 ) -> Result<()> {
     let mut initialized = false;
     let mut ready = false;
+    let mut reported = false;
     loop {
         let bytes = match frame(&mut reader) {
             Ok(Some(v)) => v,
@@ -403,6 +405,15 @@ fn serve(
         };
         writeln!(writer, "{response}")?;
         writer.flush()?;
+        if !reported
+            && matches!(method, "tools/list" | "tools/call")
+            && response
+                .get("result")
+                .is_some_and(|result| result["isError"] != true)
+        {
+            on_client_ready();
+            reported = true;
+        }
     }
     Ok(())
 }

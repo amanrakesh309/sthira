@@ -58,6 +58,11 @@ interface SharedPagesPanelProps {
   authorDisplayName?: string;
   refreshSignal: number;
   pendingOpenRequest?: { pageId?: string | null; proposalId?: string | null; mode?: 'newPage' | 'publishCopy' } | null;
+  originProjectContext?: {
+    projectId: string;
+    projectName: string;
+    onBackToProject: () => void;
+  } | null;
   onConsumedOpenRequest?: () => void;
   registerBeforeLeave?: (guard: (() => Promise<boolean>) | null) => void;
   onAccessLost: (message: string, workspaces?: WorkspaceListResponse | null) => void;
@@ -84,6 +89,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   authorDisplayName,
   refreshSignal,
   pendingOpenRequest,
+  originProjectContext = null,
   onConsumedOpenRequest,
   registerBeforeLeave,
   onAccessLost,
@@ -231,6 +237,9 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   draftModeRef.current = draftMode;
   const prevRefreshSignalRef = useRef(refreshSignal);
 
+  const originProjectRef = useRef(originProjectContext);
+  originProjectRef.current = originProjectContext;
+
   useEffect(() => {
     setSelectedPage(null);
     setSelectedProposal(null);
@@ -239,7 +248,9 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
     setShowHistory(false);
     setPanelNotice('');
     setPanelError('');
-    void loadPagesList(includeArchived, null);
+    if (!originProjectRef.current) {
+      void loadPagesList(includeArchived, null);
+    }
   }, [includeArchived, loadPagesList, workspaceId]);
 
   useEffect(() => {
@@ -250,7 +261,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
       void openProposalById(selectedProposalRef.current.proposal.proposalId);
     } else if (selectedPageRef.current) {
       void openPageById(selectedPageRef.current.page.pageId);
-    } else {
+    } else if (!originProjectRef.current) {
       void loadPagesList(includeArchived, null);
     }
   }, [includeArchived, loadPagesList, openPageById, openProposalById, refreshSignal]);
@@ -638,12 +649,20 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
               setInspectedRevision(null);
               setShowHistory(false);
               setPanelError('');
-              void loadPagesList(includeArchived, null);
+              if (originProjectContext) {
+                originProjectContext.onBackToProject();
+              } else {
+                void loadPagesList(includeArchived, null);
+              }
             }}
             className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Pages</span>
+            <span>
+              {originProjectContext
+                ? `Back to ${originProjectContext.projectName}`
+                : 'Back to Pages'}
+            </span>
           </button>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -955,6 +974,30 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
     );
   }
 
+  if (originProjectContext) {
+    return (
+      <div className="space-y-4">
+        <button
+          type="button"
+          onClick={() => originProjectContext.onBackToProject()}
+          className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to {originProjectContext.projectName}</span>
+        </button>
+        {panelError ? (
+          <p role="alert" className="rounded-xl border border-sthira-border bg-sthira-surface-muted px-4 py-2.5 text-xs text-sthira-danger">
+            {panelError}
+          </p>
+        ) : (
+          <p role="status" className="text-xs text-sthira-text-muted py-3">
+            Loading shared page…
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1097,6 +1140,7 @@ interface SharedActivityFeedProps {
   workspaceId: string;
   refreshSignal: number;
   onOpenPage: (pageId: string, proposalId?: string | null) => void;
+  onOpenProject?: (projectId: string, pageId?: string | null, proposalId?: string | null) => void;
   onAccessLost: (message: string, workspaces?: WorkspaceListResponse | null) => void;
   onSessionChange: (session: GoogleSession) => void;
 }
@@ -1105,6 +1149,7 @@ export const SharedActivityFeed: React.FC<SharedActivityFeedProps> = ({
   workspaceId,
   refreshSignal,
   onOpenPage,
+  onOpenProject,
   onAccessLost,
   onSessionChange,
 }) => {
@@ -1195,15 +1240,32 @@ export const SharedActivityFeed: React.FC<SharedActivityFeedProps> = ({
                   {item.actorDisplayName} · {formatDateTime(item.createdAtMs)}
                 </p>
               </div>
-              {item.pageId && (
-                <button
-                  type="button"
-                  onClick={() => onOpenPage(item.pageId!, item.proposalId)}
-                  className="sthira-button-secondary cursor-pointer"
-                >
-                  {item.proposalId ? 'Open proposal' : 'Open page'}
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {item.pageId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.projectId && onOpenProject) {
+                        onOpenProject(item.projectId, item.pageId, item.proposalId);
+                      } else {
+                        onOpenPage(item.pageId!, item.proposalId);
+                      }
+                    }}
+                    className="sthira-button-secondary cursor-pointer"
+                  >
+                    {item.proposalId ? 'Open proposal' : 'Open page'}
+                  </button>
+                )}
+                {item.projectId && onOpenProject && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProject(item.projectId!)}
+                    className="sthira-button-secondary cursor-pointer"
+                  >
+                    Open project
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>

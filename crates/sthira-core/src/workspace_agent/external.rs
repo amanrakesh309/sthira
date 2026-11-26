@@ -210,6 +210,19 @@ impl Engine {
         tx.commit()?;
         Ok((result, token))
     }
+    /// Look up one connection for the local owner.
+    pub fn get_external_connection(
+        &self,
+        id: &str,
+    ) -> Result<Option<ExternalConnection>, CoreError> {
+        let conn = self.db().reader()?;
+        let exists = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_connections WHERE id=?1)",
+            [id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        exists.then(|| connection(&conn, id)).transpose()
+    }
     pub fn list_external_connections(&self) -> Result<Vec<ExternalConnection>, CoreError> {
         let conn = self.db().reader()?;
         let mut stmt = conn
