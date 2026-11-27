@@ -13,6 +13,7 @@ name = "sthira-desktop"
 path = "src/main.rs"
 
 [dependencies]
+sthira-backup-format = { path = "../sthira-backup-format" }
 sthira-core = { workspace = true }
 sthira-cli = { path = "../sthira-cli" }
 serde = { workspace = true }
@@ -39,3 +40,6 @@ tauri-build = { version = "2.2", features = [] }
 sthira-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"

@@ -127,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &membership,
             )?);
             state = state
+                .with_backup_store(shared.clone())
                 .with_shared_agent_store(shared.clone())
                 .with_shared_content_store(shared);
         }

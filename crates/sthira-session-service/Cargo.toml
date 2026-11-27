@@ -13,6 +13,7 @@ name = "sthira-session-service"
 path = "src/main.rs"
 
 [dependencies]
+sthira-backup-format = { path = "../sthira-backup-format" }
 async-trait = { workspace = true }
 base64 = "0.22"
 futures-util = "0.3"

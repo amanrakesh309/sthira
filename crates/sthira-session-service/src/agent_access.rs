@@ -2882,7 +2882,11 @@ fn edit_proposal_view(
         updated_at_ms: raw.updated_at_ms,
         reviewed_at_ms: raw.reviewed_at_ms,
         reviewer_display_name: raw.reviewer_display_name,
-        reviewer_note: tx.query_row("SELECT note FROM shared_proposal_decisions WHERE workspace_id=?1 AND proposal_id=?2 ORDER BY created_at_ms DESC, decision_id DESC LIMIT 1", params![workspace_id, proposal_id], |r|r.get::<_,Option<String>>(0)).optional()?.flatten(),
+        reviewer_note: if raw.reviewed_at_ms.is_some() {
+            tx.query_row("SELECT note FROM shared_proposal_decisions WHERE workspace_id=?1 AND proposal_id=?2 AND action IN ('applied','changes_requested','rejected') ORDER BY decision_seq DESC LIMIT 1", params![workspace_id, proposal_id], |r|r.get::<_,Option<String>>(0)).optional()?.flatten()
+        } else {
+            None
+        },
     })
 }
 

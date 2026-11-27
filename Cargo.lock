@@ -3948,6 +3948,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
+name = "sthira-backup-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "sthira-cli"
 version = "0.1.0"
 dependencies = [
@@ -3995,6 +4004,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures-util",
+ "gtk",
  "keyring",
  "reqwest 0.12.28",
  "rusqlite",
@@ -4002,6 +4012,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sthira-backup-format",
  "sthira-cli",
  "sthira-core",
  "sthira-testkit",
@@ -4030,6 +4041,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sthira-backup-format",
  "subtle",
  "tempfile",
  "thiserror 2.0.21",

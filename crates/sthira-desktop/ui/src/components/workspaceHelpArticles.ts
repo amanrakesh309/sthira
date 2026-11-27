@@ -1,3 +1,4 @@
+import teamRecoveryGuide from '../../../../../docs/features/shared-workspace-backups.md?raw';
 import helpGuide from '../../../../../docs/features/workspace-help.md?raw';
 import memoryGuide from '../../../../../docs/features/shared-memory.md?raw';
 import migrationGuide from '../../../../../docs/features/migration.md?raw';
@@ -29,6 +30,7 @@ export const helpArticles = {
   models: article('Set up models and search', helpGuide, { destination: 'models', label: 'Open AI & Models' }),
   import: article('Supported import formats', migrationGuide, { destination: 'vault', label: 'Open Workspace & Data' }, ['Source preparation', 'Receipts, conflicts and recovery']),
   backup: article('Back up and recover your vault'),
+  teamRecovery: article('Team backup and recovery', teamRecoveryGuide, undefined, ['Restore into an empty workspace', 'Included content and attribution', 'Excluded data and limits']),
   troubleshooting: article('Troubleshoot setup and failed runs', helpGuide, { destination: 'workflows', label: 'Open Workflows' }),
   privacy: article('Privacy, scope, and sharing'),
   glossary: article('Glossary'),
@@ -54,6 +56,7 @@ const articleSources: Record<string, HelpArticleId> = {
   'migration.md': 'import',
   'cli-and-mcp.md': 'cli',
   'document-tabs.md': 'pages',
+  'shared-workspace-backups.md': 'teamRecovery',
 };
 
 export function getLinkedHelpArticle(href: string | undefined): HelpArticleId | undefined {

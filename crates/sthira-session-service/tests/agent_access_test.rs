@@ -516,6 +516,19 @@ async fn edit_proposals_require_suggest_independent_review_and_apply_once() {
     assert_eq!(proposal["connectionId"], connection);
     assert_eq!(proposal["sources"].as_array().unwrap().len(), 1);
     assert_eq!(proposal["sources"][0]["revisionNumber"], 1);
+    assert!(
+        proposal["reviewerNote"].is_null(),
+        "Submission summaries are not reviewer feedback."
+    );
+    // Fixed fixture clock: make the submission UUID sort after the later review to catch
+    // a timestamp/UUID query that can otherwise randomly display the submitter's summary.
+    rusqlite::Connection::open(harness._membership_db.path().join("m.db"))
+        .unwrap()
+        .execute(
+            "UPDATE shared_proposal_decisions SET decision_id='zz_submission' WHERE proposal_id=?1",
+            [proposal["proposalId"].as_str().unwrap()],
+        )
+        .unwrap();
 
     // Published content is unchanged until a different reviewer applies it.
     let page_view: Value = http
@@ -1284,7 +1297,7 @@ fn signed_off_cw3_schema_upgrades_additively_and_preserves_shared_content() {
     {
         let mem = SqliteWorkspaceMembershipStore::open(&path).unwrap();
         let shared = SqliteSharedContentStore::enable_on_membership_store(&mem).unwrap();
-        assert_eq!(shared.schema_version().unwrap(), 5);
+        assert_eq!(shared.schema_version().unwrap(), 6);
     }
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
@@ -1338,7 +1351,7 @@ fn signed_off_cw3_schema_upgrades_additively_and_preserves_shared_content() {
 
     let mem = SqliteWorkspaceMembershipStore::open(&path).unwrap();
     let shared = SqliteSharedContentStore::enable_on_membership_store(&mem).unwrap();
-    assert_eq!(shared.schema_version().unwrap(), 5);
+    assert_eq!(shared.schema_version().unwrap(), 6);
     let caller = VerifiedSession {
         session_id: "s1".into(),
         uid: "uid-a".into(),

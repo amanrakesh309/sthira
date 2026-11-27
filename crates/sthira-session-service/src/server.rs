@@ -3,6 +3,7 @@ use crate::{
         AgentEditProposalInput, AgentNewPageProposalInput, CreateAgentConnectionInput,
         ReviewAgentProposalInput, SharedAgentAccessStore, UpdateAgentConnectionInput,
     },
+    backups::{Checks as BackupChecks, WorkspaceBackupStore},
     membership::{
         MembershipError, SessionRecheck, WorkspaceMembershipStore, WorkspaceRole,
         DEFAULT_INVITE_TTL_MS,
@@ -39,6 +40,7 @@ pub struct SessionServiceState {
     membership_store: Option<Arc<dyn WorkspaceMembershipStore>>,
     shared_content_store: Option<Arc<dyn SharedContentStore>>,
     shared_agent_store: Option<Arc<dyn SharedAgentAccessStore>>,
+    backup_store: Option<Arc<dyn WorkspaceBackupStore>>,
     pub realtime_hub: Arc<RealtimeHub>,
     pub verifier: Arc<dyn IdentityVerifier>,
     pub challenge_ttl_ms: i64,
@@ -54,6 +56,7 @@ impl SessionServiceState {
             membership_store: None,
             shared_content_store: None,
             shared_agent_store: None,
+            backup_store: None,
             realtime_hub: Arc::new(RealtimeHub::new()),
             verifier,
             challenge_ttl_ms: DEFAULT_CHALLENGE_TTL_MS,
@@ -96,6 +99,11 @@ impl SessionServiceState {
         shared_agent_store: Arc<dyn SharedAgentAccessStore>,
     ) -> Self {
         self.shared_agent_store = Some(shared_agent_store);
+        self
+    }
+
+    pub fn with_backup_store(mut self, store: Arc<dyn WorkspaceBackupStore>) -> Self {
+        self.backup_store = Some(store);
         self
     }
 
@@ -216,7 +224,10 @@ struct ParsedHttpRequest {
     body: Vec<u8>,
 }
 
-async fn read_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, (u16, &'static str)> {
+async fn read_request(
+    stream: &mut TcpStream,
+    state: &SessionServiceState,
+) -> Result<ParsedHttpRequest, (u16, &'static str)> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     let line_read = timeout(
@@ -271,9 +282,6 @@ async fn read_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, (u16,
                 content_length = val
                     .parse::<usize>()
                     .map_err(|_| (400, "Invalid Content-Length"))?;
-                if content_length > MAX_BODY_BYTES {
-                    return Err((413, "Request payload too large"));
-                }
             } else if name_lower == "authorization" {
                 if let Some((scheme, token)) = val.split_once(' ') {
                     if scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty() {
@@ -284,6 +292,40 @@ async fn read_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, (u16,
         }
     }
 
+    if content_length > MAX_BODY_BYTES {
+        let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+        if method != "POST"
+            || parts.len() != 5
+            || parts[0..2] != ["v1", "workspaces"]
+            || parts[3..] != ["backup-restore", "preview"]
+            || content_length > sthira_backup_format::MAX_BYTES
+        {
+            return Err((413, "Request payload too large"));
+        }
+        let caller = state
+            .store
+            .verify_session(
+                auth_bearer.as_deref().ok_or((401, "invalid_session"))?,
+                (state.clock)(),
+            )
+            .map_err(|error| match error {
+                StoreError::SessionRevoked => (401, "session_revoked"),
+                StoreError::SessionExpired => (401, "session_expired"),
+                StoreError::SessionInvalid => (401, "invalid_session"),
+                _ => (
+                    503,
+                    "Session verification is unavailable. Retry verification.",
+                ),
+            })?;
+        let member = state
+            .membership_store()
+            .ok_or((404, "Workspaces unavailable"))?
+            .get_workspace_details(&caller, parts[2], (state.clock)())
+            .map_err(|_| (403, "Workspace access required"))?;
+        if !member.workspace.my_role.can_moderate_or_review() {
+            return Err((403, "Owner or Admin required"));
+        }
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         timeout(Duration::from_secs(10), reader.read_exact(&mut body))
@@ -312,8 +354,15 @@ async fn handle_connection(
             return Ok(());
         }
     }
-    let (status, json_body) = match read_request(&mut stream).await {
+    let (status, json_body) = match read_request(&mut stream, &state).await {
         Ok(req) => route(req, &state).await,
+        Err((401, code @ ("session_revoked" | "session_expired" | "invalid_session"))) => {
+            json_error(
+                401,
+                code,
+                "This device session is no longer valid. Sign in again.",
+            )
+        }
         Err((code, msg)) => json_error(code, "bad_request", msg),
     };
     let status_text = match status {
@@ -931,6 +980,100 @@ fn route_workspace_subpath(
             &req.body,
             now_ms,
         ),
+        (
+            method,
+            subpath @ (["backups"]
+            | ["backups", _]
+            | ["backup-restore", "preview"]
+            | ["backup-restore", "commit"]
+            | ["restoration"]
+            | ["restoration", "history"]),
+        ) => {
+            let Some(store) = state.backup_store.as_deref() else {
+                return json_error(404, "not_enabled", "Workspace recovery is not enabled.");
+            };
+            let checks = BackupChecks {
+                session: &recheck,
+                clock: &*state.clock,
+            };
+            // Authorize before interpreting archive content, including requests below the upload cap.
+            let details =
+                match membership_store.get_workspace_details(&caller, workspace_id, now_ms) {
+                    Ok(d) => d,
+                    Err(e) => return membership_error(e),
+                };
+            if subpath[0] != "restoration" && !details.workspace.my_role.can_moderate_or_review() {
+                return shared_content_error(SharedContentError::Forbidden);
+            }
+            let result: Result<serde_json::Value, SharedContentError> = (|| {
+                Ok(match (method, subpath) {
+                    ("GET", ["backups"]) => {
+                        serde_json::to_value(store.list_backups(&caller, checks, workspace_id)?)
+                            .unwrap()
+                    }
+                    ("POST", ["backups"]) => {
+                        let payload: IdempotencyOnlyRequest = serde_json::from_slice(&req.body)
+                            .map_err(|_| {
+                                SharedContentError::InvalidInput("Invalid backup request.".into())
+                            })?;
+                        serde_json::to_value(store.create_backup(
+                            &caller,
+                            checks,
+                            workspace_id,
+                            &payload.idempotency_key,
+                        )?)
+                        .unwrap()
+                    }
+                    ("GET", ["backups", id]) => {
+                        serde_json::to_value(store.get_backup(&caller, checks, workspace_id, id)?)
+                            .unwrap()
+                    }
+                    ("DELETE", ["backups", id]) => {
+                        store.remove_backup(&caller, checks, workspace_id, id)?;
+                        serde_json::json!({"removed":true})
+                    }
+                    ("POST", ["backup-restore", "preview"]) => {
+                        let bundle = sthira_backup_format::Bundle::parse(&req.body)
+                            .map_err(SharedContentError::InvalidInput)?;
+                        serde_json::to_value(store.preview_restore(
+                            &caller,
+                            checks,
+                            workspace_id,
+                            bundle,
+                        )?)
+                        .unwrap()
+                    }
+                    ("POST", ["backup-restore", "commit"]) => {
+                        #[derive(Deserialize)]
+                        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                        struct Commit {
+                            ticket_id: String,
+                        }
+                        let input: Commit = serde_json::from_slice(&req.body).map_err(|_| {
+                            SharedContentError::InvalidInput("Invalid restore request.".into())
+                        })?;
+                        serde_json::to_value(store.commit_restore(
+                            &caller,
+                            checks,
+                            workspace_id,
+                            &input.ticket_id,
+                        )?)
+                        .unwrap()
+                    }
+                    ("GET", ["restoration"]) => {
+                        store.recovery(&caller, checks, workspace_id, false)?
+                    }
+                    ("GET", ["restoration", "history"]) => {
+                        store.recovery(&caller, checks, workspace_id, true)?
+                    }
+                    _ => return Err(SharedContentError::BackupNotFound),
+                })
+            })();
+            match result {
+                Ok(value) => json_ok(&value),
+                Err(e) => shared_content_error(e),
+            }
+        }
         (method, subpath) => route_shared_content(
             state,
             &caller,
@@ -1839,6 +1982,9 @@ fn route_shared_content(
 
 fn shared_content_error(err: SharedContentError) -> (u16, String) {
     match err {
+        SharedContentError::BackupNotFound => json_error(404, "backup_not_found", "Backup or recovery preview was not found."),
+        SharedContentError::BackupConflict(message) => json_error(409, "backup_conflict", &message),
+        SharedContentError::BackupExpired => json_error(409, "backup_preview_expired", "The recovery preview expired. Preview the backup again."),
         SharedContentError::InvalidInput(msg) => json_error(400, "invalid_input", &msg),
         SharedContentError::ContentTooLarge(msg) => json_error(413, "content_too_large", &msg),
         SharedContentError::InvalidCursor => {

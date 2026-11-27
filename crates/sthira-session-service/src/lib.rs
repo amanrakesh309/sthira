@@ -1,4 +1,5 @@
 pub mod agent_access;
+pub mod backups;
 pub mod crdt;
 pub mod membership;
 pub mod realtime;

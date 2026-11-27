@@ -796,6 +796,12 @@ pub enum SharedContentError {
     AgentStaleBasis(String),
     #[error("Agent proposal was not found.")]
     AgentProposalNotFound,
+    #[error("Backup or recovery preview was not found.")]
+    BackupNotFound,
+    #[error("{0}")]
+    BackupConflict(String),
+    #[error("The recovery preview expired. Preview the backup again.")]
+    BackupExpired,
     #[error("Shared content storage unavailable.")]
     Storage(#[from] rusqlite::Error),
 }
@@ -1218,6 +1224,7 @@ impl SqliteSharedContentStore {
             migrate_v3(&guard)?;
             migrate_v4(&guard)?;
             crate::agent_access::migrate_v5(&guard)?;
+            crate::backups::migrate(&guard)?;
         }
         Ok(Self { conn })
     }
@@ -5914,7 +5921,7 @@ fn markdown_nodes(root: &markdown::mdast::Node) -> impl Iterator<Item = &markdow
     })
 }
 
-fn validate_shared_markdown(md: &str) -> Result<(), SharedContentError> {
+pub(crate) fn validate_shared_markdown(md: &str) -> Result<(), SharedContentError> {
     use markdown::mdast::Node;
     use std::collections::HashMap;
 
@@ -6034,7 +6041,7 @@ fn sanitize_omitted_summary(items: &[String]) -> Result<Vec<String>, SharedConte
     Ok(out)
 }
 
-fn sanitize_comment_body(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_comment_body(raw: &str) -> Result<String, SharedContentError> {
     let normalized = raw.replace("\r\n", "\n");
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
@@ -6221,7 +6228,7 @@ pub(crate) fn insert_activity_with_project(
     Ok(())
 }
 
-fn sanitize_project_name(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_project_name(raw: &str) -> Result<String, SharedContentError> {
     let cleaned: String = raw
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -6247,7 +6254,7 @@ fn sanitize_project_name(raw: &str) -> Result<String, SharedContentError> {
     Ok(cleaned)
 }
 
-fn sanitize_project_purpose(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_project_purpose(raw: &str) -> Result<String, SharedContentError> {
     let normalized = raw.replace("\r\n", "\n");
     let cleaned = normalized.trim();
     if cleaned.chars().count() > MAX_PROJECT_PURPOSE_LEN {

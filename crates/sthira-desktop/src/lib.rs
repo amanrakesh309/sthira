@@ -19,6 +19,7 @@ pub mod shared_memory;
 pub mod state;
 pub mod workflow_settings;
 pub mod workspace_agent;
+mod workspace_backups;
 pub mod workspace_session;
 mod workspaces;
 
@@ -65,6 +66,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
         cmd_register_close_guard,
         cmd_confirm_window_close,
         shared_agents::cmd_shared_agents,
+        workspace_backups::cmd_workspace_backups,
         agent_connections::cmd_get_agent_connections,
         agent_connections::cmd_connect_agent,
         agent_connections::cmd_get_agent_connection_config,

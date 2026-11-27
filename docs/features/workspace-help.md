@@ -81,6 +81,8 @@ On a standard desktop setup, the vault lives at `~/.sthira/vault`. If the app wa
 
 To check a backup, open a copy in a separate vault using `STHIRA_VAULT_DIR`. Check pages, projects, and memory before replacing any active data. Keep the original backup intact. In **Workspace & Data**, review the confirmation before using Reset Vault.
 
+For a team workspace, use **Recovery → Create backup → Export backup**. Keep the exported file away from the service storage. To recover, select an empty team workspace, choose the file, inspect its preview, and explicitly confirm **Restore workspace**. Current target members keep their roles; credentials and invitations are excluded. Imported decisions and acknowledged drafts are read-only source records. See [Shared workspace backup and recovery](shared-workspace-backups.md).
+
 ## Troubleshoot setup and failed runs
 
 - **A workflow is disabled.** Open Workflows, enable it, and assign an enabled model.
@@ -118,6 +120,10 @@ Use the sidebar workspace switcher to move between **Personal** and any team wor
 - **Comments & activity:** Owners, Admins, and Editors can start page-level comment threads (recorded with the revision open at the time), reply, and resolve or reopen their own threads; Owners and Admins can moderate any thread. **Activity** shows recent shared-page, comment, review, and project discussion events and updates live over the workspace channel.
 - **Proposing edits & independent review:** Edits go through **Submit for review** (from **Edit together**) or **Propose edit** → **Change review**. Publishing requires independent approval (**Owner** or **Admin** other than the submitter or any draft contributor) of the exact submitted checkpoint. **Request changes** reopens the shared draft for further edits; **Apply change** creates one attributed published revision. If the page moved to a newer revision first, the proposal marks itself stale so you can explicitly **Rebase & revise**. Owners and Admins can archive or restore shared pages.
 - **Offline drafts & privacy.** Team reads and writes require an active workspace connection. Unsent drafts are stored outside your Personal vault, scoped to your account, workspace, and draft. Signing out clears regular shared-page drafts and keeps live-edit recovery for the same account after sign-in. Workspace removal or device revocation clears the affected local drafts when detected.
+
+### Team backup and recovery
+
+Owners and Admins use **Recovery** to save/export snapshots and preview a file for an empty target workspace. Current workspace members can inspect restored history. Exported files are unencrypted team content; keep a separate safe copy. Restore preserves target roles and never reactivates imported approvals or agent access. Saved draft text can be copied into a fresh proposal for independent review.
 
 ### Shared project grouping & discussions
 

@@ -429,6 +429,8 @@ The current implementation stores provider/search credentials in the local datab
 2. Copy the **whole vault directory** and, if needed, its sibling `.sthira_meta` directory to your backup destination. Copying only `.md` files omits relationships, history, and settings. For a live-database backup, use a SQLite-aware backup method rather than copying only the main database file.
 3. Restore into a separate directory and launch with `STHIRA_VAULT_DIR` pointing to its vault root. Verify it before replacing your usual copy.
 
+For team content on Linux, open **Recovery** in a shared workspace. Owners/Admins can save a snapshot, export a private JSON file, and restore it into an explicitly reviewed empty workspace. Current target members keep their roles; historical decisions and acknowledged drafts remain read-only recovery records. Keep the exported file away from the service storage. See [shared workspace backup and recovery](docs/features/shared-workspace-backups.md) for contents, exclusions, and limits. Production shared DB/hosting remain open; live web Research and Inkling 2 Mini remain deferred.
+
 Tab metadata and some panel/theme preferences use WebView-local storage. A vault backup does not guarantee restoration of every UI preference or unsent draft. Text typed immediately before termination, before autosave completes, may be lost. **Reset Vault** in Settings is destructive, not a backup or recovery feature.
 
 ## Import existing knowledge

@@ -6,6 +6,7 @@ members = [
     "crates/sthira-cli",
     "crates/sthira-desktop",
     "crates/sthira-session-service",
+    "crates/sthira-backup-format",
     "xtask",
 ]
 

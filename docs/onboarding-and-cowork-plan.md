@@ -246,6 +246,14 @@ installed external-client versions retain separate acceptance. See the [shared-a
 Production shared database and hosting decisions remain open. Live web Research and Inkling 2 Mini
 remain deferred.
 
+## Shared workspace backup, export and restore
+
+The owner signed off on the local Linux backup and recovery pilot. Sign-off covers the verified local service and native two-account Linux journeys with isolated vaults/keyrings and loopback Google/Firebase identities. Production recovery, live identity acceptance for this slice, and other platforms remain separate checks.
+
+The local service and Linux desktop now provide versioned logical content snapshots, private file export, explicit preview, and atomic restore into an existing empty workspace. The target’s members and roles remain current; historical proposals, decisions and acknowledged live draft text are read-only recovery records. Sessions, credentials, invitations, agent grants and Personal data are excluded. See the [backup contract](features/shared-workspace-backups.md).
+
+Local verification covers service integration and fault injection, mocked UI tests, and native two-account Linux export/file-picker recovery, role isolation, app/service restart, same-profile switching, and restore into a fresh content database. Native identities use loopback Google/Firebase fixtures; live-provider acceptance remains separate. Production disaster recovery, hosting/storage, encryption, scheduling and other platforms remain separate work. The shared database decision remains open; live web Research and Inkling 2 Mini remain deferred.
+
 ## Open decisions for shared-workspace deployment
 
 | Decision | Required outcome |
