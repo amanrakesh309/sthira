@@ -205,7 +205,13 @@ pub(crate) async fn cmd_workspace_backups<R: Runtime>(
             identity(&app,&uid).await?;
             let bundle=read_bundle(&path)?; // Validate the exact allowlisted format before any upload.
             identity(&app,&uid).await?;
-            member(&app,ws,Method::POST,"backup-restore/preview",Some(serde_json::to_value(bundle).map_err(|_|"Invalid backup.")?)).await
+            let legacy = if bundle.version == 1 { input["legacyVisibility"].as_str() } else { None };
+            let payload = if let Some(choice) = legacy {
+                serde_json::json!({"backup": bundle, "legacyVisibility": choice})
+            } else {
+                serde_json::to_value(bundle).map_err(|_|"Invalid backup.")?
+            };
+            member(&app,ws,Method::POST,"backup-restore/preview",Some(payload)).await
         },
         _=>Err("Unknown recovery action.".into())
     }
@@ -229,6 +235,7 @@ mod tests {
                 })
                 .collect(),
             history: vec![],
+            access: None,
         })
         .unwrap();
         fs::write(&path, "old destination").unwrap();

@@ -12,7 +12,10 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use sthira_backup_format::{hash, Bundle, HistoricalSet, Payload, Records, Spec, HISTORY, LIVE};
+use sthira_backup_format::{
+    hash, AccessMetadata, Bundle, HistoricalSet, PageAccessRecord, Payload, ProjectAccessRecord,
+    Records, Spec, HISTORY, LIVE,
+};
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, SharedContentError>;
 pub struct Checks<'a> {
@@ -41,6 +44,9 @@ pub struct Preview {
     pub counts: BTreeMap<String, usize>,
     pub expires_at_ms: i64,
     pub member_count: usize,
+    /// True when a version-1 archive requires an explicit access interpretation.
+    pub legacy_access_review_required: bool,
+    pub access_summary: BTreeMap<String, usize>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +94,7 @@ pub trait WorkspaceBackupStore: Send + Sync {
         checks: Checks<'_>,
         ws: &str,
         bundle: Bundle,
+        legacy_visibility: Option<&str>,
     ) -> Result<Preview>;
     fn commit_restore(
         &self,
@@ -336,12 +343,14 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
         {
             history.extend(decode::<Vec<HistoricalSet>>(&raw)?);
         }
-        let bundle = Bundle::new(Payload {
+        let access = read_access_metadata(&tx, ws)?;
+        let bundle = Bundle::new_permission_aware(Payload {
             source_workspace_id: ws.into(),
             source_name: name(&tx, ws)?,
             captured_at_ms: now,
             records,
             history,
+            access: Some(access),
         })
         .map_err(invalid)?;
         let body = encode(&bundle)?;
@@ -424,8 +433,27 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
         checks: Checks<'_>,
         ws: &str,
         bundle: Bundle,
+        legacy_visibility: Option<&str>,
     ) -> Result<Preview> {
         validate_archive(&bundle)?;
+        let legacy_choice = match (bundle.version, legacy_visibility) {
+            (1, Some("workspace")) => Some("workspace"),
+            (1, Some("adminOnly")) => Some("adminOnly"),
+            (1, Some(_)) => {
+                return Err(invalid("Choose workspace visibility or the safe administrator-only default for this legacy archive."))
+            }
+            (1, None) => {
+                return Err(SharedContentError::BackupConflict(
+                    "This version-1 archive has no access metadata. Choose the safe administrator-only default or explicitly opt into workspace visibility before restoring."
+                        .into(),
+                ))
+            }
+            (2, Some(_)) => {
+                return Err(invalid("This permission-aware archive already defines its access interpretation."))
+            }
+            (2, None) => None,
+            _ => return Err(invalid("Unsupported backup version.")),
+        };
         let mut c = self.lock_shared_conn();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         admin(&tx, caller, ws)?;
@@ -441,9 +469,11 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
             counts: bundle.counts(),
             expires_at_ms: now + 15 * 60 * 1000,
             member_count,
+            legacy_access_review_required: bundle.version == 1,
+            access_summary: access_summary(&bundle, legacy_choice),
         };
         tx.execute(
-            "INSERT INTO shared_backup_previews VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO shared_backup_previews VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 preview.ticket_id,
                 ws,
@@ -451,7 +481,8 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
                 caller.session_id,
                 preview.expires_at_ms,
                 fingerprint,
-                encode(&bundle)?
+                encode(&bundle)?,
+                legacy_choice
             ],
         )?;
         (checks.session)()?;
@@ -469,7 +500,7 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         admin(&tx, caller, ws)?;
         if let Some(raw)=tx.query_row("SELECT receipt_json FROM shared_backup_restores WHERE workspace_id=?1 AND ticket_id=?2 AND actor_uid=?3 AND session_id=?4",params![ws,ticket,caller.uid,caller.session_id],|r|r.get::<_,String>(0)).optional()?{(checks.session)()?;return decode(&raw);}
-        let (expiry,fingerprint,raw):(i64,String,String)=tx.query_row("SELECT expires_at_ms,target_fingerprint,bundle_json FROM shared_backup_previews WHERE workspace_id=?1 AND ticket_id=?2 AND actor_uid=?3 AND session_id=?4",params![ws,ticket,caller.uid,caller.session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?.ok_or(SharedContentError::BackupNotFound)?;
+        let (expiry,fingerprint,raw,legacy_choice):(i64,String,String,Option<String>)=tx.query_row("SELECT expires_at_ms,target_fingerprint,bundle_json,legacy_visibility FROM shared_backup_previews WHERE workspace_id=?1 AND ticket_id=?2 AND actor_uid=?3 AND session_id=?4",params![ws,ticket,caller.uid,caller.session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?.ok_or(SharedContentError::BackupNotFound)?;
         if (checks.clock)() >= expiry {
             return Err(SharedContentError::BackupExpired);
         }
@@ -557,6 +588,7 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
             }
         }
         let now = (checks.clock)();
+        apply_restored_access(&tx, ws, &bundle, &mapping, legacy_choice.as_deref(), now)?;
         let receipt = Receipt {
             restore_id: rid,
             workspace_id: ws.into(),
@@ -601,9 +633,20 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
         let mut c = self.lock_shared_conn();
         let tx = c.transaction()?;
         require_active_membership(&tx, ws, &caller.uid)?;
+        let ctx = crate::resource_access::require_caller_access(&tx, ws, &caller.uid)?;
         let row=tx.query_row("SELECT receipt_json,history_json FROM shared_backup_restores WHERE workspace_id=?1",[ws],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional()?;
         let out = if let Some((receipt, raw)) = row {
-            json!({"receipt":decode::<Receipt>(&receipt)?,"history":if history{Some(history_view(decode::<Vec<HistoricalSet>>(&raw)?))}else{None}})
+            let receipt = decode::<Receipt>(&receipt)?;
+            let hist = if history {
+                Some(history_view(decode::<Vec<HistoricalSet>>(&raw)?))
+            } else {
+                None
+            };
+            let mut out = json!({"receipt":receipt,"history":hist});
+            if !ctx.is_privileged() {
+                filter_recovery_for_member(&tx, ws, &ctx, &mut out)?;
+            }
+            out
         } else {
             Value::Null
         };
@@ -614,10 +657,26 @@ impl WorkspaceBackupStore for SqliteSharedContentStore {
 }
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS shared_workspace_backups(backup_id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),actor_uid TEXT NOT NULL,request_key TEXT NOT NULL,created_at_ms INTEGER NOT NULL,summary_json TEXT NOT NULL,bundle_json TEXT NOT NULL,UNIQUE(workspace_id,actor_uid,request_key));
- CREATE TABLE IF NOT EXISTS shared_backup_previews(ticket_id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),actor_uid TEXT NOT NULL,session_id TEXT NOT NULL,expires_at_ms INTEGER NOT NULL,target_fingerprint TEXT NOT NULL,bundle_json TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS shared_backup_previews(ticket_id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),actor_uid TEXT NOT NULL,session_id TEXT NOT NULL,expires_at_ms INTEGER NOT NULL,target_fingerprint TEXT NOT NULL,bundle_json TEXT NOT NULL,legacy_visibility TEXT);
  CREATE TABLE IF NOT EXISTS shared_backup_restores(restore_id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(workspace_id),ticket_id TEXT NOT NULL UNIQUE,actor_uid TEXT NOT NULL,session_id TEXT NOT NULL,receipt_json TEXT NOT NULL,history_json TEXT NOT NULL);")?;
+    let has_legacy = conn
+        .prepare("PRAGMA table_info(shared_backup_previews)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|c| c == "legacy_visibility");
+    if !has_legacy {
+        conn.execute(
+            "ALTER TABLE shared_backup_previews ADD COLUMN legacy_visibility TEXT",
+            [],
+        )?;
+    }
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations VALUES(6,'shared_workspace_backup_v6',?1)",
+        [crate::now_epoch_ms()],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations VALUES(8,'shared_backup_access_v8',?1)",
         [crate::now_epoch_ms()],
     )?;
     Ok(())
@@ -674,6 +733,331 @@ fn validate_archive(bundle: &Bundle) -> Result<()> {
                         }
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_access_metadata(tx: &Transaction<'_>, ws: &str) -> Result<AccessMetadata> {
+    let mut projects = Vec::new();
+    {
+        let mut stmt = tx.prepare(
+            "SELECT project_id, access_mode FROM shared_projects WHERE workspace_id = ?1",
+        )?;
+        let rows = stmt.query_map([ws], |r| {
+            Ok(ProjectAccessRecord {
+                project_id: r.get(0)?,
+                access_mode: r.get(1)?,
+            })
+        })?;
+        for r in rows {
+            projects.push(r?);
+        }
+    }
+    let mut pages = Vec::new();
+    {
+        let mut stmt = tx.prepare(
+            "SELECT page_id, access_mode, access_project_id FROM shared_pages WHERE workspace_id = ?1",
+        )?;
+        let rows = stmt.query_map([ws], |r| {
+            Ok(PageAccessRecord {
+                page_id: r.get(0)?,
+                access_mode: r.get(1)?,
+                access_project_id: r.get(2)?,
+            })
+        })?;
+        for r in rows {
+            pages.push(r?);
+        }
+    }
+    Ok(AccessMetadata { projects, pages })
+}
+
+fn access_summary(bundle: &Bundle, legacy: Option<&str>) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    let Some(access) = bundle.payload.access.as_ref() else {
+        let key = if legacy == Some("workspace") {
+            "workspaceVisible"
+        } else {
+            "administratorOnly"
+        };
+        out.insert(key.into(), bundle.counts().values().copied().sum::<usize>());
+        return out;
+    };
+    for project in &access.projects {
+        let key = if project.access_mode == "restricted" {
+            "restrictedProjects"
+        } else {
+            "workspaceProjects"
+        };
+        *out.entry(key.into()).or_insert(0) += 1;
+    }
+    for page in &access.pages {
+        let key = match page.access_mode.as_str() {
+            "project" => "followingPages",
+            "selected" => "selectedPages",
+            _ => "workspacePages",
+        };
+        *out.entry(key.into()).or_insert(0) += 1;
+    }
+    out
+}
+
+fn apply_restored_access(
+    tx: &Transaction<'_>,
+    ws: &str,
+    bundle: &Bundle,
+    mapping: &BTreeMap<String, String>,
+    legacy: Option<&str>,
+    _now: i64,
+) -> Result<()> {
+    if bundle.version == 1 {
+        if legacy == Some("workspace") {
+            tx.execute(
+                "UPDATE shared_projects SET access_mode = 'workspace', access_version = 2 WHERE workspace_id = ?1",
+                [ws],
+            )?;
+            tx.execute(
+                "UPDATE shared_pages SET access_mode = 'workspace', access_project_id = NULL, access_version = 2 WHERE workspace_id = ?1",
+                [ws],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE shared_projects SET access_mode = 'restricted', access_version = 2 WHERE workspace_id = ?1",
+                [ws],
+            )?;
+            tx.execute(
+                "UPDATE shared_pages SET access_mode = 'selected', access_project_id = NULL, access_version = 2 WHERE workspace_id = ?1",
+                [ws],
+            )?;
+        }
+        return Ok(());
+    }
+    let Some(access) = bundle.payload.access.as_ref() else {
+        return Err(invalid(
+            "A permission-aware archive is missing its access classification.",
+        ));
+    };
+    for project in &access.projects {
+        let Some(id) = mapping.get(&project.project_id) else {
+            continue;
+        };
+        let mode = if project.access_mode == "restricted" {
+            "restricted"
+        } else {
+            "workspace"
+        };
+        tx.execute(
+            "UPDATE shared_projects SET access_mode = ?1, access_version = 2 WHERE workspace_id = ?2 AND project_id = ?3",
+            params![mode, ws, id],
+        )?;
+    }
+    for page in &access.pages {
+        let Some(id) = mapping.get(&page.page_id) else {
+            continue;
+        };
+        let (mode, anchor) = match page.access_mode.as_str() {
+            "project" => {
+                let anchor = page
+                    .access_project_id
+                    .as_ref()
+                    .and_then(|a| mapping.get(a).cloned());
+                let exists = match anchor.as_deref() {
+                    Some(a) => tx
+                        .query_row(
+                            "SELECT 1 FROM shared_projects WHERE workspace_id = ?1 AND project_id = ?2",
+                            params![ws, a],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .optional()?
+                        .is_some(),
+                    None => false,
+                };
+                if exists {
+                    ("project", anchor)
+                } else {
+                    ("selected", None)
+                }
+            }
+            "selected" => ("selected", None),
+            _ => ("workspace", None),
+        };
+        tx.execute(
+            "UPDATE shared_pages SET access_mode = ?1, access_project_id = ?2, access_version = 2 WHERE workspace_id = ?3 AND page_id = ?4",
+            params![mode, anchor, ws, id],
+        )?;
+    }
+    Ok(())
+}
+
+fn filter_recovery_for_member(
+    tx: &Transaction<'_>,
+    ws: &str,
+    ctx: &crate::resource_access::CallerAccess,
+    out: &mut Value,
+) -> Result<()> {
+    let page_readable =
+        |id: &str| -> Result<bool> { crate::resource_access::page_readable(tx, ws, id, ctx) };
+    let project_readable =
+        |id: &str| -> Result<bool> { crate::resource_access::project_readable(tx, ws, id, ctx) };
+    if let Some(receipt) = out.get_mut("receipt") {
+        // Hidden totals are administrator-only; members see no aggregate from restricted history.
+        receipt["counts"] = json!({});
+        if let Some(map) = receipt
+            .get_mut("resourceMap")
+            .and_then(|v| v.as_object_mut())
+        {
+            let mut keep = serde_json::Map::new();
+            for (source, value) in map.iter() {
+                let Some(new_id) = value.as_str() else {
+                    continue;
+                };
+                if page_readable(new_id)? || project_readable(new_id)? {
+                    keep.insert(source.clone(), value.clone());
+                }
+            }
+            *map = keep;
+        }
+    }
+    let Some(history) = out.get_mut("history") else {
+        return Ok(());
+    };
+    let Some(sets) = history.as_array_mut() else {
+        *history = Value::Null;
+        return Ok(());
+    };
+    for set in sets.iter_mut() {
+        let page_map: std::collections::HashMap<String, String> = set
+            .get("pageMap")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|id| (k.clone(), id.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let project_map: std::collections::HashMap<String, String> = set
+            .get("projectMap")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|id| (k.clone(), id.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(pages) = set.get_mut("pageMap").and_then(|v| v.as_object_mut()) {
+            let mut keep = serde_json::Map::new();
+            for (source, value) in pages.iter() {
+                if let Some(new_id) = value.as_str() {
+                    if page_readable(new_id)? {
+                        keep.insert(source.clone(), value.clone());
+                    }
+                }
+            }
+            *pages = keep;
+        }
+        if let Some(projects) = set.get_mut("projectMap").and_then(|v| v.as_object_mut()) {
+            let mut keep = serde_json::Map::new();
+            for (source, value) in projects.iter() {
+                if let Some(new_id) = value.as_str() {
+                    if project_readable(new_id)? {
+                        keep.insert(source.clone(), value.clone());
+                    }
+                }
+            }
+            *projects = keep;
+        }
+        let proposal_sources: std::collections::HashMap<String, Vec<String>> = set
+            .get("records")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|group| group.get("rows").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|row| {
+                let id = row.get("proposal_id")?.as_str()?;
+                let raw = row.get("source_basis_json")?.as_str()?;
+                let basis: Vec<Value> = serde_json::from_str(raw).ok()?;
+                Some((
+                    id.to_owned(),
+                    basis
+                        .iter()
+                        .filter_map(|s| s.get("pageId").and_then(Value::as_str).map(str::to_owned))
+                        .collect(),
+                ))
+            })
+            .collect();
+        if let Some(groups) = set.get_mut("records").and_then(|v| v.as_array_mut()) {
+            for group in groups.iter_mut() {
+                let Some(rows) = group.get_mut("rows").and_then(|v| v.as_array_mut()) else {
+                    continue;
+                };
+                let mut keep = Vec::new();
+                for row in rows.iter() {
+                    let page_id = row.get("page_id").and_then(|v| v.as_str());
+                    let project_id = row.get("project_id").and_then(|v| v.as_str());
+                    let proposal_page: Option<String> =
+                        match row.get("proposal_id").and_then(|v| v.as_str()) {
+                            Some(proposal_id) => tx
+                                .query_row(
+                                    "SELECT page_id FROM shared_change_proposals
+                                  WHERE workspace_id = ?1 AND proposal_id = ?2",
+                                    params![ws, proposal_id],
+                                    |r| r.get::<_, String>(0),
+                                )
+                                .optional()?,
+                            None => None,
+                        };
+                    let allowed = match (page_id, project_id) {
+                        (Some(p), _) => {
+                            let mapped = page_map.get(p).map(String::as_str).unwrap_or(p);
+                            page_readable(mapped)?
+                        }
+                        (None, Some(p)) => {
+                            let mapped = project_map.get(p).map(String::as_str).unwrap_or(p);
+                            project_readable(mapped)?
+                        }
+                        (None, None) => match proposal_page {
+                            Some(p) => {
+                                let mapped = page_map.get(&p).map(String::as_str).unwrap_or(&p);
+                                page_readable(mapped)?
+                            }
+                            None => false,
+                        },
+                    };
+                    let project_allowed = match project_id {
+                        Some(p) => {
+                            project_readable(project_map.get(p).map(String::as_str).unwrap_or(p))?
+                        }
+                        None => true,
+                    };
+                    let mut sources_allowed = true;
+                    let row_sources: Vec<Value> = row
+                        .get("source_basis_json")
+                        .and_then(Value::as_str)
+                        .and_then(|raw| serde_json::from_str(raw).ok())
+                        .unwrap_or_default();
+                    let mut source_ids: Vec<String> = row_sources
+                        .iter()
+                        .filter_map(|s| s.get("pageId").and_then(Value::as_str).map(str::to_owned))
+                        .collect();
+                    if let Some(ids) = row
+                        .get("proposal_id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| proposal_sources.get(id))
+                    {
+                        source_ids.extend(ids.iter().cloned());
+                    }
+                    for id in source_ids {
+                        sources_allowed &=
+                            page_readable(page_map.get(&id).map(String::as_str).unwrap_or(&id))?;
+                    }
+                    if allowed && project_allowed && sources_allowed {
+                        keep.push(row.clone());
+                    }
+                }
+                *rows = keep;
             }
         }
     }

@@ -644,19 +644,36 @@ async fn two_account_content_recovery_history_reopen_and_portable_reexport() {
     let clock = || f.clock.load(Ordering::SeqCst);
     let check = || auth.verify_session(&f.a, clock());
     let caller = check().unwrap();
+    let owner_recovery = content
+        .recovery(
+            &caller,
+            Checks {
+                session: &check,
+                clock: &clock,
+            },
+            &target,
+            true,
+        )
+        .unwrap();
+    // The owner keeps full aggregates; the member's filtered view omits totals while retaining
+    // the authorized draft text and mapped identities.
+    assert!(!owner_recovery["receipt"]["counts"]
+        .as_object()
+        .unwrap()
+        .is_empty());
+    assert_eq!(history["receipt"]["counts"].as_object().unwrap().len(), 0);
     assert_eq!(
-        content
-            .recovery(
-                &caller,
-                Checks {
-                    session: &check,
-                    clock: &clock
-                },
-                &target,
-                true
-            )
-            .unwrap(),
-        history
+        owner_recovery["history"][0]["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["table"] == "shared_live_drafts")
+            .unwrap()["rows"][0]["recovery_content_md"],
+        "# Recovered revision
+
+Reviewed fact.
+
+Acknowledged B recovery text"
     );
 }
 
@@ -841,7 +858,7 @@ async fn corrupt_unknown_and_oversized_files_rejected_without_writes_and_quota_i
             }
         }
     }
-    let unsafe_bundle = sthira_backup_format::Bundle::new(unsafe_payload).unwrap();
+    let unsafe_bundle = sthira_backup_format::Bundle::new_permission_aware(unsafe_payload).unwrap();
     f.req(
         &f.a,
         "POST",
@@ -963,7 +980,7 @@ async fn expiry_and_session_loss_at_commit_roll_back_all_content() {
     f.create_page(&source, "Page", "p").await;
     let bundle = f.bundle(&source).await;
     let target = f.workspace("Clock target", "viewer").await;
-    assert_eq!(f.mem.schema_version().unwrap(), 6);
+    assert_eq!(f.mem.schema_version().unwrap(), 8);
     let auth = SqliteAuthSessionStore::open(f._root.path().join("auth.db")).unwrap();
     let now = f.clock.load(Ordering::SeqCst);
     let caller = auth.verify_session(&f.a, now).unwrap();

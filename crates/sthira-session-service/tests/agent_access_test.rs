@@ -1297,7 +1297,7 @@ fn signed_off_cw3_schema_upgrades_additively_and_preserves_shared_content() {
     {
         let mem = SqliteWorkspaceMembershipStore::open(&path).unwrap();
         let shared = SqliteSharedContentStore::enable_on_membership_store(&mem).unwrap();
-        assert_eq!(shared.schema_version().unwrap(), 6);
+        assert_eq!(shared.schema_version().unwrap(), 8);
     }
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
@@ -1351,7 +1351,7 @@ fn signed_off_cw3_schema_upgrades_additively_and_preserves_shared_content() {
 
     let mem = SqliteWorkspaceMembershipStore::open(&path).unwrap();
     let shared = SqliteSharedContentStore::enable_on_membership_store(&mem).unwrap();
-    assert_eq!(shared.schema_version().unwrap(), 6);
+    assert_eq!(shared.schema_version().unwrap(), 8);
     let caller = VerifiedSession {
         session_id: "s1".into(),
         uid: "uid-a".into(),

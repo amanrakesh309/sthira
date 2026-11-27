@@ -67,3 +67,21 @@ The temporary audit reports and screenshots were removed at the owner's request.
 - Generative/Open UI cards, widget slash insertion, and automatic Markdown-to-widget hydration are deferred; pages and model outputs use ordinary Markdown/rich text, and current generation schemas do not request `page_blocks` UI definitions. Compatibility handling in `append_page_blocks` renders any legacy structured blocks as ordinary readable Markdown while preserving unrecognized fields literally.
 - Previously saved plan/comparison/choice fences stay readable and copyable as ordinary text without bulk migration or opening-time rewrites; malformed, unknown, or future-version fences remain literal, and plain task/list text does not record workspace decisions or execute actions. Refinement and conversation proposals still require explicit review before applying.
 - Markdown image URLs and hyperlinks work in the native rich editor (`5B`, including local fixture HTTP images), and Wave B (`F-B5-011`) added distinct inline internal/external styling and `tabindex="0"` `Enter`/`Space` keyboard activation across `DocumentEditor` and `RichDocumentRenderer` (verified in `document_editor.test.tsx` and native GUI `B-N3`). Binary image clipboard paste, local attachment import/management, offline image caching, and real OS-browser launch verification of external links remain unimplemented/unverified.
+
+- **Human resource permissions (local Linux pilot):** native two-account Linux checks use the
+  standalone Tauri app, a real local session service, isolated vaults/keyrings and loopback
+  OAuth/Firebase identities. Sharing confirmation, role changes, multi-project isolation,
+  live-editor/proposal/agent-source revocation, rejoin, app/service restart, account switching and
+  permission-aware native file export/recovery are exercised. These are local fixture checks;
+  production database/hosting, live identity providers and non-Linux platforms remain open.
+  Local acceptance does not grant owner product sign-off.
+- **Revocation and local copies:** sharing changes clear denied open page/proposal/live-editor
+  content and agent source snapshots; role changes also reauthorize reviews and capabilities.
+  Source-inspector responses from before invalidation cannot reopen a snapshot. This is access
+  enforcement, not remote erasure of copies already read or saved. Previously saved private drafts
+  remain account-scoped. Ordinary draft revocation flushes pending local edits before unmount;
+  native typing with revocation before the autosave debounce verifies retention in the account's
+  private draft file. Revocation during a failed local save remains unverified.
+- **Legacy v1 restore choice:** version-1 archives require an explicit administrator-only or
+  workspace-visible interpretation. An older client that sends a bare v1 bundle receives a
+  review-required conflict rather than an implicit default.

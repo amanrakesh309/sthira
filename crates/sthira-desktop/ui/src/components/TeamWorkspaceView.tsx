@@ -257,7 +257,9 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
 
     const DRAFT_ONLY_EVICT_CODES = new Set([
       'role_downgraded',
+      'role_changed',
       'page_archived',
+      'page_unavailable',
       'live_draft_closed',
       'shared_content_disabled',
       'stale_draft_scope',
@@ -397,6 +399,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
       if (!active || revoked || ev.workspaceId !== workspace.workspaceId) return;
       if (ev.type === 'access_revoked') {
         if (DRAFT_ONLY_EVICT_CODES.has(ev.code)) {
+          setCw2RefreshSignal((n) => n + 1);
           void loadDetails();
           return;
         }
@@ -418,6 +421,9 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           void runCatchup(false);
         }
       } else if (ev.type === 'workspace_event') {
+        if (ev.eventType === 'resource_access_changed') {
+          setCw2RefreshSignal((n) => n + 1);
+        }
         if (catchUpInFlight || needsCatchupRef.current) {
           bufferedEvents.push({ eventSeq: ev.eventSeq });
         } else {

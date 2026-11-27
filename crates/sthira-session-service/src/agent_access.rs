@@ -339,6 +339,8 @@ struct GrantPageRow {
 
 #[derive(Clone, Debug)]
 struct ReadBasisRow {
+    access_version: i64,
+    access_digest: String,
     page_id: String,
     revision_number: i64,
     content_sha256: String,
@@ -347,11 +349,24 @@ struct ReadBasisRow {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSourceBasis {
+    #[serde(default = "initial_access_version")]
+    project_access_version: i64,
+    #[serde(default = "initial_access_version")]
+    access_version: i64,
+    #[serde(default = "legacy_access_digest")]
+    access_digest: String,
     page_id: String,
     revision_number: i64,
     content_sha256: String,
     membership_id: String,
     membership_generation: i64,
+}
+
+fn initial_access_version() -> i64 {
+    1
+}
+fn legacy_access_digest() -> String {
+    sha256_hex("workspace")
 }
 
 /// Persistence contract for scoped shared agent access.
@@ -730,6 +745,21 @@ fn authorize_agent_token(
     }
     require_policy_enabled(tx, &connection.workspace_id)?;
     let member = require_active_membership(tx, &connection.workspace_id, &connection.member_uid)?;
+    let ctx = crate::resource_access::require_caller_access(
+        tx,
+        &connection.workspace_id,
+        &connection.member_uid,
+    )?;
+    if !crate::resource_access::project_readable(
+        tx,
+        &connection.workspace_id,
+        &connection.project_id,
+        &ctx,
+    )? {
+        return Err(SharedContentError::AgentStaleBasis(
+            "The initiating member no longer has access to this project.".into(),
+        ));
+    }
     if connection.permission == AgentPermission::Suggest && !member.role.can_author_shared_content()
     {
         // A role downgrade reduces the effective grant without rewriting the stored grant. Role
@@ -738,6 +768,20 @@ fn authorize_agent_token(
     }
     let project = load_project_summary(tx, &connection.workspace_id, &connection.project_id)?;
     if project.archived_at_ms.is_some() {
+        return Err(SharedContentError::AgentProjectUnavailable);
+    }
+    // A delegated grant is always intersected with the initiating member's current human access.
+    let member_access = crate::resource_access::require_caller_access(
+        tx,
+        &connection.workspace_id,
+        &connection.member_uid,
+    )?;
+    if !crate::resource_access::project_readable(
+        tx,
+        &connection.workspace_id,
+        &connection.project_id,
+        &member_access,
+    )? {
         return Err(SharedContentError::AgentProjectUnavailable);
     }
     tx.execute(
@@ -812,6 +856,19 @@ fn load_grant_page(
     if page.archived_at_ms.is_some() {
         return Err(SharedContentError::AgentPageUnavailable);
     }
+    let member_access = crate::resource_access::require_caller_access(
+        tx,
+        &connection.workspace_id,
+        &connection.member_uid,
+    )?;
+    if !crate::resource_access::page_readable(
+        tx,
+        &connection.workspace_id,
+        page_id,
+        &member_access,
+    )? {
+        return Err(SharedContentError::AgentPageUnavailable);
+    }
     Ok((grant, page))
 }
 
@@ -820,7 +877,7 @@ fn load_read_basis(
     connection: &AgentConnectionRow,
 ) -> Result<Vec<ReadBasisRow>, SharedContentError> {
     let mut stmt = tx.prepare(
-        "SELECT page_id, revision_number, content_sha256 FROM shared_agent_page_reads
+        "SELECT page_id, revision_number, content_sha256, access_version, access_digest FROM shared_agent_page_reads
          WHERE connection_id = ?1 ORDER BY page_id ASC",
     )?;
     let rows = stmt
@@ -829,6 +886,8 @@ fn load_read_basis(
                 page_id: r.get(0)?,
                 revision_number: r.get(1)?,
                 content_sha256: r.get(2)?,
+                access_version: r.get(3)?,
+                access_digest: r.get(4)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -873,7 +932,23 @@ fn snapshot_source_basis(
                 page.title
             )));
         }
+        let (access_version, access_digest) =
+            crate::resource_access::page_access_basis(tx, &connection.workspace_id, &read.page_id)?;
+        if (read.access_version, &read.access_digest) != (access_version, &access_digest) {
+            return Err(SharedContentError::AgentStaleBasis(
+                "A source audience changed after it was read. Read it again before proposing."
+                    .into(),
+            ));
+        }
         basis.push(StoredSourceBasis {
+            project_access_version: crate::resource_access::project_access_row(
+                tx,
+                &connection.workspace_id,
+                &connection.project_id,
+            )?
+            .access_version,
+            access_version,
+            access_digest,
             page_id: read.page_id,
             revision_number: read.revision_number,
             content_sha256: read.content_sha256,
@@ -946,6 +1021,24 @@ fn validate_stored_basis(
         ));
     }
     for source in basis {
+        if crate::resource_access::project_access_row(
+            tx,
+            &connection.workspace_id,
+            &connection.project_id,
+        )?
+        .access_version
+            != source.project_access_version
+        {
+            return Err(SharedContentError::AgentStaleBasis("The project audience changed after this proposal was prepared. Read and propose again.".into()));
+        }
+        let current_access = crate::resource_access::page_access_basis(
+            tx,
+            &connection.workspace_id,
+            &source.page_id,
+        )?;
+        if current_access != (source.access_version, source.access_digest.clone()) {
+            return Err(SharedContentError::AgentStaleBasis("A source audience changed after this proposal was prepared. Read and propose again.".into()));
+        }
         load_grant_page(tx, connection, &source.page_id).map_err(|_| {
             SharedContentError::AgentStaleBasis(
                 "A source is outside the current agent grant.".into(),
@@ -1022,6 +1115,9 @@ fn authorize_proposal_response(
     }
     if let Some(page) = &view.target_page_id {
         load_grant_page(tx, connection, page)?;
+    }
+    if !proposal_readable(tx, &connection.workspace_id, &connection.member_uid, view)? {
+        return Err(SharedContentError::AgentProposalNotFound);
     }
     Ok(())
 }
@@ -1133,6 +1229,21 @@ fn check_proposal_connection(
         )
     })?;
     let member = require_active_membership(tx, &connection.workspace_id, &connection.member_uid)?;
+    let ctx = crate::resource_access::require_caller_access(
+        tx,
+        &connection.workspace_id,
+        &connection.member_uid,
+    )?;
+    if !crate::resource_access::project_readable(
+        tx,
+        &connection.workspace_id,
+        &connection.project_id,
+        &ctx,
+    )? {
+        return Err(SharedContentError::AgentStaleBasis(
+            "The initiating member no longer has access to this project.".into(),
+        ));
+    }
     if connection.permission != AgentPermission::Suggest || !member.role.can_author_shared_content()
     {
         return Err(SharedContentError::AgentStaleBasis(
@@ -1208,9 +1319,17 @@ fn load_connection_pages(
 fn connection_view(
     tx: &Transaction<'_>,
     row: &AgentConnectionRow,
+    viewer_uid: &str,
 ) -> Result<AgentConnectionView, SharedContentError> {
     let project = load_project_summary(tx, &row.workspace_id, &row.project_id)?;
-    let pages = load_connection_pages(tx, &row.connection_id)?;
+    let ctx = crate::resource_access::require_caller_access(tx, &row.workspace_id, viewer_uid)?;
+    crate::resource_access::require_readable_project(tx, &row.workspace_id, &row.project_id, &ctx)?;
+    let mut pages = Vec::new();
+    for page in load_connection_pages(tx, &row.connection_id)? {
+        if crate::resource_access::page_readable(tx, &row.workspace_id, &page.page_id, &ctx)? {
+            pages.push(page);
+        }
+    }
     let (updated_at_ms, last_used_at_ms, revoked_by): (i64, Option<i64>, Option<String>) = tx
         .query_row(
             "SELECT updated_at_ms, last_used_at_ms, revoked_by_display_name
@@ -1406,6 +1525,11 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
         require_policy_enabled(&tx, workspace_id)?;
         let permission = sanitize_permission(input.permission, member.role)?;
+        let ctx = crate::resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        crate::resource_access::require_readable_project(&tx, workspace_id, project_id, &ctx)?;
+        for id in &page_ids {
+            crate::resource_access::require_readable_page(&tx, workspace_id, id, &ctx)?;
+        }
         let grants = validate_pages_for_project(&tx, workspace_id, project_id, &page_ids)?;
 
         let connection_id = format!("agc_{}", Uuid::new_v4().simple());
@@ -1487,7 +1611,7 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             now_ms,
         )?;
         let row = load_connection_row(&tx, workspace_id, &connection_id)?;
-        let view = connection_view(&tx, &row)?;
+        let view = connection_view(&tx, &row, &caller.uid)?;
         let _ = recheck_session()?;
         tx.commit()?;
         Ok(CreatedAgentConnection {
@@ -1523,7 +1647,11 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let mut views = Vec::with_capacity(ids.len());
         for id in ids {
             let row = load_connection_row(&tx, workspace_id, &id)?;
-            views.push(connection_view(&tx, &row)?);
+            let ctx =
+                crate::resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+            if crate::resource_access::project_readable(&tx, workspace_id, &row.project_id, &ctx)? {
+                views.push(connection_view(&tx, &row, &caller.uid)?);
+            }
         }
         tx.commit()?;
         Ok(views)
@@ -1540,7 +1668,7 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
         let row = load_connection_row(&tx, workspace_id, connection_id)?;
         require_connection_manager(caller, &row, member.role, true)?;
-        let view = connection_view(&tx, &row)?;
+        let view = connection_view(&tx, &row, &caller.uid)?;
         tx.commit()?;
         Ok(view)
     }
@@ -1571,6 +1699,11 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             ));
         }
         let permission = sanitize_permission(Some(input.permission), member.role)?;
+        let ctx = crate::resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        crate::resource_access::require_readable_project(&tx, workspace_id, &row.project_id, &ctx)?;
+        for id in &page_ids {
+            crate::resource_access::require_readable_page(&tx, workspace_id, id, &ctx)?;
+        }
         let grants = validate_pages_for_project(&tx, workspace_id, &row.project_id, &page_ids)?;
         let next_generation = row.generation + 1;
         tx.execute(
@@ -1625,7 +1758,7 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             now_ms,
         )?;
         let updated = load_connection_row(&tx, workspace_id, connection_id)?;
-        let view = connection_view(&tx, &updated)?;
+        let view = connection_view(&tx, &updated, &caller.uid)?;
         let _ = recheck_session()?;
         tx.commit()?;
         Ok(view)
@@ -1688,7 +1821,7 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             )?;
         }
         let revoked = load_connection_row(&tx, workspace_id, connection_id)?;
-        let view = connection_view(&tx, &revoked)?;
+        let view = connection_view(&tx, &revoked, &caller.uid)?;
         let _ = recheck_session()?;
         tx.commit()?;
         Ok(view)
@@ -1710,10 +1843,12 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             params![row.workspace_id],
             |r| r.get(0),
         )?;
-        let pages = load_connection_pages(&tx, &row.connection_id)?
-            .into_iter()
-            .filter(|page| page.available)
-            .collect::<Vec<_>>();
+        let mut pages = Vec::new();
+        for page in load_connection_pages(&tx, &row.connection_id)? {
+            if page.available && load_grant_page(&tx, &row, &page.page_id).is_ok() {
+                pages.push(page);
+            }
+        }
         audit(
             &tx,
             &row.workspace_id,
@@ -1771,7 +1906,10 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = authorize_agent_token(&tx, credential, now_ms)?;
         check_binding(&row, check_session)?;
-        let mut stmt = tx.prepare(
+        let ctx =
+            crate::resource_access::require_caller_access(&tx, &row.workspace_id, &row.member_uid)?;
+        let visible = crate::resource_access::page_visible_predicate("s", 6, 7);
+        let mut stmt = tx.prepare(&format!(
             "SELECT s.page_id, s.title, s.current_revision_number, s.updated_at_ms, s.content_md
              FROM shared_agent_connection_pages p
              JOIN shared_project_pages pp
@@ -1785,9 +1923,10 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
                     OR instr(lower(s.content_md), lower(?2)) > 0)
                AND (?3 IS NULL OR s.updated_at_ms < ?3
                     OR (s.updated_at_ms = ?3 AND s.page_id < ?4))
+               AND {visible}
              ORDER BY s.updated_at_ms DESC, s.page_id DESC
-             LIMIT ?5",
-        )?;
+             LIMIT ?5"
+        ))?;
         let rows = stmt
             .query_map(
                 params![
@@ -1795,7 +1934,9 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
                     search,
                     cursor_ts,
                     cursor_id,
-                    (limit + 1) as i64
+                    (limit + 1) as i64,
+                    ctx.membership_id,
+                    crate::resource_access::privileged_flag(&ctx)
                 ],
                 |r| {
                     let content: String = r.get(4)?;
@@ -1854,20 +1995,26 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             page_id,
             page.current_revision_number,
         )?;
+        let (access_version, access_digest) =
+            crate::resource_access::page_access_basis(&tx, &row.workspace_id, page_id)?;
         tx.execute(
             "INSERT INTO shared_agent_page_reads (
-                connection_id, page_id, revision_number, content_sha256, read_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
+                connection_id, page_id, revision_number, content_sha256, read_at_ms, access_version, access_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(connection_id, page_id) DO UPDATE SET
                 revision_number = excluded.revision_number,
                 content_sha256 = excluded.content_sha256,
-                read_at_ms = excluded.read_at_ms",
+                read_at_ms = excluded.read_at_ms,
+                access_version = excluded.access_version,
+                access_digest = excluded.access_digest",
             params![
                 row.connection_id,
                 page_id,
                 revision.revision_number,
                 revision.content_sha256,
-                now_ms
+                now_ms,
+                access_version,
+                access_digest
             ],
         )?;
         audit(
@@ -1973,6 +2120,23 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
             ));
         }
         let basis = snapshot_source_basis(&tx, &row)?;
+        // An edit must not copy a narrower source into a broader existing page.
+        for member in crate::resource_access::list_active_members(&tx, &row.workspace_id)? {
+            let ctx =
+                crate::resource_access::require_caller_access(&tx, &row.workspace_id, &member.uid)?;
+            if crate::resource_access::page_readable(&tx, &row.workspace_id, page_id, &ctx)? {
+                for source in &basis {
+                    if !crate::resource_access::page_readable(
+                        &tx,
+                        &row.workspace_id,
+                        &source.page_id,
+                        &ctx,
+                    )? {
+                        return Err(SharedContentError::AgentStaleBasis("The target page has a wider audience than a source. Review its sharing before proposing this edit.".into()));
+                    }
+                }
+            }
+        }
         if !basis.iter().any(|source| source.page_id == page_id) {
             return Err(SharedContentError::AgentStaleBasis(
                 "Read the complete target page before preparing an edit proposal.".into(),
@@ -1984,15 +2148,18 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
 
         let proposal_id = format!("prp_{}", Uuid::new_v4().simple());
         let decision_id = format!("dec_{}", Uuid::new_v4().simple());
+        let (access_version, access_digest) =
+            crate::resource_access::page_access_basis(&tx, &row.workspace_id, page_id)?;
         tx.execute(
             "INSERT INTO shared_change_proposals (
                 proposal_id, workspace_id, page_id, base_revision_number, base_title,
                 base_content_md, proposed_title, proposed_content_md, summary, author_uid,
                 author_display_name, status, submission_count, created_at_ms, updated_at_ms,
                 agent_connection_id, agent_label, agent_model_label, agent_provider_label,
-                agent_model_trust, source_basis_json, agent_grant_generation
+                agent_model_trust, source_basis_json, agent_grant_generation,
+                page_access_version, page_access_digest
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12,
-                       ?13, ?14, ?15, ?16, 'declared_unverified', ?17, ?18)",
+                       ?13, ?14, ?15, ?16, 'declared_unverified', ?17, ?18, ?19, ?20)",
             params![
                 proposal_id,
                 row.workspace_id,
@@ -2012,6 +2179,8 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
                 provider_label,
                 basis_json,
                 row.generation,
+                access_version,
+                access_digest,
             ],
         )?;
         tx.execute(
@@ -2317,6 +2486,9 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let mut views = Vec::with_capacity(ids.len());
         for id in ids {
             let mut view = load_proposal_view_any(&tx, workspace_id, &id)?;
+            if !proposal_readable(&tx, workspace_id, &caller.uid, &view)? {
+                continue;
+            }
             check_review_connection(&tx, &mut view, check_agent_session)?;
             set_review_eligibility(&mut view, caller, member.role);
             views.push(view);
@@ -2341,6 +2513,9 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
         let mut view = load_proposal_view_any(&tx, workspace_id, proposal_id)?;
+        if !proposal_readable(&tx, workspace_id, &caller.uid, &view)? {
+            return Err(SharedContentError::AgentProposalNotFound);
+        }
         check_review_connection(&tx, &mut view, check_agent_session)?;
         set_review_eligibility(&mut view, caller, member.role);
         tx.commit()?;
@@ -2490,9 +2665,10 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
                     entry_mode, origin_kind, original_author_label, ai_model_label, source_note,
                     omitted_summary_json, publisher_uid, publisher_display_name,
                     last_editor_uid, last_editor_display_name, last_reviewer_uid,
-                    last_reviewer_display_name, created_at_ms, updated_at_ms
+                    last_reviewer_display_name, created_at_ms, updated_at_ms,
+                    access_mode
                  ) VALUES (?1, ?2, ?3, ?4, 1, 'new', 'ai_assisted', ?5, ?6, ?7, '[]',
-                           ?8, ?9, ?8, ?9, ?10, ?11, ?12, ?12)",
+                           ?8, ?9, ?8, ?9, ?10, ?11, ?12, ?12, 'selected')",
                 params![
                     page_id,
                     workspace_id,
@@ -2508,6 +2684,25 @@ impl SharedAgentAccessStore for SqliteSharedContentStore {
                     now_ms,
                 ],
             )?;
+            let sources = parse_source_basis(&basis_json);
+            for member in crate::resource_access::list_active_members(&tx, workspace_id)? {
+                let ctx =
+                    crate::resource_access::require_caller_access(&tx, workspace_id, &member.uid)?;
+                let mut allowed =
+                    crate::resource_access::project_readable(&tx, workspace_id, &project_id, &ctx)?;
+                for source in &sources {
+                    allowed &= crate::resource_access::page_readable(
+                        &tx,
+                        workspace_id,
+                        &source.page_id,
+                        &ctx,
+                    )?;
+                }
+                if allowed {
+                    tx.execute("INSERT INTO shared_resource_audience (audience_id,workspace_id,resource_kind,resource_id,membership_id,grant_generation,granted_by_uid,granted_at_ms) VALUES (?1,?2,'page',?3,?4,?5,?6,?7)",
+                        params![format!("aud_{}",Uuid::new_v4().simple()),workspace_id,page_id,member.membership_id,member.uid,caller.uid,now_ms])?;
+                }
+            }
             tx.execute(
                 "INSERT INTO shared_page_revisions (
                     revision_id, workspace_id, page_id, revision_number, title, content_md,
@@ -2667,6 +2862,31 @@ fn load_proposal_view_any(
         }
         Err(err) => Err(err),
     }
+}
+
+fn proposal_readable(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    uid: &str,
+    view: &AgentProposalView,
+) -> Result<bool, SharedContentError> {
+    let ctx = crate::resource_access::require_caller_access(tx, workspace_id, uid)?;
+    if let Some(id) = &view.project_id {
+        if !crate::resource_access::project_readable(tx, workspace_id, id, &ctx)? {
+            return Ok(false);
+        }
+    }
+    for id in view
+        .target_page_id
+        .iter()
+        .chain(view.applied_page_id.iter())
+        .chain(view.sources.iter().map(|source| &source.page_id))
+    {
+        if !crate::resource_access::page_readable(tx, workspace_id, id, &ctx)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn set_review_eligibility(

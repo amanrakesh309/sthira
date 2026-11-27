@@ -35,6 +35,33 @@ pub struct HistoricalSet {
     pub project_map: BTreeMap<String, String>,
     pub records: Vec<Records>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectAccessRecord {
+    pub project_id: String,
+    pub access_mode: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageAccessRecord {
+    pub page_id: String,
+    pub access_mode: String,
+    #[serde(default)]
+    pub access_project_id: Option<String>,
+}
+
+/// Version-2 access classification. Audience grants are deliberately not exported: a restore
+/// never imports active authority from the source workspace.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccessMetadata {
+    #[serde(default)]
+    pub projects: Vec<ProjectAccessRecord>,
+    #[serde(default)]
+    pub pages: Vec<PageAccessRecord>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Payload {
@@ -43,6 +70,8 @@ pub struct Payload {
     pub captured_at_ms: i64,
     pub records: Vec<Records>,
     pub history: Vec<HistoricalSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<AccessMetadata>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -81,11 +110,21 @@ pub fn records<'a>(data: &'a [Records], table: &str) -> &'a [Vec<Value>] {
 }
 impl Bundle {
     pub fn new(payload: Payload) -> Result<Self, String> {
+        Self::new_version(payload, 1)
+    }
+
+    /// Builds a permission-aware archive. Version 2 retains resource classification without
+    /// active audience grants.
+    pub fn new_permission_aware(payload: Payload) -> Result<Self, String> {
+        Self::new_version(payload, 2)
+    }
+
+    fn new_version(payload: Payload, version: u32) -> Result<Self, String> {
         let checksum_sha256 =
             hash(&serde_json::to_vec(&payload).map_err(|_| "Invalid backup data.")?);
         let bundle = Self {
             format: "sthira.shared-workspace".into(),
-            version: 1,
+            version,
             checksum_sha256,
             payload,
         };
@@ -102,8 +141,11 @@ impl Bundle {
         Ok(result)
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.format != "sthira.shared-workspace" || self.version != 1 {
+        if self.format != "sthira.shared-workspace" || !(1..=2).contains(&self.version) {
             return Err("Unsupported shared-workspace backup version.".into());
+        }
+        if self.version == 1 && self.payload.access.is_some() {
+            return Err("A version-1 backup cannot carry access metadata.".into());
         }
         let bytes = serde_json::to_vec(&self.payload).map_err(|_| "Invalid backup data.")?;
         if bytes.len() > MAX_BYTES - 1024 {
@@ -126,6 +168,42 @@ impl Bundle {
         }
         let pages = ids(&self.payload.records, "shared_pages", "page_id");
         let projects = ids(&self.payload.records, "shared_projects", "project_id");
+        if self.version == 2 {
+            let access = self
+                .payload
+                .access
+                .as_ref()
+                .ok_or("Missing access classification.")?;
+            let mut classified_projects = BTreeSet::new();
+            for project in &access.projects {
+                if !projects.contains(project.project_id.as_str())
+                    || !classified_projects.insert(project.project_id.as_str())
+                    || !matches!(project.access_mode.as_str(), "workspace" | "restricted")
+                {
+                    return Err("Invalid or duplicate project access classification.".into());
+                }
+            }
+            let mut classified_pages = BTreeSet::new();
+            for page in &access.pages {
+                if !pages.contains(page.page_id.as_str())
+                    || !classified_pages.insert(page.page_id.as_str())
+                    || !matches!(
+                        page.access_mode.as_str(),
+                        "workspace" | "selected" | "project"
+                    )
+                    || (page.access_mode != "project" && page.access_project_id.is_some())
+                    || page
+                        .access_project_id
+                        .as_ref()
+                        .is_some_and(|id| id.len() > 128)
+                {
+                    return Err("Invalid or duplicate page access classification.".into());
+                }
+            }
+            if classified_projects != projects || classified_pages != pages {
+                return Err("Every resource requires an access classification.".into());
+            }
+        }
         for set in &self.payload.history {
             if set.source_name.len() > 320
                 || set.source_workspace_id.len() > 128
@@ -384,6 +462,7 @@ mod tests {
             captured_at_ms: 1,
             records: data,
             history: vec![],
+            access: None,
         }
     }
     #[test]
@@ -394,8 +473,18 @@ mod tests {
         corrupt.payload.source_name = "Changed".into();
         assert!(corrupt.validate().unwrap_err().contains("checksum"));
         corrupt = bundle.clone();
-        corrupt.version = 2;
+        corrupt.version = 3;
         assert!(corrupt.validate().unwrap_err().contains("version"));
+        corrupt = bundle.clone();
+        corrupt.version = 2;
+        corrupt.payload.access = Some(AccessMetadata {
+            projects: vec![ProjectAccessRecord {
+                project_id: "project_id".into(),
+                access_mode: "restricted".into(),
+            }],
+            pages: vec![],
+        });
+        assert!(Bundle::new_permission_aware(corrupt.payload).is_ok());
         let mut unknown = serde_json::to_value(bundle).unwrap();
         unknown["sessions"] = json!(["private"]);
         assert!(Bundle::parse(&serde_json::to_vec(&unknown).unwrap()).is_err());
@@ -403,6 +492,44 @@ mod tests {
         data.records[0].table = "workspace_memberships".into();
         assert!(Bundle::new(data).is_err());
     }
+    #[test]
+    fn legacy_payload_checksum_is_preserved() {
+        // Field order and bytes match the version-1 serializer, before access existed.
+        let legacy = payload();
+        let bytes = format!(
+            "{{\"sourceWorkspaceId\":\"source\",\"sourceName\":\"Source\",\"capturedAtMs\":1,\"records\":{},\"history\":[]}}",
+            serde_json::to_string(&legacy.records).unwrap()
+        );
+        let archive = format!(
+            "{{\"format\":\"sthira.shared-workspace\",\"version\":1,\"checksumSha256\":\"{}\",\"payload\":{}}}",
+            hash(bytes.as_bytes()), bytes
+        );
+        assert!(Bundle::parse(archive.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn permission_aware_archives_require_complete_valid_classification() {
+        let mut data = payload();
+        assert!(Bundle::new_permission_aware(data.clone()).is_err());
+        data.access = Some(AccessMetadata::default());
+        assert!(Bundle::new_permission_aware(data.clone()).is_err());
+        data.access
+            .as_mut()
+            .unwrap()
+            .projects
+            .push(ProjectAccessRecord {
+                project_id: "project_id".into(),
+                access_mode: "restricted".into(),
+            });
+        assert!(Bundle::new_permission_aware(data.clone()).is_ok());
+        let duplicate = data.access.as_ref().unwrap().projects[0].clone();
+        data.access.as_mut().unwrap().projects.push(duplicate);
+        assert!(Bundle::new_permission_aware(data.clone()).is_err());
+        data.access.as_mut().unwrap().projects.pop();
+        data.access.as_mut().unwrap().projects[0].access_mode = "typo".into();
+        assert!(Bundle::new_permission_aware(data).is_err());
+    }
+
     #[test]
     fn identities_types_and_relationships_are_validated() {
         let mut data = payload();

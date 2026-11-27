@@ -10,6 +10,7 @@ use crate::{
     },
     now_epoch_ms,
     realtime::{handle_websocket_connection, looks_like_websocket_upgrade, RealtimeHub},
+    resource_access::{AccessChangeCommitInput, AccessChangePreviewInput},
     shared_content::{
         AttachProjectPageInput, CreateProjectThreadInput, CreateProposalInput,
         CreateSharedPageInput, CreateSharedProjectInput, CreateThreadInput, DetachProjectPageInput,
@@ -1033,13 +1034,28 @@ fn route_workspace_subpath(
                         serde_json::json!({"removed":true})
                     }
                     ("POST", ["backup-restore", "preview"]) => {
-                        let bundle = sthira_backup_format::Bundle::parse(&req.body)
-                            .map_err(SharedContentError::InvalidInput)?;
+                        #[derive(Deserialize)]
+                        #[serde(rename_all = "camelCase")]
+                        struct PreviewRequest {
+                            backup: sthira_backup_format::Bundle,
+                            #[serde(default)]
+                            legacy_visibility: Option<String>,
+                        }
+                        let (bundle, legacy_visibility) =
+                            match serde_json::from_slice::<PreviewRequest>(&req.body) {
+                                Ok(req) => (req.backup, req.legacy_visibility),
+                                Err(_) => (
+                                    sthira_backup_format::Bundle::parse(&req.body)
+                                        .map_err(SharedContentError::InvalidInput)?,
+                                    None,
+                                ),
+                            };
                         serde_json::to_value(store.preview_restore(
                             &caller,
                             checks,
                             workspace_id,
                             bundle,
+                            legacy_visibility.as_deref(),
                         )?)
                         .unwrap()
                     }
@@ -1354,6 +1370,108 @@ fn route_shared_content(
     };
 
     match (method, subpath) {
+        ("GET", ["access-members"]) => {
+            match content_store.list_access_members(caller, workspace_id) {
+                Ok(members) => json_ok(&members),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["projects", project_id, "access"]) => {
+            match content_store.get_resource_access(caller, workspace_id, "project", project_id) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "access", "preview"]) => {
+            let Ok(payload) = serde_json::from_slice::<AccessChangePreviewInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid access preview request.");
+            };
+            match content_store.preview_resource_access(
+                caller,
+                workspace_id,
+                "project",
+                project_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["projects", project_id, "access", "commit"]) => {
+            let Ok(payload) = serde_json::from_slice::<AccessChangeCommitInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid access commit request.");
+            };
+            match content_store.commit_resource_access(
+                caller,
+                recheck,
+                workspace_id,
+                "project",
+                project_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(outcome) => {
+                    flush_events(content_store);
+                    state.realtime_hub.enforce_resource_access_change(
+                        state,
+                        workspace_id,
+                        "project",
+                        project_id,
+                    );
+                    json_ok(&outcome)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["pages", page_id, "access"]) => {
+            match content_store.get_resource_access(caller, workspace_id, "page", page_id) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "access", "preview"]) => {
+            let Ok(payload) = serde_json::from_slice::<AccessChangePreviewInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid access preview request.");
+            };
+            match content_store.preview_resource_access(
+                caller,
+                workspace_id,
+                "page",
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["pages", page_id, "access", "commit"]) => {
+            let Ok(payload) = serde_json::from_slice::<AccessChangeCommitInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid access commit request.");
+            };
+            match content_store.commit_resource_access(
+                caller,
+                recheck,
+                workspace_id,
+                "page",
+                page_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(outcome) => {
+                    flush_events(content_store);
+                    state.realtime_hub.enforce_resource_access_change(
+                        state,
+                        workspace_id,
+                        "page",
+                        page_id,
+                    );
+                    json_ok(&outcome)
+                }
+                Err(err) => shared_content_error(err),
+            }
+        }
         ("GET", ["projects"]) => match content_store.list_projects(
             caller,
             workspace_id,

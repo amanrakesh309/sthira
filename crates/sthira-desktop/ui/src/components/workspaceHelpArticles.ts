@@ -3,6 +3,7 @@ import helpGuide from '../../../../../docs/features/workspace-help.md?raw';
 import memoryGuide from '../../../../../docs/features/shared-memory.md?raw';
 import migrationGuide from '../../../../../docs/features/migration.md?raw';
 import proposalGuide from '../../../../../docs/features/agent-workflow-proposals.md?raw';
+import permissionsGuide from '../../../../../docs/features/shared-resource-permissions.md?raw';
 
 export type HelpDestination = 'models' | 'workflows' | 'search' | 'agents' | 'vault';
 
@@ -31,6 +32,7 @@ export const helpArticles = {
   import: article('Supported import formats', migrationGuide, { destination: 'vault', label: 'Open Workspace & Data' }, ['Source preparation', 'Receipts, conflicts and recovery']),
   backup: article('Back up and recover your vault'),
   teamRecovery: article('Team backup and recovery', teamRecoveryGuide, undefined, ['Restore into an empty workspace', 'Included content and attribution', 'Excluded data and limits']),
+  permissions: article('Sharing projects and pages', permissionsGuide, undefined, ['Using sharing controls', 'Effective permission']),
   troubleshooting: article('Troubleshoot setup and failed runs', helpGuide, { destination: 'workflows', label: 'Open Workflows' }),
   privacy: article('Privacy, scope, and sharing'),
   glossary: article('Glossary'),
@@ -57,6 +59,7 @@ const articleSources: Record<string, HelpArticleId> = {
   'cli-and-mcp.md': 'cli',
   'document-tabs.md': 'pages',
   'shared-workspace-backups.md': 'teamRecovery',
+  'shared-resource-permissions.md': 'permissions',
 };
 
 export function getLinkedHelpArticle(href: string | undefined): HelpArticleId | undefined {

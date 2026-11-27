@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { sharedAgents, type SharedAgentConnection, type SharedAgentProposal, type SharedConfig, type SharedNativeRun } from '../api/sharedAgents';
 import { getProposalDetails, getSharedProject, listSharedRevisions, listSharedProjects, listWorkspaces, makeRequestIdempotencyKey, type PagedList, type SharedProjectDetails, type SharedPageRevisionView, type SharedPageSummary, type SharedProjectSummary, type WorkspaceListResponse, type WorkspaceResponse, type WorkspaceRole, type WorkspaceSummary } from '../api/workspaces';
 import { listAvailableModels } from '../api/ipc';
+import { subscribeCollabEvents } from '../api/liveCollab';
 import type { ModelView } from '../types/sthira';
 import type { GoogleSession } from './AccountModal';
 import { RichDocumentRenderer } from './RichDocumentRenderer';
@@ -25,6 +26,8 @@ export function SharedAgentsPanel(props: Props) {
 }
 function SharedAgentsBody({ workspaceId, myRole, currentUid, onSessionChange, onAccessLost, initialProposalId, onOpenPage, onClose }: Props) {
   const [loaded, setLoaded] = useState(false);
+  const [accessRevision,setAccessRevision]=useState(0);
+  const refreshSeq=useRef(0);
   const [snapshot, setSnapshot] = useState<SharedPageRevisionView | null>(null);
   const sourceTrigger = useRef<HTMLButtonElement | null>(null);
   const [policy, setPolicy] = useState(false);
@@ -62,6 +65,7 @@ function SharedAgentsBody({ workspaceId, myRole, currentUid, onSessionChange, on
   const callbacks = useRef({onSessionChange,onAccessLost});
   callbacks.current={onSessionChange,onAccessLost};
   const initialReview = useRef<string | null>(null);
+  const previousRole = useRef(myRole);
   const alive = useRef(true);
   const reviewKey = useRef<{sig:string;key:string} | null>(null);
   const canManage = myRole === 'owner' || myRole === 'admin';
@@ -72,22 +76,30 @@ function SharedAgentsBody({ workspaceId, myRole, currentUid, onSessionChange, on
     if (response.outcome === 'ok') return response.data;
     if (response.outcome === 'sessionUpdated') { setConnections([]); setProposals([]); setRuns([]); setReview(null); callbacks.current.onSessionChange?.(response.session); throw new Error('Verify your account to continue.'); }
     if (response.outcome === 'accessLost') { setConnections([]); setProposals([]); setRuns([]); setReview(null); callbacks.current.onAccessLost?.(response.message, response.workspaces); throw new Error(response.message); }
+    if (['agent_proposal_not_found','proposal_not_found','page_not_found','project_not_found'].includes(response.code)) {
+      ++reviewSeq.current;reviewId.current=null;reviewKey.current=null;
+      setSnapshot(null);setReview(null);setBaseContent('');setCurrentContent('');setCurrentRevision(null);
+      setConnections([]);setProposals([]);setPages([]);setSelectedPages([]);setConfig(null);
+    }
     throw new Error(response.message);
   }, []);
   const call = useCallback(async <T,>(action: string, input: unknown = {}) => unwrap(await sharedAgents<T>(workspaceId, action, input)), [workspaceId, unwrap]);
   const refresh = useCallback(async () => {
+    const seq=++refreshSeq.current;
     const nextPolicy = await call<{ enabled:boolean }>('policy');
     const nextConnections = await call<SharedAgentConnection[]>('connections', {includeWorkspace:canManage});
     const nextProposals = await call<SharedAgentProposal[]>('proposals');
     const nextRuns = await call<SharedNativeRun[]>('runs');
-    if (!alive.current) return;
+    if (!alive.current || seq!==refreshSeq.current) return;
     setPolicy(nextPolicy.enabled); setConnections(nextConnections); setProposals(nextProposals); setRuns(nextRuns); setLoaded(true);
   }, [call, canManage]);
   useEffect(() => {
-    void refresh().catch(e => { if(alive.current) setError(String(e)); });
-    void (async () => {let cursor:string|null=null;const all:SharedProjectSummary[]=[];do {const p: PagedList<SharedProjectSummary>=unwrap(await listSharedProjects(workspaceId,false,null,cursor,100));all.push(...p.items);cursor=p.nextCursor??null;}while(cursor && alive.current);return all;})().then(p => { if(alive.current) setProjects(p); }).catch(e => { if(alive.current) setError(String(e)); });
-    void listAvailableModels().then(m => { if(alive.current) { setModels(m); setModelId(m.find(v => v.is_default)?.id ?? m[0]?.id ?? ''); } }).catch(() => {});
-  }, [workspaceId, refresh, unwrap]);
+    let current=true;
+    void refresh().catch(e => { if(current && alive.current) setError(String(e)); });
+    void (async () => {let cursor:string|null=null;const all:SharedProjectSummary[]=[];do {const p: PagedList<SharedProjectSummary>=unwrap(await listSharedProjects(workspaceId,false,null,cursor,100));all.push(...p.items);cursor=p.nextCursor??null;}while(cursor && alive.current);return all;})().then(p => { if(current && alive.current) setProjects(p); }).catch(e => { if(current && alive.current) setError(String(e)); });
+    void listAvailableModels().then(m => { if(current && alive.current) { setModels(m); setModelId(m.find(v => v.is_default)?.id ?? m[0]?.id ?? ''); } }).catch(() => {});
+    return()=>{current=false;};
+  }, [workspaceId, refresh, unwrap, accessRevision]);
   useEffect(() => {
     if (!runs.some(r => r.status === 'running')) return;
     const timer = window.setInterval(() => { void call<SharedNativeRun[]>('runs').then(r => { if(alive.current) setRuns(r); }).catch(e => { if(alive.current) setError(String(e)); }); }, 1000);
@@ -102,14 +114,40 @@ function SharedAgentsBody({ workspaceId, myRole, currentUid, onSessionChange, on
   const openReview = useCallback(async (proposalId: string) => {
     const seq=++reviewSeq.current;
     setSnapshot(null);setCurrentContent('');setBaseContent('');setCurrentRevision(null);setCompareCurrent(false);if(reviewId.current!==proposalId){setNote('');reviewKey.current=null;}reviewId.current=proposalId;
-    const next = await call<SharedAgentProposal>('proposal', { proposalId });
+    const response=await sharedAgents<SharedAgentProposal>(workspaceId,'proposal',{proposalId});
     if(!alive.current || seq!==reviewSeq.current) return;
+    const next=unwrap(response);
     setReview(next);
     if(next.targetPageId) {
-      const details = unwrap(await getProposalDetails(workspaceId, next.proposalId));
+      const response=await getProposalDetails(workspaceId,next.proposalId);
+      if(!alive.current || seq!==reviewSeq.current)return;
+      const details=unwrap(response);
       if(alive.current && seq===reviewSeq.current) {setCurrentContent(details.currentPageContentMd);setBaseContent(details.baseContentMd);setCurrentRevision(details.currentPageRevisionNumber);setCompareCurrent(next.isStale);}
     }
   }, [call, workspaceId, unwrap]);
+  useEffect(() => {
+    if(previousRole.current===myRole)return;
+    previousRole.current=myRole;
+    const id=reviewId.current;
+    ++reviewSeq.current;++refreshSeq.current;
+    setSnapshot(null);setReview(null);setBaseContent('');setCurrentContent('');setCurrentRevision(null);
+    setConnections([]);setProposals([]);setRuns([]);setOpenRun(null);setConfig(null);setEditing(null);
+    setProjects([]);setProject('');setPages([]);setSelectedPages([]);setAccessRevision(value=>value+1);
+    if(id)void openReview(id).catch(error=>{if(alive.current)setError(String(error));});
+  },[myRole,openReview]);
+  useEffect(() => {
+    let active=true;let unlisten:(()=>void)|null=null;
+    void subscribeCollabEvents(event => {
+      if(!active || event.type!=='workspace_event' || event.workspaceId!==workspaceId || event.eventType!=='resource_access_changed') return;
+      if(event.accountUid && event.accountUid!==currentUid) return;
+      // Invalidate source-inspector promises before checking the current audience.
+      const id=reviewId.current;++reviewSeq.current;++refreshSeq.current;setSnapshot(null);
+      setProjects([]);setProject('');setPages([]);setSelectedPages([]);setAccessRevision(value=>value+1);
+      if(id) void openReview(id).catch(error=>{if(active&&alive.current)setError(String(error));});
+      void refresh().catch(error=>{if(active&&alive.current)setError(String(error));});
+    }).then(stop=>{if(active)unlisten=stop;else stop();});
+    return()=>{active=false;unlisten?.();};
+  },[workspaceId,currentUid,openReview,refresh]);
   useEffect(() => { if(initialProposalId && initialReview.current!==initialProposalId) {initialReview.current=initialProposalId;void openReview(initialProposalId).catch(e => { if(alive.current) setError(String(e)); }); } }, [initialProposalId, openReview]);
   async function act(task: () => Promise<void>) {
     if(busy) return;
@@ -126,10 +164,13 @@ function SharedAgentsBody({ workspaceId, myRole, currentUid, onSessionChange, on
     setReview(result); if(action==='apply' && result.appliedRevisionNumber) {setCurrentRevision(result.appliedRevisionNumber);setCurrentContent(result.proposedContentMd);} setNote(''); reviewKey.current=null; setNotice(action === 'apply' ? 'Applied after independent review.' : 'Review saved. Published content is unchanged.');
   }
   async function inspectSource(source: SharedAgentProposal['sources'][number]) {
+    const seq=reviewSeq.current;
     setSnapshot(null);
     let cursor: string | null = null;
     do {
-      const revisions: PagedList<SharedPageRevisionView> = unwrap(await listSharedRevisions(workspaceId,source.pageId,cursor,100));
+      const response=await listSharedRevisions(workspaceId,source.pageId,cursor,100);
+      if(!alive.current || seq!==reviewSeq.current)return;
+      const revisions: PagedList<SharedPageRevisionView> = unwrap(response);
       const exact=revisions.items.find(r=>r.revisionNumber===source.revisionNumber);
       if(exact) {
         if(exact.contentSha256!==source.contentSha256) throw new Error('The source snapshot hash does not match. Refresh this review before deciding.');

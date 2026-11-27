@@ -758,6 +758,8 @@ pub(crate) struct CreateSharedPageInput {
     #[serde(default)]
     pub(crate) omitted_summary: Vec<String>,
     pub(crate) idempotency_key: String,
+    #[serde(default)]
+    pub(crate) follow_project_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -767,6 +769,10 @@ pub(crate) struct SharedPageSummary {
     pub(crate) workspace_id: String,
     pub(crate) title: String,
     pub(crate) current_revision_number: i64,
+    #[serde(default = "default_workspace_access")]
+    pub(crate) access_mode: String,
+    #[serde(default)]
+    pub(crate) access_project_id: Option<String>,
     pub(crate) entry_mode: PageEntryMode,
     pub(crate) provenance: ShareableProvenance,
     pub(crate) omitted_summary: Vec<String>,
@@ -972,6 +978,8 @@ pub(crate) struct SharedActivityItem {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SharedProjectSummary {
+    #[serde(default = "default_workspace_access")]
+    pub(crate) access_mode: String,
     pub(crate) project_id: String,
     pub(crate) workspace_id: String,
     pub(crate) name: String,
@@ -1014,6 +1022,14 @@ pub(crate) struct CreateSharedProjectInput {
     #[serde(default)]
     pub(crate) purpose: String,
     pub(crate) idempotency_key: String,
+    #[serde(default)]
+    pub(crate) access_mode: Option<String>,
+    #[serde(default)]
+    pub(crate) audience_membership_ids: Vec<String>,
+}
+
+fn default_workspace_access() -> String {
+    "workspace".to_owned()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2623,4 +2639,106 @@ mod tests {
         );
         assert_eq!(repaired_res, Ok("uid-a".into()));
     }
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_list_access_members<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+) -> Result<WorkspaceResponse<serde_json::Value>, String> {
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &format!("/v1/workspaces/{workspace_id}/access-members"),
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_get_resource_access<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    resource_kind: String,
+    resource_id: String,
+) -> Result<WorkspaceResponse<serde_json::Value>, String> {
+    let path = match resource_kind.as_str() {
+        "project" => format!("/v1/workspaces/{workspace_id}/projects/{resource_id}/access"),
+        "page" => format!("/v1/workspaces/{workspace_id}/pages/{resource_id}/access"),
+        _ => return Err("Unknown resource kind.".into()),
+    };
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::GET,
+        &path,
+        None,
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+pub(crate) async fn cmd_preview_resource_access<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    resource_kind: String,
+    resource_id: String,
+    input: serde_json::Value,
+) -> Result<WorkspaceResponse<serde_json::Value>, String> {
+    let path = match resource_kind.as_str() {
+        "project" => format!("/v1/workspaces/{workspace_id}/projects/{resource_id}/access/preview"),
+        "page" => format!("/v1/workspaces/{workspace_id}/pages/{resource_id}/access/preview"),
+        _ => return Err("Unknown resource kind.".into()),
+    };
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &path,
+        Some(input),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn cmd_commit_resource_access<R: Runtime>(
+    app: AppHandle<R>,
+    attempt: tauri::State<'_, SignInAttempt>,
+    workspace_id: String,
+    resource_kind: String,
+    resource_id: String,
+    preview_id: String,
+    idempotency_key: String,
+    confirm_expansion: bool,
+) -> Result<WorkspaceResponse<serde_json::Value>, String> {
+    let path = match resource_kind.as_str() {
+        "project" => format!("/v1/workspaces/{workspace_id}/projects/{resource_id}/access/commit"),
+        "page" => format!("/v1/workspaces/{workspace_id}/pages/{resource_id}/access/commit"),
+        _ => return Err("Unknown resource kind.".into()),
+    };
+    let (resp, _) = invoke_workspace_api(
+        &app,
+        &attempt,
+        Method::POST,
+        &path,
+        Some(serde_json::json!({
+            "previewId": preview_id,
+            "idempotencyKey": idempotency_key,
+            "confirmExpansion": confirm_expansion,
+        })),
+        Some(&workspace_id),
+    )
+    .await?;
+    Ok(resp)
 }

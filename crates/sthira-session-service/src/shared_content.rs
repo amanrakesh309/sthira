@@ -17,6 +17,10 @@ use crate::membership::{
     caller_display_name, require_active_membership, sanitize_idempotency_key, MembershipError,
     SessionRecheck, SqliteWorkspaceMembershipStore, WorkspaceRole,
 };
+use crate::resource_access::{
+    self, AccessAudienceMember, AccessChangeCommitInput, AccessChangeOutcome, AccessChangePreview,
+    AccessChangePreviewInput, CallerAccess, ProjectAccessMode, ResourceAccessPolicyView,
+};
 use crate::store::{sha256_hex, StoreError, VerifiedSession};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -125,6 +129,13 @@ pub struct CreateSharedPageInput {
     #[serde(default)]
     pub omitted_summary: Vec<String>,
     pub idempotency_key: String,
+    /// When creating inside a project, the new page follows that project's current audience.
+    #[serde(default)]
+    pub follow_project_id: Option<String>,
+}
+
+fn default_workspace_access() -> String {
+    "workspace".to_owned()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +145,10 @@ pub struct SharedPageSummary {
     pub workspace_id: String,
     pub title: String,
     pub current_revision_number: i64,
+    #[serde(default = "default_workspace_access")]
+    pub access_mode: String,
+    #[serde(default)]
+    pub access_project_id: Option<String>,
     pub entry_mode: PageEntryMode,
     pub provenance: ShareableProvenance,
     pub omitted_summary: Vec<String>,
@@ -434,6 +449,8 @@ pub struct SharedProjectSummary {
     pub name: String,
     pub purpose: String,
     pub version: i64,
+    #[serde(default = "default_workspace_access")]
+    pub access_mode: String,
     pub active_page_count: i64,
     pub created_by_uid: String,
     pub created_by_display_name: String,
@@ -471,6 +488,11 @@ pub struct CreateSharedProjectInput {
     #[serde(default)]
     pub purpose: String,
     pub idempotency_key: String,
+    /// Restricted projects require an Owner/Admin and an explicit audience.
+    #[serde(default)]
+    pub access_mode: Option<String>,
+    #[serde(default)]
+    pub audience_membership_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1203,6 +1225,56 @@ pub trait SharedContentStore: Send + Sync {
         after_seq: i64,
         limit: Option<usize>,
     ) -> Result<Vec<RealtimeCatchupEvent>, SharedContentError>;
+    fn caller_can_read_page(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+    ) -> Result<bool, SharedContentError>;
+
+    fn caller_can_read_project(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+    ) -> Result<bool, SharedContentError>;
+
+    fn list_access_members(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+    ) -> Result<Vec<AccessAudienceMember>, SharedContentError>;
+
+    fn get_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+    ) -> Result<ResourceAccessPolicyView, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn preview_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+        input: &AccessChangePreviewInput,
+        now_ms: i64,
+    ) -> Result<AccessChangePreview, SharedContentError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+        input: &AccessChangeCommitInput,
+        now_ms: i64,
+    ) -> Result<AccessChangeOutcome, SharedContentError>;
 }
 
 #[derive(Clone)]
@@ -1225,6 +1297,7 @@ impl SqliteSharedContentStore {
             migrate_v4(&guard)?;
             crate::agent_access::migrate_v5(&guard)?;
             crate::backups::migrate(&guard)?;
+            crate::resource_access::migrate(&guard)?;
         }
         Ok(Self { conn })
     }
@@ -1654,13 +1727,14 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed_cursor = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         let items_plus_one = query_page_summaries(
             &tx,
             workspace_id,
             include_archived,
             parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
             limit + 1,
+            &ctx,
         )?;
         let (items, next_cursor) = paginate(items_plus_one, limit, |p| {
             format!("{}:{}", p.updated_at_ms, p.page_id)
@@ -1682,12 +1756,18 @@ impl SharedContentStore for SqliteSharedContentStore {
         let provenance = sanitize_provenance(&input.provenance)?;
         let omitted_summary = sanitize_omitted_summary(&input.omitted_summary)?;
         let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let follow_project = input
+            .follow_project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let payload_hash = payload_digest(&serde_json::json!({
             "title": title,
             "content_md": content_md,
             "entry_mode": input.entry_mode.as_str(),
             "provenance": provenance,
             "omitted_summary": omitted_summary,
+            "follow_project_id": follow_project,
         }));
         let actor_display = caller_display_name(caller);
 
@@ -1697,6 +1777,15 @@ impl SharedContentStore for SqliteSharedContentStore {
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+
+        if let Some(project_id) = follow_project {
+            resource_access::require_readable_project(&tx, workspace_id, project_id, &ctx)?;
+        }
+        let (access_mode, access_project_id) = match follow_project {
+            Some(project_id) => ("project", Some(project_id.to_owned())),
+            None => ("workspace", None),
+        };
 
         if let Some(cached) = lookup_idempotent_response::<SharedPageDetails>(
             &tx,
@@ -1727,8 +1816,9 @@ impl SharedContentStore for SqliteSharedContentStore {
                 page_id, workspace_id, title, content_md, current_revision_number,
                 entry_mode, origin_kind, original_author_label, ai_model_label, source_note,
                 omitted_summary_json, publisher_uid, publisher_display_name,
-                last_editor_uid, last_editor_display_name, created_at_ms, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?11, ?12, ?13, ?13)",
+                last_editor_uid, last_editor_display_name, created_at_ms, updated_at_ms,
+                access_mode, access_project_id
+            ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?11, ?12, ?13, ?13, ?14, ?15)",
             params![
                 page_id,
                 workspace_id,
@@ -1743,6 +1833,8 @@ impl SharedContentStore for SqliteSharedContentStore {
                 caller.uid,
                 actor_display,
                 now_ms,
+                access_mode,
+                access_project_id,
             ],
         )?;
 
@@ -1815,7 +1907,7 @@ impl SharedContentStore for SqliteSharedContentStore {
     ) -> Result<SharedPageDetails, SharedContentError> {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         let details = load_page_details(&tx, workspace_id, page_id)?;
         tx.commit()?;
         Ok(details)
@@ -1833,7 +1925,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let cursor_rev = parse_i64_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         let _page = load_page_row(&tx, workspace_id, page_id)?;
         let rows = query_revisions(&tx, workspace_id, page_id, cursor_rev, limit + 1)?;
         let (items, next_cursor) = paginate(rows, limit, |r| r.revision_number.to_string());
@@ -1893,7 +1985,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         let _page = load_page_row(&tx, workspace_id, page_id)?;
         let rows = query_threads(
             &tx,
@@ -1932,6 +2024,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -2054,6 +2147,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -2193,7 +2287,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         let _page = load_page_row(&tx, workspace_id, page_id)?;
         let rows = query_proposal_summaries(
             &tx,
@@ -2218,6 +2312,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let row = load_proposal_row(&tx, workspace_id, proposal_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, &row.page_id)?;
         let details =
             load_proposal_details(&tx, workspace_id, proposal_id, &member.uid, member.role)?;
         tx.commit()?;
@@ -2250,6 +2346,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -2272,14 +2369,16 @@ impl SharedContentStore for SqliteSharedContentStore {
         let base_rev = load_revision_row(&tx, workspace_id, page_id, input.base_revision_number)?;
         let proposal_id = format!("prp_{}", Uuid::new_v4().simple());
         let decision_id = format!("dec_{}", Uuid::new_v4().simple());
+        let (page_access_version, page_access_digest) =
+            resource_access::page_access_basis(&tx, workspace_id, page_id)?;
 
         tx.execute(
             "INSERT INTO shared_change_proposals (
                 proposal_id, workspace_id, page_id, base_revision_number,
                 base_title, base_content_md, proposed_title, proposed_content_md,
                 summary, author_uid, author_display_name, status, submission_count,
-                created_at_ms, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12)",
+                created_at_ms, updated_at_ms, page_access_version, page_access_digest
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12, ?13, ?14)",
             params![
                 proposal_id,
                 workspace_id,
@@ -2293,6 +2392,8 @@ impl SharedContentStore for SqliteSharedContentStore {
                 caller.uid,
                 actor_display,
                 now_ms,
+                page_access_version,
+                page_access_digest,
             ],
         )?;
         tx.execute(
@@ -2375,6 +2476,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             return Err(SharedContentError::Forbidden);
         }
         let existing = load_proposal_row(&tx, workspace_id, proposal_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, &existing.page_id)?;
         if existing.live_draft_id.is_some() {
             return Err(SharedContentError::InvalidInput(
                 "This proposal came from a live shared draft. Reopen and submit from Edit together."
@@ -2428,14 +2530,17 @@ impl SharedContentStore for SqliteSharedContentStore {
         )?;
         let next_submission = existing.submission_count + 1;
         let decision_id = format!("dec_{}", Uuid::new_v4().simple());
+        let (page_access_version, page_access_digest) =
+            resource_access::page_access_basis(&tx, workspace_id, &existing.page_id)?;
 
         tx.execute(
             "UPDATE shared_change_proposals
              SET base_revision_number = ?1, base_title = ?2, base_content_md = ?3,
                  proposed_title = ?4, proposed_content_md = ?5, summary = ?6,
                  status = 'pending', submission_count = ?7, updated_at_ms = ?8,
+                 page_access_version = ?9, page_access_digest = ?10,
                  reviewed_at_ms = NULL, reviewer_uid = NULL, reviewer_display_name = NULL, reviewer_note = NULL
-             WHERE workspace_id = ?9 AND proposal_id = ?10",
+             WHERE workspace_id = ?11 AND proposal_id = ?12",
             params![
                 base_rev.revision_number,
                 base_rev.title,
@@ -2445,6 +2550,8 @@ impl SharedContentStore for SqliteSharedContentStore {
                 summary,
                 next_submission,
                 now_ms,
+                page_access_version,
+                page_access_digest,
                 workspace_id,
                 proposal_id,
             ],
@@ -2524,6 +2631,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             return Err(SharedContentError::Forbidden);
         }
         let existing = load_proposal_row(&tx, workspace_id, proposal_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, &existing.page_id)?;
         if existing.author_uid != caller.uid {
             return Err(SharedContentError::Forbidden);
         }
@@ -2667,6 +2775,17 @@ impl SharedContentStore for SqliteSharedContentStore {
             return Err(SharedContentError::Forbidden);
         }
         let existing = load_proposal_row(&tx, workspace_id, proposal_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, &existing.page_id)?;
+        let (current_access_version, current_access_digest) =
+            resource_access::page_access_basis(&tx, workspace_id, &existing.page_id)?;
+        if existing.page_access_version != current_access_version
+            || existing.page_access_digest != current_access_digest
+        {
+            return Err(SharedContentError::StaleSubmission(
+                "Page access changed since this submission was made. The author must resubmit against the current audience before it can be reviewed."
+                    .into(),
+            ));
+        }
         if existing.author_uid == caller.uid
             || existing.contributor_uids.iter().any(|u| u == &caller.uid)
         {
@@ -2990,67 +3109,80 @@ impl SharedContentStore for SqliteSharedContentStore {
         let cursor_seq = parse_i64_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
-        let mut stmt = if cursor_seq.is_some() {
-            tx.prepare(
-                "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
-                        action, target_type, project_id, project_name,
-                        page_id, page_title, proposal_id, thread_id,
-                        detail_text, created_at_ms,
-                        (EXISTS (SELECT 1 FROM shared_change_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id AND p.agent_connection_id IS NOT NULL)
-                         OR EXISTS (SELECT 1 FROM shared_agent_page_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id))
-                 FROM shared_workspace_activity
-                 WHERE workspace_id = ?1 AND seq < ?2
-                 ORDER BY seq DESC
-                 LIMIT ?3",
-            )?
-        } else {
-            tx.prepare(
-                "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
-                        action, target_type, project_id, project_name,
-                        page_id, page_title, proposal_id, thread_id,
-                        detail_text, created_at_ms,
-                        (EXISTS (SELECT 1 FROM shared_change_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id AND p.agent_connection_id IS NOT NULL)
-                         OR EXISTS (SELECT 1 FROM shared_agent_page_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id))
-                 FROM shared_workspace_activity
-                 WHERE workspace_id = ?1
-                 ORDER BY seq DESC
-                 LIMIT ?2",
-            )?
-        };
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        let page_visible = resource_access::page_visible_predicate("ap", 4, 5);
+        let project_visible = resource_access::project_visible_predicate("apr", 4, 5);
+        let source_visible = resource_access::page_visible_predicate("sp", 4, 5);
+        let sql = format!(
+            "SELECT a.seq, a.activity_id, a.workspace_id, a.actor_uid, a.actor_display_name,
+                    a.action, a.target_type, a.project_id, a.project_name,
+                    a.page_id, a.page_title, a.proposal_id, a.thread_id,
+                    a.detail_text, a.created_at_ms,
+                    (EXISTS (SELECT 1 FROM shared_change_proposals p WHERE p.workspace_id = a.workspace_id AND p.proposal_id = a.proposal_id AND p.agent_connection_id IS NOT NULL)
+                     OR EXISTS (SELECT 1 FROM shared_agent_page_proposals p WHERE p.workspace_id = a.workspace_id AND p.proposal_id = a.proposal_id))
+             FROM shared_workspace_activity a
+             WHERE a.workspace_id = ?1
+               AND (?2 IS NULL OR a.seq < ?2)
+               AND (a.page_id IS NULL OR EXISTS (
+                   SELECT 1 FROM shared_pages ap
+                    WHERE ap.workspace_id = a.workspace_id AND ap.page_id = a.page_id
+                      AND {page_visible}))
+               AND (a.project_id IS NULL OR EXISTS (
+                   SELECT 1 FROM shared_projects apr
+                    WHERE apr.workspace_id = a.workspace_id AND apr.project_id = a.project_id
+                      AND {project_visible}))
+               AND NOT EXISTS (
+                   SELECT 1 FROM shared_agent_page_proposals pr,
+                        json_each(pr.source_basis_json) source
+                    WHERE pr.workspace_id = a.workspace_id AND pr.proposal_id = a.proposal_id
+                      AND NOT EXISTS (SELECT 1 FROM shared_pages sp
+                          WHERE sp.workspace_id = a.workspace_id
+                            AND sp.page_id = json_extract(source.value, '$.pageId') AND {source_visible}))
+               AND NOT EXISTS (
+                   SELECT 1 FROM shared_change_proposals pr,
+                        json_each(COALESCE(pr.source_basis_json, '[]')) source
+                    WHERE pr.workspace_id = a.workspace_id AND pr.proposal_id = a.proposal_id
+                      AND NOT EXISTS (SELECT 1 FROM shared_pages sp
+                          WHERE sp.workspace_id = a.workspace_id
+                            AND sp.page_id = json_extract(source.value, '$.pageId') AND {source_visible}))
+             ORDER BY a.seq DESC
+             LIMIT ?3"
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt.query_map(
+            params![
+                workspace_id,
+                cursor_seq,
+                (limit + 1) as i64,
+                ctx.membership_id,
+                resource_access::privileged_flag(&ctx)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    SharedActivityItem {
+                        agent_proposal: r.get(15)?,
+                        activity_id: r.get(1)?,
+                        workspace_id: r.get(2)?,
+                        actor_uid: r.get(3)?,
+                        actor_display_name: r.get(4)?,
+                        action: r.get(5)?,
+                        target_type: r.get(6)?,
+                        project_id: r.get(7)?,
+                        project_name: r.get(8)?,
+                        page_id: r.get(9)?,
+                        page_title: r.get(10)?,
+                        proposal_id: r.get(11)?,
+                        thread_id: r.get(12)?,
+                        detail_text: r.get(13)?,
+                        created_at_ms: r.get(14)?,
+                    },
+                ))
+            },
+        )?;
         let mut collected: Vec<(i64, SharedActivityItem)> = Vec::new();
-        let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, SharedActivityItem)> {
-            Ok((
-                r.get::<_, i64>(0)?,
-                SharedActivityItem {
-                    agent_proposal: r.get(15)?,
-                    activity_id: r.get(1)?,
-                    workspace_id: r.get(2)?,
-                    actor_uid: r.get(3)?,
-                    actor_display_name: r.get(4)?,
-                    action: r.get(5)?,
-                    target_type: r.get(6)?,
-                    project_id: r.get(7)?,
-                    project_name: r.get(8)?,
-                    page_id: r.get(9)?,
-                    page_title: r.get(10)?,
-                    proposal_id: r.get(11)?,
-                    thread_id: r.get(12)?,
-                    detail_text: r.get(13)?,
-                    created_at_ms: r.get(14)?,
-                },
-            ))
-        };
-        if let Some(seq) = cursor_seq {
-            let rows = stmt.query_map(params![workspace_id, seq, (limit + 1) as i64], map_row)?;
-            for row in rows {
-                collected.push(row?);
-            }
-        } else {
-            let rows = stmt.query_map(params![workspace_id, (limit + 1) as i64], map_row)?;
-            for row in rows {
-                collected.push(row?);
-            }
+        for row in rows {
+            collected.push(row?);
         }
         drop(stmt);
         let (pairs, next_cursor) = paginate(collected, limit, |(seq, _)| seq.to_string());
@@ -3073,7 +3205,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed_cursor = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         let items_plus_one = query_project_summaries(
             &tx,
             workspace_id,
@@ -3081,6 +3213,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             q.as_deref(),
             parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
             limit + 1,
+            &ctx,
         )?;
         let (items, next_cursor) = paginate(items_plus_one, limit, |p| {
             format!("{}:{}", p.updated_at_ms, p.project_id)
@@ -3100,9 +3233,18 @@ impl SharedContentStore for SqliteSharedContentStore {
         let name = sanitize_project_name(&input.name)?;
         let purpose = sanitize_project_purpose(&input.purpose)?;
         let idempotency_key = sanitize_idempotency_key(&input.idempotency_key)?;
+        let requested_access = input
+            .access_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("workspace");
+        let project_mode = ProjectAccessMode::from_db(requested_access)?;
         let payload_hash = payload_digest(&serde_json::json!({
             "name": name,
             "purpose": purpose,
+            "accessMode": project_mode.as_str(),
+            "audience": input.audience_membership_ids,
         }));
         let actor_display = caller_display_name(caller);
 
@@ -3112,6 +3254,10 @@ impl SharedContentStore for SqliteSharedContentStore {
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
+        if project_mode == ProjectAccessMode::Restricted && !member.role.can_moderate_or_review() {
+            return Err(SharedContentError::Forbidden);
+        }
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
 
         if let Some(cached) = lookup_idempotent_response::<SharedProjectDetails>(
             &tx,
@@ -3135,8 +3281,8 @@ impl SharedContentStore for SqliteSharedContentStore {
                 project_id, workspace_id, name, purpose, version,
                 created_by_uid, created_by_display_name,
                 updated_by_uid, updated_by_display_name,
-                created_at_ms, updated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?5, ?6, ?7, ?7)",
+                created_at_ms, updated_at_ms, access_mode, access_version
+             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?5, ?6, ?7, ?7, ?8, 1)",
             params![
                 project_id,
                 workspace_id,
@@ -3144,9 +3290,38 @@ impl SharedContentStore for SqliteSharedContentStore {
                 purpose,
                 caller.uid,
                 actor_display,
-                now_ms
+                now_ms,
+                project_mode.as_str()
             ],
         )?;
+
+        if project_mode == ProjectAccessMode::Restricted {
+            let members = resource_access::list_active_members(&tx, workspace_id)?;
+            for membership_id in &input.audience_membership_ids {
+                let Some(target) = members.iter().find(|m| &m.membership_id == membership_id)
+                else {
+                    return Err(SharedContentError::InvalidInput(
+                        "Every selected member must be an active workspace member.".into(),
+                    ));
+                };
+                tx.execute(
+                    "INSERT INTO shared_resource_audience
+                     (audience_id, workspace_id, resource_kind, resource_id, membership_id,
+                      grant_generation, granted_by_uid, granted_at_ms)
+                     VALUES (?1, ?2, 'project', ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        format!("aud_{}", Uuid::new_v4().simple()),
+                        workspace_id,
+                        project_id,
+                        target.membership_id,
+                        target.uid,
+                        caller.uid,
+                        now_ms,
+                    ],
+                )?;
+            }
+        }
+        let _ = ctx;
 
         insert_activity_with_project(
             &tx,
@@ -3165,7 +3340,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
 
-        let details = load_project_details(&tx, workspace_id, &project_id, None, None, None)?;
+        let details = load_project_details(&tx, workspace_id, &project_id, None, None, None, &ctx)?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3198,7 +3373,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         let limit = clamp_limit(limit);
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        resource_access::require_readable_project(&tx, workspace_id, project_id, &ctx)?;
         let details = load_project_details(
             &tx,
             workspace_id,
@@ -3206,6 +3382,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             q.as_deref(),
             parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
             Some(limit),
+            &ctx,
         )?;
         tx.commit()?;
         Ok(details)
@@ -3240,6 +3417,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         if !member.role.can_manage_shared_project() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3301,7 +3480,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
 
-        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None, &ctx)?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3371,8 +3550,8 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed_cursor = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
-        let _project = load_project_summary(&tx, workspace_id, project_id)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        resource_access::require_readable_project(&tx, workspace_id, project_id, &ctx)?;
         let items_plus_one = query_picker_pages(
             &tx,
             workspace_id,
@@ -3380,6 +3559,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             q.as_deref(),
             parsed_cursor.as_ref().map(|(ts, id)| (*ts, id.as_str())),
             limit + 1,
+            &ctx,
         )?;
         let (items, next_cursor) = paginate(items_plus_one, limit, |p| {
             format!("{}:{}", p.updated_at_ms, p.page_id)
@@ -3414,6 +3594,9 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3502,7 +3685,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
 
-        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None, &ctx)?;
         let outcome = ProjectPageMembershipOutcome {
             attached: true,
             membership_id,
@@ -3552,6 +3735,9 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
+        require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3619,7 +3805,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
 
-        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None, &ctx)?;
         save_idempotent_response(
             &tx,
             &caller.uid,
@@ -3664,6 +3850,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3734,6 +3921,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3762,6 +3950,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3809,6 +3998,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -3980,6 +4170,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -4109,14 +4300,17 @@ impl SharedContentStore for SqliteSharedContentStore {
             prev.proposal_id
         } else {
             let pid = format!("prp_{}", Uuid::new_v4().simple());
+            let (page_access_version, page_access_digest) =
+                resource_access::page_access_basis(&tx, workspace_id, page_id)?;
             tx.execute(
                 "INSERT INTO shared_change_proposals (
                     proposal_id, workspace_id, page_id, base_revision_number,
                     base_title, base_content_md, proposed_title, proposed_content_md,
                     summary, author_uid, author_display_name, status, submission_count,
                     created_at_ms, updated_at_ms, live_draft_id, draft_version,
-                    contributor_uids_json, contributor_names_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12, ?13, ?14, ?15, ?16)",
+                    contributor_uids_json, contributor_names_json,
+                    page_access_version, page_access_digest
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 1, ?12, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     pid,
                     workspace_id,
@@ -4134,6 +4328,8 @@ impl SharedContentStore for SqliteSharedContentStore {
                     draft.draft_version,
                     contributor_uids_json,
                     contributor_names_json,
+                    page_access_version,
+                    page_access_digest,
                 ],
             )?;
             tx.execute(
@@ -4267,6 +4463,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -4472,7 +4669,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let parsed = parse_time_id_cursor(cursor)?;
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
         let _project = load_project_summary(&tx, workspace_id, project_id)?;
         let rows = query_project_threads(
             &tx,
@@ -4509,6 +4706,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -4628,6 +4826,7 @@ impl SharedContentStore for SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -4769,39 +4968,179 @@ impl SharedContentStore for SqliteSharedContentStore {
         let limit = clamp_limit(limit);
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let _member = require_active_membership(&tx, workspace_id, &caller.uid)?;
-        let mut stmt = tx.prepare(
-            "SELECT event_seq, workspace_id, event_type, project_id, page_id,
-                    thread_id, proposal_id, draft_id, payload_json, created_at_ms
-             FROM shared_realtime_events
-             WHERE workspace_id = ?1 AND event_seq > ?2
-             ORDER BY event_seq ASC
-             LIMIT ?3",
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
+        let page_visible = resource_access::page_visible_predicate("ap", 4, 5);
+        let project_visible = resource_access::project_visible_predicate("apr", 4, 5);
+        let sql = format!(
+            "SELECT e.event_seq, e.workspace_id, e.event_type, e.project_id, e.page_id,
+                    e.thread_id, e.proposal_id, e.draft_id, e.payload_json, e.created_at_ms
+             FROM shared_realtime_events e
+             WHERE e.workspace_id = ?1 AND e.event_seq > ?2
+               AND (e.page_id IS NULL OR EXISTS (
+                   SELECT 1 FROM shared_pages ap
+                    WHERE ap.workspace_id = e.workspace_id AND ap.page_id = e.page_id
+                      AND {page_visible}))
+               AND (e.project_id IS NULL OR EXISTS (
+                   SELECT 1 FROM shared_projects apr
+                    WHERE apr.workspace_id = e.workspace_id AND apr.project_id = e.project_id
+                      AND {project_visible}))
+             ORDER BY e.event_seq ASC
+             LIMIT ?3"
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt.query_map(
+            params![
+                workspace_id,
+                after_seq.max(0),
+                (limit as i64) + 1,
+                ctx.membership_id,
+                resource_access::privileged_flag(&ctx)
+            ],
+            |r| {
+                let raw_payload: String = r.get(8)?;
+                let payload_json =
+                    serde_json::from_str(&raw_payload).unwrap_or(serde_json::Value::Null);
+                Ok(RealtimeCatchupEvent {
+                    event_seq: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    event_type: r.get(2)?,
+                    project_id: r.get(3)?,
+                    page_id: r.get(4)?,
+                    thread_id: r.get(5)?,
+                    proposal_id: r.get(6)?,
+                    draft_id: r.get(7)?,
+                    payload_json,
+                    created_at_ms: r.get(9)?,
+                })
+            },
         )?;
-        let rows = stmt.query_map(params![workspace_id, after_seq.max(0), limit as i64], |r| {
-            let raw_payload: String = r.get(8)?;
-            let payload_json =
-                serde_json::from_str(&raw_payload).unwrap_or(serde_json::Value::Null);
-            Ok(RealtimeCatchupEvent {
-                event_seq: r.get(0)?,
-                workspace_id: r.get(1)?,
-                event_type: r.get(2)?,
-                project_id: r.get(3)?,
-                page_id: r.get(4)?,
-                thread_id: r.get(5)?,
-                proposal_id: r.get(6)?,
-                draft_id: r.get(7)?,
-                payload_json,
-                created_at_ms: r.get(9)?,
-            })
-        })?;
         let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
+        for r in rows {
+            out.push(r?);
         }
         drop(stmt);
+        out.truncate(limit);
+        if out.is_empty() {
+            // Hidden-only ranges still advance the caller safely. The watermark carries no page,
+            // project, thread or content identity.
+            let max_seq: Option<i64> = tx
+                .query_row(
+                    "SELECT MAX(event_seq) FROM shared_realtime_events
+                      WHERE workspace_id = ?1 AND event_seq > ?2",
+                    params![workspace_id, after_seq.max(0)],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            if let Some(seq) = max_seq {
+                out.push(RealtimeCatchupEvent {
+                    event_seq: seq,
+                    workspace_id: workspace_id.to_owned(),
+                    event_type: "access_filtered".into(),
+                    project_id: None,
+                    page_id: None,
+                    thread_id: None,
+                    proposal_id: None,
+                    draft_id: None,
+                    payload_json: serde_json::json!({}),
+                    created_at_ms: 0,
+                });
+            }
+        }
         tx.commit()?;
         Ok(out)
+    }
+
+    fn caller_can_read_page(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        page_id: &str,
+    ) -> Result<bool, SharedContentError> {
+        let conn = self.lock_conn();
+        let ctx = resource_access::require_caller_access(&conn, workspace_id, &caller.uid)?;
+        resource_access::page_readable(&conn, workspace_id, page_id, &ctx)
+    }
+
+    fn caller_can_read_project(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        project_id: &str,
+    ) -> Result<bool, SharedContentError> {
+        let conn = self.lock_conn();
+        let ctx = resource_access::require_caller_access(&conn, workspace_id, &caller.uid)?;
+        resource_access::project_readable(&conn, workspace_id, project_id, &ctx)
+    }
+
+    fn list_access_members(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+    ) -> Result<Vec<AccessAudienceMember>, SharedContentError> {
+        let conn = self.lock_conn();
+        let ctx = resource_access::require_caller_access(&conn, workspace_id, &caller.uid)?;
+        if !ctx.can_manage_access() {
+            return Err(SharedContentError::Forbidden);
+        }
+        resource_access::list_active_members(&conn, workspace_id)
+    }
+
+    fn get_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+    ) -> Result<ResourceAccessPolicyView, SharedContentError> {
+        let conn = self.lock_conn();
+        let ctx = resource_access::require_caller_access(&conn, workspace_id, &caller.uid)?;
+        resource_access::policy_view(&conn, workspace_id, kind, resource_id, &ctx)
+    }
+
+    fn preview_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+        input: &AccessChangePreviewInput,
+        now_ms: i64,
+    ) -> Result<AccessChangePreview, SharedContentError> {
+        let mut conn = self.lock_conn();
+        resource_access::preview_change(
+            &mut conn,
+            caller,
+            &caller.session_id,
+            workspace_id,
+            kind,
+            resource_id,
+            input,
+            now_ms,
+        )
+    }
+
+    fn commit_resource_access(
+        &self,
+        caller: &VerifiedSession,
+        recheck_session: SessionRecheck<'_>,
+        workspace_id: &str,
+        kind: &str,
+        resource_id: &str,
+        input: &AccessChangeCommitInput,
+        now_ms: i64,
+    ) -> Result<AccessChangeOutcome, SharedContentError> {
+        let mut conn = self.lock_conn();
+        resource_access::commit_change(
+            &mut conn,
+            caller,
+            recheck_session,
+            workspace_id,
+            kind,
+            resource_id,
+            input,
+            now_ms,
+        )
     }
 }
 
@@ -4831,6 +5170,8 @@ impl SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
+        let ctx = resource_access::require_caller_access(&tx, workspace_id, &caller.uid)?;
         if !member.role.can_manage_shared_project() {
             return Err(SharedContentError::Forbidden);
         }
@@ -4904,7 +5245,7 @@ impl SqliteSharedContentStore {
             )?;
         }
 
-        let details = load_project_details(&tx, workspace_id, project_id, None, None, None)?;
+        let details = load_project_details(&tx, workspace_id, project_id, None, None, None, &ctx)?;
         insert_realtime_event(
             &tx,
             workspace_id,
@@ -4965,6 +5306,7 @@ impl SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -5089,6 +5431,7 @@ impl SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_page_for_caller(&tx, workspace_id, &caller.uid, page_id)?;
         if !member.role.can_archive_shared_page() {
             return Err(SharedContentError::Forbidden);
         }
@@ -5215,6 +5558,7 @@ impl SqliteSharedContentStore {
         let mut conn = self.lock_conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let member = require_active_membership(&tx, workspace_id, &caller.uid)?;
+        let _ctx = require_project_for_caller(&tx, workspace_id, &caller.uid, project_id)?;
         if !member.role.can_author_shared_content() {
             return Err(SharedContentError::Forbidden);
         }
@@ -5340,6 +5684,8 @@ struct ProposalRow {
     draft_version: Option<i64>,
     contributor_uids: Vec<String>,
     contributor_names: Vec<String>,
+    page_access_version: i64,
+    page_access_digest: String,
 }
 
 fn sanitize_client_conn_id(raw: &str) -> Result<String, SharedContentError> {
@@ -5361,7 +5707,7 @@ fn sanitize_client_conn_id(raw: &str) -> Result<String, SharedContentError> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_realtime_event(
+pub(crate) fn insert_realtime_event(
     tx: &Transaction<'_>,
     workspace_id: &str,
     event_type: &str,
@@ -6116,9 +6462,41 @@ pub(crate) fn lookup_idempotent_response<T: DeserializeOwned>(
     if stored_hash != payload_hash {
         return Err(SharedContentError::IdempotencyConflict);
     }
+    let value: serde_json::Value = serde_json::from_str(&response_json)
+        .map_err(|_| SharedContentError::InvalidInput("Corrupt idempotency receipt.".into()))?;
+    let ctx = resource_access::require_caller_access(tx, workspace_id, actor_uid)?;
+    check_cached_resource_access(tx, workspace_id, &ctx, &value)?;
     let decoded: T = serde_json::from_str(&response_json)
         .map_err(|_| SharedContentError::InvalidInput("Corrupt idempotency receipt.".into()))?;
     Ok(Some(decoded))
+}
+
+fn check_cached_resource_access(
+    conn: &Connection,
+    workspace_id: &str,
+    ctx: &CallerAccess,
+    value: &serde_json::Value,
+) -> Result<(), SharedContentError> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(id) = fields.get("pageId").and_then(|v| v.as_str()) {
+                resource_access::require_readable_page(conn, workspace_id, id, ctx)?;
+            }
+            if let Some(id) = fields.get("projectId").and_then(|v| v.as_str()) {
+                resource_access::require_readable_project(conn, workspace_id, id, ctx)?;
+            }
+            for value in fields.values() {
+                check_cached_resource_access(conn, workspace_id, ctx, value)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                check_cached_resource_access(conn, workspace_id, ctx, value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6303,6 +6681,7 @@ fn map_project_summary(r: &rusqlite::Row<'_>) -> rusqlite::Result<SharedProjectS
         name: r.get(2)?,
         purpose: r.get(3)?,
         version: r.get(4)?,
+        access_mode: r.get(14)?,
         created_by_uid: r.get(5)?,
         created_by_display_name: r.get(6)?,
         updated_by_uid: r.get(7)?,
@@ -6331,7 +6710,8 @@ pub(crate) fn load_project_summary(
                  WHERE m.workspace_id = pr.workspace_id
                    AND m.project_id = pr.project_id
                    AND m.detached_at_ms IS NULL
-                   AND p.archived_at_ms IS NULL)
+                   AND p.archived_at_ms IS NULL),
+                pr.access_mode
          FROM shared_projects pr
          WHERE pr.workspace_id = ?1 AND pr.project_id = ?2",
         params![workspace_id, project_id],
@@ -6348,6 +6728,7 @@ fn query_project_summaries(
     search_query: Option<&str>,
     cursor: Option<(i64, &str)>,
     limit: usize,
+    ctx: &CallerAccess,
 ) -> Result<Vec<SharedProjectSummary>, SharedContentError> {
     let archive_clause = if include_archived {
         ""
@@ -6355,6 +6736,8 @@ fn query_project_summaries(
         "AND pr.archived_at_ms IS NULL"
     };
     let like_pat = search_query.map(escape_like_pattern);
+    let visible = resource_access::project_visible_predicate("pr", 5, 6);
+    let page_visible = resource_access::page_visible_predicate("p", 5, 6);
     let sql = format!(
         "SELECT pr.project_id, pr.workspace_id, pr.name, pr.purpose, pr.version,
                 pr.created_by_uid, pr.created_by_display_name,
@@ -6366,21 +6749,36 @@ fn query_project_summaries(
                  WHERE m.workspace_id = pr.workspace_id
                    AND m.project_id = pr.project_id
                    AND m.detached_at_ms IS NULL
-                   AND p.archived_at_ms IS NULL)
+                   AND p.archived_at_ms IS NULL
+                   AND {page_visible}),
+                pr.access_mode
          FROM shared_projects pr
          WHERE pr.workspace_id = ?1
            {archive_clause}
            AND (?2 IS NULL OR LOWER(pr.name) LIKE ?2 ESCAPE '\\' OR LOWER(pr.purpose) LIKE ?2 ESCAPE '\\')
            AND (?3 IS NULL OR (pr.updated_at_ms < ?3 OR (pr.updated_at_ms = ?3 AND pr.project_id < ?4)))
+           AND {visible}
          ORDER BY pr.updated_at_ms DESC, pr.project_id DESC
          LIMIT {limit}"
     );
     let mut stmt = tx.prepare(&sql)?;
     let cursor_ts = cursor.map(|(ts, _)| ts);
     let cursor_id = cursor.map(|(_, id)| id);
+    let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<SharedProjectSummary> {
+        let mut project = map_project_summary(r)?;
+        project.access_mode = r.get(14)?;
+        Ok(project)
+    };
     let rows = stmt.query_map(
-        params![workspace_id, like_pat, cursor_ts, cursor_id],
-        map_project_summary,
+        params![
+            workspace_id,
+            like_pat,
+            cursor_ts,
+            cursor_id,
+            ctx.membership_id,
+            resource_access::privileged_flag(ctx)
+        ],
+        map,
     )?;
     let mut out = Vec::new();
     for r in rows {
@@ -6396,8 +6794,10 @@ fn query_project_page_items(
     search_query: Option<&str>,
     cursor: Option<(i64, &str)>,
     limit: usize,
+    ctx: &CallerAccess,
 ) -> Result<Vec<SharedProjectPageItem>, SharedContentError> {
     let like_pat = search_query.map(escape_like_pattern);
+    let visible = resource_access::page_visible_predicate("p", 6, 7);
     let sql = format!(
         "SELECT p.page_id, p.workspace_id, p.title, p.current_revision_number, p.entry_mode,
                 p.origin_kind, p.original_author_label, p.ai_model_label, p.source_note,
@@ -6409,7 +6809,8 @@ fn query_project_page_items(
                  WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
                 (SELECT COUNT(*) FROM shared_change_proposals pr
                  WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending'),
-                m.membership_id, m.generation, m.attached_by_uid, m.attached_by_display_name, m.attached_at_ms
+                m.membership_id, m.generation, m.attached_by_uid, m.attached_by_display_name, m.attached_at_ms,
+                p.access_mode, p.access_project_id
          FROM shared_project_pages m
          JOIN shared_pages p ON p.workspace_id = m.workspace_id AND p.page_id = m.page_id
          WHERE m.workspace_id = ?1
@@ -6418,6 +6819,7 @@ fn query_project_page_items(
            AND p.archived_at_ms IS NULL
            AND (?3 IS NULL OR LOWER(p.title) LIKE ?3 ESCAPE '\\')
            AND (?4 IS NULL OR (p.updated_at_ms < ?4 OR (p.updated_at_ms = ?4 AND m.membership_id < ?5)))
+           AND {visible}
          ORDER BY p.updated_at_ms DESC, m.membership_id DESC
          LIMIT {limit}"
     );
@@ -6425,15 +6827,28 @@ fn query_project_page_items(
     let cursor_ts = cursor.map(|(ts, _)| ts);
     let cursor_id = cursor.map(|(_, id)| id);
     let rows = stmt.query_map(
-        params![workspace_id, project_id, like_pat, cursor_ts, cursor_id],
+        params![
+            workspace_id,
+            project_id,
+            like_pat,
+            cursor_ts,
+            cursor_id,
+            ctx.membership_id,
+            resource_access::privileged_flag(ctx)
+        ],
         |r| {
-            let page_res = map_page_summary(r)?;
+            let mut page = match map_page_summary(r)? {
+                Ok(page) => page,
+                Err(err) => return Ok(Err(err)),
+            };
+            page.access_mode = r.get(27)?;
+            page.access_project_id = r.get(28)?;
             let membership_id: String = r.get(22)?;
             let generation: i64 = r.get(23)?;
             let attached_by_uid: String = r.get(24)?;
             let attached_by_display_name: String = r.get(25)?;
             let attached_at_ms: i64 = r.get(26)?;
-            Ok(page_res.map(|page| SharedProjectPageItem {
+            Ok(Ok(SharedProjectPageItem {
                 membership_id,
                 generation,
                 attached_by_uid,
@@ -6450,6 +6865,33 @@ fn query_project_page_items(
     Ok(out)
 }
 
+fn visible_page_count(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    project_id: &str,
+    ctx: &CallerAccess,
+) -> Result<i64, SharedContentError> {
+    let visible = resource_access::page_visible_predicate("p", 3, 4);
+    let sql = format!(
+        "SELECT COUNT(*) FROM shared_project_pages m
+           JOIN shared_pages p ON p.workspace_id = m.workspace_id AND p.page_id = m.page_id
+          WHERE m.workspace_id = ?1 AND m.project_id = ?2
+            AND m.detached_at_ms IS NULL AND p.archived_at_ms IS NULL
+            AND {visible}"
+    );
+    let count: i64 = tx.query_row(
+        &sql,
+        params![
+            workspace_id,
+            project_id,
+            ctx.membership_id,
+            resource_access::privileged_flag(ctx)
+        ],
+        |r| r.get(0),
+    )?;
+    Ok(count)
+}
+
 fn load_project_details(
     tx: &Transaction<'_>,
     workspace_id: &str,
@@ -6457,8 +6899,10 @@ fn load_project_details(
     search_query: Option<&str>,
     cursor: Option<(i64, &str)>,
     limit: Option<usize>,
+    ctx: &CallerAccess,
 ) -> Result<SharedProjectDetails, SharedContentError> {
-    let project = load_project_summary(tx, workspace_id, project_id)?;
+    let mut project = load_project_summary(tx, workspace_id, project_id)?;
+    project.active_page_count = visible_page_count(tx, workspace_id, project_id, ctx)?;
     let page_limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT);
     let rows = query_project_page_items(
         tx,
@@ -6467,6 +6911,7 @@ fn load_project_details(
         search_query,
         cursor,
         page_limit + 1,
+        ctx,
     )?;
     let (pages, pages_next_cursor) = paginate(rows, page_limit, |item| {
         format!("{}:{}", item.page.updated_at_ms, item.membership_id)
@@ -6485,8 +6930,10 @@ fn query_picker_pages(
     search_query: Option<&str>,
     cursor: Option<(i64, &str)>,
     limit: usize,
+    ctx: &CallerAccess,
 ) -> Result<Vec<SharedPageSummary>, SharedContentError> {
     let like_pat = search_query.map(escape_like_pattern);
+    let visible = resource_access::page_visible_predicate("p", 6, 7);
     let sql = format!(
         "SELECT p.page_id, p.workspace_id, p.title, p.current_revision_number, p.entry_mode,
                 p.origin_kind, p.original_author_label, p.ai_model_label, p.source_note,
@@ -6497,7 +6944,8 @@ fn query_picker_pages(
                 (SELECT COUNT(*) FROM shared_comment_threads t
                  WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
                 (SELECT COUNT(*) FROM shared_change_proposals pr
-                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending')
+                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending'),
+                p.access_mode, p.access_project_id
          FROM shared_pages p
          WHERE p.workspace_id = ?1
            AND p.archived_at_ms IS NULL
@@ -6510,6 +6958,7 @@ fn query_picker_pages(
            )
            AND (?3 IS NULL OR LOWER(p.title) LIKE ?3 ESCAPE '\\')
            AND (?4 IS NULL OR (p.updated_at_ms < ?4 OR (p.updated_at_ms = ?4 AND p.page_id < ?5)))
+           AND {visible}
          ORDER BY p.updated_at_ms DESC, p.page_id DESC
          LIMIT {limit}"
     );
@@ -6517,8 +6966,23 @@ fn query_picker_pages(
     let cursor_ts = cursor.map(|(ts, _)| ts);
     let cursor_id = cursor.map(|(_, id)| id);
     let rows = stmt.query_map(
-        params![workspace_id, project_id, like_pat, cursor_ts, cursor_id],
-        map_page_summary,
+        params![
+            workspace_id,
+            project_id,
+            like_pat,
+            cursor_ts,
+            cursor_id,
+            ctx.membership_id,
+            resource_access::privileged_flag(ctx)
+        ],
+        |r| match map_page_summary(r)? {
+            Ok(mut page) => {
+                page.access_mode = r.get(22)?;
+                page.access_project_id = r.get(23)?;
+                Ok(Ok(page))
+            }
+            Err(err) => Ok(Err(err)),
+        },
     )?;
     let mut out = Vec::new();
     for r in rows {
@@ -6563,11 +7027,21 @@ pub(crate) fn load_page_row(
                     (SELECT COUNT(*) FROM shared_comment_threads t
                      WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
                     (SELECT COUNT(*) FROM shared_change_proposals pr
-                     WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending')
+                     WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending'),
+                    p.access_mode, p.access_project_id
              FROM shared_pages p
              WHERE p.workspace_id = ?1 AND p.page_id = ?2",
             params![workspace_id, page_id],
-            map_page_summary,
+            |r| {
+                match map_page_summary(r)? {
+                    Ok(mut page) => {
+                        page.access_mode = r.get(22)?;
+                        page.access_project_id = r.get(23)?;
+                        Ok(Ok(page))
+                    }
+                    Err(err) => Ok(Err(err)),
+                }
+            },
         )
         .optional()?;
     row.transpose()?.ok_or(SharedContentError::PageNotFound)
@@ -6593,6 +7067,8 @@ fn map_page_summary(
         workspace_id: r.get(1)?,
         title: r.get(2)?,
         current_revision_number: r.get(3)?,
+        access_mode: "workspace".into(),
+        access_project_id: None,
         entry_mode,
         provenance: ShareableProvenance {
             origin_kind,
@@ -6622,17 +7098,16 @@ fn query_page_summaries(
     include_archived: bool,
     cursor: Option<(i64, &str)>,
     limit: usize,
+    ctx: &CallerAccess,
 ) -> Result<Vec<SharedPageSummary>, SharedContentError> {
     let archive_clause = if include_archived {
         ""
     } else {
         "AND p.archived_at_ms IS NULL"
     };
-    let cursor_clause = if cursor.is_some() {
-        "AND (p.updated_at_ms < ?2 OR (p.updated_at_ms = ?2 AND p.page_id < ?3))"
-    } else {
-        ""
-    };
+    let cursor_clause =
+        "AND (?2 IS NULL OR p.updated_at_ms < ?2 OR (p.updated_at_ms = ?2 AND p.page_id < ?3))";
+    let visible = resource_access::page_visible_predicate("p", 4, 5);
     let sql = format!(
         "SELECT p.page_id, p.workspace_id, p.title, p.current_revision_number, p.entry_mode,
                 p.origin_kind, p.original_author_label, p.ai_model_label, p.source_note,
@@ -6643,27 +7118,65 @@ fn query_page_summaries(
                 (SELECT COUNT(*) FROM shared_comment_threads t
                  WHERE t.workspace_id = p.workspace_id AND t.page_id = p.page_id AND t.status = 'open'),
                 (SELECT COUNT(*) FROM shared_change_proposals pr
-                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending')
+                 WHERE pr.workspace_id = p.workspace_id AND pr.page_id = p.page_id AND pr.status = 'pending'),
+                p.access_mode, p.access_project_id
          FROM shared_pages p
-         WHERE p.workspace_id = ?1 {archive_clause} {cursor_clause}
+         WHERE p.workspace_id = ?1 {archive_clause} {cursor_clause} AND {visible}
          ORDER BY p.updated_at_ms DESC, p.page_id DESC
          LIMIT {}",
         limit
     );
+    let map =
+        |r: &rusqlite::Row<'_>| -> rusqlite::Result<Result<SharedPageSummary, SharedContentError>> {
+            match map_page_summary(r)? {
+                Ok(mut page) => {
+                    page.access_mode = r.get(22)?;
+                    page.access_project_id = r.get(23)?;
+                    Ok(Ok(page))
+                }
+                Err(err) => Ok(Err(err)),
+            }
+        };
     let mut stmt = tx.prepare(&sql)?;
+    let cursor_ts = cursor.map(|(ts, _)| ts);
+    let cursor_id = cursor.map(|(_, id)| id);
+    let rows = stmt.query_map(
+        params![
+            workspace_id,
+            cursor_ts,
+            cursor_id,
+            ctx.membership_id,
+            resource_access::privileged_flag(ctx)
+        ],
+        map,
+    )?;
     let mut out = Vec::new();
-    if let Some((ts, id)) = cursor {
-        let rows = stmt.query_map(params![workspace_id, ts, id], map_page_summary)?;
-        for row in rows {
-            out.push(row??);
-        }
-    } else {
-        let rows = stmt.query_map(params![workspace_id], map_page_summary)?;
-        for row in rows {
-            out.push(row??);
-        }
+    for row in rows {
+        out.push(row??);
     }
     Ok(out)
+}
+
+fn require_page_for_caller(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    uid: &str,
+    page_id: &str,
+) -> Result<CallerAccess, SharedContentError> {
+    let ctx = resource_access::require_caller_access(tx, workspace_id, uid)?;
+    resource_access::require_readable_page(tx, workspace_id, page_id, &ctx)?;
+    Ok(ctx)
+}
+
+fn require_project_for_caller(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    uid: &str,
+    project_id: &str,
+) -> Result<CallerAccess, SharedContentError> {
+    let ctx = resource_access::require_caller_access(tx, workspace_id, uid)?;
+    resource_access::require_readable_project(tx, workspace_id, project_id, &ctx)?;
+    Ok(ctx)
 }
 
 pub(crate) fn load_revision_row(
@@ -6961,7 +7474,8 @@ fn load_proposal_row(
                     summary, author_uid, author_display_name, status, submission_count,
                     created_at_ms, updated_at_ms, reviewed_at_ms, reviewer_display_name,
                     applied_revision_number, live_draft_id, draft_version,
-                    COALESCE(contributor_uids_json, '[]'), COALESCE(contributor_names_json, '[]')
+                    COALESCE(contributor_uids_json, '[]'), COALESCE(contributor_names_json, '[]'),
+                    page_access_version, page_access_digest
              FROM shared_change_proposals
              WHERE workspace_id = ?1 AND proposal_id = ?2",
             params![workspace_id, proposal_id],
@@ -6989,6 +7503,8 @@ fn load_proposal_row(
                     r.get::<_, Option<i64>>(19)?,
                     r.get::<_, String>(20)?,
                     r.get::<_, String>(21)?,
+                    r.get::<_, i64>(22)?,
+                    r.get::<_, String>(23)?,
                 ))
             },
         )
@@ -7016,6 +7532,8 @@ fn load_proposal_row(
         draft_version,
         raw_uids,
         raw_names,
+        page_access_version,
+        page_access_digest,
     )) = row
     else {
         return Err(SharedContentError::ProposalNotFound);
@@ -7045,6 +7563,8 @@ fn load_proposal_row(
         draft_version,
         contributor_uids,
         contributor_names,
+        page_access_version,
+        page_access_digest,
     })
 }
 

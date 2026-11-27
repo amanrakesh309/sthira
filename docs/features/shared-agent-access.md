@@ -31,7 +31,7 @@ Every request re-derives the intersection of:
 
 current membership + role · issuing device session · workspace policy · connection grant and
 generation · project availability · explicit page allowlist · current `shared_project_pages`
-membership generation · page archive state.
+membership generation · page archive state · the initiating member’s current human project/page access. A broader agent grant never overrides a narrower human audience, and a broader human audience never silently expands an existing agent grant; both are re-read before reads, context assembly, proposal submission and review.
 
 The explicit allowlist stores the project-page `membership_id` and `generation` it was granted on.
 Detaching a page ends access immediately. Reattaching it creates a new generation, so the old grant
@@ -171,6 +171,9 @@ connection, reported model/provider, destination project, proposed rich Markdown
 identities/revisions/hashes. Edits can compare the immutable saved base or current published content. Source buttons inspect the
 exact saved revision, verify its revision/hash identity, and preserve the review; opening the current
 source page is a separate action.
+Sharing invalidations and workspace role changes reauthorize an open review, close its source
+snapshot and prevent older pending source reads from reopening it. Denied reviews clear their
+cached proposal and comparison bodies.
 Only an independent eligible Owner/Admin may apply. Request changes and dismissal preserve published
 content. Reviewer notes remain visible to the initiating member after a decision. Activity and page proposal links route by stable proposal identity into attributed review.
 Native source views retain their originating project context.
@@ -219,3 +222,11 @@ to authorized workspace members independently of local run files.
   attest to which model a remote provider actually ran. No service-verified model claim is made.
 - **Conflict with live drafts:** agent publication preserves a competing live draft and stale submit
   requires explicit rebase. The corresponding service regression remains required alongside CW3.
+
+
+Resource audiences also constrain search snippets, connection status, proposal review and Activity.
+Page read/proposal bases record access versions and audience digests, and proposals bind the target
+project's access version. Accepted new pages use the current intersection of source and destination
+audiences; editing a broader page from narrower sources requires reviewing its sharing first. See
+[shared resource permissions](shared-resource-permissions.md) for the access contract and remaining
+native verification boundary.

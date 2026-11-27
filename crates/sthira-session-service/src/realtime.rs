@@ -193,7 +193,10 @@ enum ClientWsCommand {
 #[derive(Clone, Debug)]
 enum DeliveryScope {
     Control,
-    WorkspaceRead,
+    WorkspaceRead {
+        page_id: Option<String>,
+        project_id: Option<String>,
+    },
     LiveDraft {
         page_id: String,
         draft_id: String,
@@ -303,6 +306,68 @@ fn check_connection_access(
             reason: "Your membership in this workspace ended.".into(),
         })?;
 
+    if let DeliveryScope::WorkspaceRead {
+        page_id,
+        project_id,
+    } = scope
+    {
+        let Some(content_store) = state.shared_content_store() else {
+            return Err(DeliveryDenial::DropFrame {
+                reason: "shared_content_disabled",
+            });
+        };
+        if let Some(page_id) = page_id {
+            match content_store.caller_can_read_page(&caller, workspace_id, page_id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(DeliveryDenial::DropFrame {
+                        reason: "resource_hidden",
+                    })
+                }
+                Err(SharedContentError::Session(err)) => {
+                    return Err(DeliveryDenial::Close {
+                        code: match err {
+                            StoreError::SessionRevoked => "session_revoked",
+                            StoreError::SessionExpired => "session_expired",
+                            _ => "invalid_session",
+                        },
+                        reason: "This session is no longer valid.".into(),
+                    })
+                }
+                Err(_) => {
+                    return Err(DeliveryDenial::DropFrame {
+                        reason: "resource_lookup_failed",
+                    })
+                }
+            }
+        }
+        if let Some(project_id) = project_id {
+            match content_store.caller_can_read_project(&caller, workspace_id, project_id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(DeliveryDenial::DropFrame {
+                        reason: "resource_hidden",
+                    })
+                }
+                Err(SharedContentError::Session(err)) => {
+                    return Err(DeliveryDenial::Close {
+                        code: match err {
+                            StoreError::SessionRevoked => "session_revoked",
+                            StoreError::SessionExpired => "session_expired",
+                            _ => "invalid_session",
+                        },
+                        reason: "This session is no longer valid.".into(),
+                    })
+                }
+                Err(_) => {
+                    return Err(DeliveryDenial::DropFrame {
+                        reason: "resource_lookup_failed",
+                    })
+                }
+            }
+        }
+    }
+
     if let DeliveryScope::LiveDraft {
         page_id,
         draft_id,
@@ -339,6 +404,15 @@ fn check_connection_access(
                 return Err(DeliveryDenial::EvictDraft {
                     code: "live_draft_closed",
                     reason: "This live draft is no longer active.".into(),
+                    page_id: page_id.clone(),
+                    draft_id: Some(draft_id.clone()),
+                    draft_version: Some(*draft_version),
+                });
+            }
+            Err(SharedContentError::PageNotFound) => {
+                return Err(DeliveryDenial::EvictDraft {
+                    code: "page_unavailable",
+                    reason: "This page is no longer available.".into(),
                     page_id: page_id.clone(),
                     draft_id: Some(draft_id.clone()),
                     draft_version: Some(*draft_version),
@@ -784,7 +858,10 @@ impl RealtimeHub {
                     draft_id: draft_id.clone(),
                     draft_version: *draft_version,
                 },
-                None => DeliveryScope::WorkspaceRead,
+                None => DeliveryScope::WorkspaceRead {
+                    page_id: None,
+                    project_id: None,
+                },
             };
             if let Err(denial) =
                 check_connection_access(state, &conn.bearer_token, &conn.workspace_id, &scope)
@@ -1308,7 +1385,15 @@ impl RealtimeHub {
                 .cloned()
                 .collect()
         };
-        self.deliver_to_authorized(state, targets, &text, DeliveryScope::WorkspaceRead);
+        self.deliver_to_authorized(
+            state,
+            targets,
+            &text,
+            DeliveryScope::WorkspaceRead {
+                page_id: page_id.map(str::to_owned),
+                project_id: project_id.map(str::to_owned),
+            },
+        );
     }
 
     /// Immediately evicts open connections matching a revoked/signed-out device session ID.
@@ -1359,6 +1444,42 @@ impl RealtimeHub {
         }
     }
 
+    /// Rechecks live draft subscribers after a sharing decision. Anyone who lost access to the
+    /// page or to its access-defining project is evicted immediately rather than learning hidden
+    /// content through a stale subscription.
+    pub fn enforce_resource_access_change(
+        &self,
+        state: &SessionServiceState,
+        workspace_id: &str,
+        _kind: &str,
+        _resource_id: &str,
+    ) {
+        let targets: Vec<HubConnection> = {
+            let guard = self.inner.lock().expect("realtime hub lock poisoned");
+            guard
+                .connections
+                .values()
+                .filter(|c| c.workspace_id == workspace_id && c.active_draft.is_some())
+                .cloned()
+                .collect()
+        };
+        for conn in targets {
+            let Some((page_id, draft_id, draft_version)) = conn.active_draft.clone() else {
+                continue;
+            };
+            let scope = DeliveryScope::LiveDraft {
+                page_id,
+                draft_id,
+                draft_version,
+            };
+            if let Err(denial) =
+                check_connection_access(state, &conn.bearer_token, workspace_id, &scope)
+            {
+                self.handle_delivery_denial(state, &conn.connection_id, denial);
+            }
+        }
+    }
+
     /// Immediately evicts open connections for a removed/departed member, or clears edit
     /// access if downgraded to Viewer.
     pub fn enforce_workspace_member_access(
@@ -1370,6 +1491,27 @@ impl RealtimeHub {
     ) {
         if let Some(role) = new_role {
             if role.can_author_shared_content() {
+                // Administrative visibility can be lost even when editing remains allowed.
+                self.enforce_resource_access_change(state, workspace_id, "membership", target_uid);
+                let targets: Vec<HubConnection> = self
+                    .inner
+                    .lock()
+                    .expect("realtime hub lock poisoned")
+                    .connections
+                    .values()
+                    .filter(|c| c.workspace_id == workspace_id && c.uid == target_uid)
+                    .cloned()
+                    .collect();
+                for conn in targets {
+                    let _ = send_text_scoped(
+                        &conn.tx,
+                        &ServerWsEvent::AccessRevoked {
+                            code: "role_changed".into(),
+                            reason: "Your workspace role changed. Refresh your access.".into(),
+                        },
+                        DeliveryScope::Control,
+                    );
+                }
                 return;
             }
         }
@@ -1645,7 +1787,10 @@ pub async fn handle_websocket_connection(stream: TcpStream, state: Arc<SessionSe
         &state,
         &bearer_token,
         &workspace_id,
-        &DeliveryScope::WorkspaceRead,
+        &DeliveryScope::WorkspaceRead {
+            page_id: None,
+            project_id: None,
+        },
     )
     .is_err()
     {
@@ -1662,7 +1807,10 @@ pub async fn handle_websocket_connection(stream: TcpStream, state: Arc<SessionSe
             display_name: display_name.clone(),
             role,
         },
-        DeliveryScope::WorkspaceRead,
+        DeliveryScope::WorkspaceRead {
+            page_id: None,
+            project_id: None,
+        },
     );
 
     let (mut ws_sink, mut ws_source) = ws_stream.split();
@@ -1925,7 +2073,10 @@ fn handle_client_command(
                 state,
                 bearer_token,
                 workspace_id,
-                &DeliveryScope::WorkspaceRead,
+                &DeliveryScope::WorkspaceRead {
+                    page_id: None,
+                    project_id: None,
+                },
             ) {
                 Ok(_) => {}
                 Err(DeliveryDenial::Close { code, reason }) => {
@@ -2169,7 +2320,10 @@ fn handle_client_command(
                                 state,
                                 bearer_token,
                                 workspace_id,
-                                &DeliveryScope::WorkspaceRead
+                                &DeliveryScope::WorkspaceRead {
+                                    page_id: None,
+                                    project_id: None,
+                                }
                             ),
                             Err(DeliveryDenial::Close { .. })
                         );
@@ -2230,7 +2384,10 @@ fn handle_client_command(
                             state,
                             bearer_token,
                             workspace_id,
-                            &DeliveryScope::WorkspaceRead
+                            &DeliveryScope::WorkspaceRead {
+                                page_id: None,
+                                project_id: None,
+                            }
                         ),
                         Err(DeliveryDenial::Close { .. })
                     )
@@ -2332,6 +2489,7 @@ mod tests {
                     provenance: ShareableProvenance::default(),
                     omitted_summary: Vec::new(),
                     idempotency_key: "pg-scope-1".into(),
+                    follow_project_id: None,
                 },
                 now,
             )

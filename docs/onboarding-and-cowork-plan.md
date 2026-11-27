@@ -254,6 +254,36 @@ The local service and Linux desktop now provide versioned logical content snapsh
 
 Local verification covers service integration and fault injection, mocked UI tests, and native two-account Linux export/file-picker recovery, role isolation, app/service restart, same-profile switching, and restore into a fresh content database. Native identities use loopback Google/Firebase fixtures; live-provider acceptance remains separate. Production disaster recovery, hosting/storage, encryption, scheduling and other platforms remain separate work. The shared database decision remains open; live web Research and Inkling 2 Mini remain deferred.
 
+## Human project and page permissions
+
+**The local Linux pilot has automated regressions and native two-account acceptance using isolated
+vaults/keyrings and loopback OAuth/Firebase fixtures.** Native sharing, revocation of live editors,
+proposal reviews and agent snapshots, role transitions, rejoin, account switching, app/service
+restart and v1/v2 export/recovery are exercised. Service API setup and denial checks supplement the
+native controls. Live-provider acceptance and owner product sign-off remain separate.
+Workspace roles remain Owner, Admin, Editor and Viewer.
+Projects are workspace-visible or restricted to selected active members; pages are
+workspace-visible, follow one designated project's current audience, or are visible to selected
+members. Owners and Admins retain administrative read access and full backups, and the sharing UI
+discloses that. See the [permissions contract](features/shared-resource-permissions.md).
+
+Resource access is enforced centrally in `sthira-session-service`: lists, search, counts, pickers,
+project and page details, revisions, discussions, proposals, live drafts, Activity, realtime
+catch-up and delegated agent reads filter before serialization and pagination. Missing and
+inaccessible IDs return the same not-found response. Audience grants bind the membership
+incarnation, so removal and rejoin does not revive old grants. Sharing changes use a version-bound
+preview and an atomic, idempotent commit; policy recursion is avoided by a single access-defining
+project reference that fails closed.
+
+Backups are version 2 with resource classification but no exported audience authority. Restores
+default restricted resources to target Owners/Admins only. Version-1 archives stay readable but
+require an explicit access interpretation (safe administrator-only default, or an explicit opt-in
+to the prior workspace-visible journey). Recovery summaries, maps, counts and history are filtered
+for ordinary members.
+
+The production shared database, hosting, live identity-provider acceptance and non-Linux platforms
+remain open. Live web Research and Inkling 2 Mini remain deferred.
+
 ## Open decisions for shared-workspace deployment
 
 | Decision | Required outcome |

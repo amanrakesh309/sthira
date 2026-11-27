@@ -285,6 +285,9 @@ describe('CW3 Live Co-editing, Bulk Invites, Contributor Review, and Project Dis
     expect(screen.getByText('Alice Owner (You)')).toBeInTheDocument();
     expect(screen.getByText('Bob Editor')).toBeInTheDocument();
 
+    emitCollabEvent({type:'access_revoked',workspaceId:'ws_cw3',code:'role_changed',reason:'Your workspace role changed.'});
+    await waitFor(() => expect(screen.getByTestId('live-sync-status')).toHaveTextContent('Synced'));
+
     // Simulate remote title update from Bob + local title edit by Alice.
     const titleInput = screen.getByLabelText('Live draft title') as HTMLInputElement;
     expect(titleInput).toHaveValue('Live Notes');

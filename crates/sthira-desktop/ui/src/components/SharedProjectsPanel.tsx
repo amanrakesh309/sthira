@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import {
@@ -45,6 +46,7 @@ import {
 import { subscribeCollabEvents } from '../api/liveCollab';
 import type { GoogleSession } from './AccountModal';
 import { SharedPagesPanel } from './SharedPagesPanel';
+import { SharedAccessDialog } from './SharedAccessDialog';
 
 export interface ProjectOpenRequest {
   projectId?: string | null;
@@ -92,6 +94,7 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
   const [loadingList, setLoadingList] = useState(true);
 
   const [selectedProject, setSelectedProject] = useState<SharedProjectDetails | null>(null);
+  const [accessOpen, setAccessOpen] = useState(false);
   const [projectPageQuery, setProjectPageQuery] = useState('');
   const [openedPage, setOpenedPage] = useState<{
     pageId: string;
@@ -274,6 +277,11 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
               .catch(() => {});
           }
           return nextDetails;
+        }
+        if (res.outcome === 'error' && res.code === 'project_not_found') {
+          setSelectedProject(null);
+          setProjectThreads([]);
+          setAccessOpen(false);
         }
         handleFailureResponse(res, 'Could not load project details.');
         return null;
@@ -937,6 +945,20 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
           </button>
 
           <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded px-2 py-0.5 text-[11px] font-medium border border-sthira-border bg-sthira-canvas text-sthira-text-muted">
+              {project.accessMode === 'restricted' ? 'Selected members' : 'Workspace access'}
+            </span>
+            {canManage && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setAccessOpen(true)}
+                className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Share</span>
+              </button>
+            )}
             <button
               type="button"
               disabled={busy}
@@ -1517,6 +1539,23 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
             </button>
           )}
         </section>
+        {accessOpen && selectedProject && (
+          <SharedAccessDialog
+            workspaceId={workspaceId}
+            resourceKind="project"
+            resourceId={selectedProject.project.projectId}
+            resourceName={selectedProject.project.name}
+            availableProjects={projects}
+            onClose={() => setAccessOpen(false)}
+            onCommitted={() => {
+              setAccessOpen(false);
+              setPanelNotice('Sharing updated.');
+              void openProjectById(selectedProject.project.projectId, projectPageQuery, null);
+            }}
+            onAccessLost={onAccessLost}
+            onSessionChange={onSessionChange}
+          />
+        )}
       </div>
     );
   }
@@ -1644,7 +1683,7 @@ export const SharedProjectsPanel: React.FC<SharedProjectsPanelProps> = ({
           </h2>
           <span className="text-xs text-sthira-text-muted">
             {canAuthor
-              ? 'All workspace members can read shared projects'
+              ? 'Sharing controls who can read each project'
               : 'Read-only access (Viewer)'}
           </span>
         </div>

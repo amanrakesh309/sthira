@@ -3,6 +3,7 @@ pub mod backups;
 pub mod crdt;
 pub mod membership;
 pub mod realtime;
+pub mod resource_access;
 pub mod server;
 pub mod shared_content;
 pub mod store;
@@ -26,6 +27,11 @@ pub use membership::{
     OwnershipTransferView, SqliteWorkspaceMembershipStore, TransferStatus, WorkspaceAuditRecord,
     WorkspaceDetails, WorkspaceInvitationView, WorkspaceListResponse, WorkspaceMemberView,
     WorkspaceMembershipStore, WorkspaceRole, WorkspaceSummary, DEFAULT_INVITE_TTL_MS,
+};
+pub use resource_access::{
+    AccessAudienceChange, AccessAudienceMember, AccessChangeCommitInput, AccessChangeOutcome,
+    AccessChangePreview, AccessChangePreviewInput, FollowingPageEntry, PageAccessMode,
+    ProjectAccessMode, ResourceAccessPolicyView, ADMIN_ACCESS_DISCLOSURE,
 };
 pub use server::{serve, SessionServiceState};
 pub use shared_content::{

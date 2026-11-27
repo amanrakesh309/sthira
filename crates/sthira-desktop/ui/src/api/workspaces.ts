@@ -327,6 +327,73 @@ export interface CreateSharedPageInput {
   provenance: ShareableProvenance;
   omittedSummary?: string[];
   idempotencyKey: string;
+  followProjectId?: string | null;
+}
+
+export type SharedResourceAccessMode = 'workspace' | 'restricted' | 'project' | 'selected';
+
+export interface AccessAudienceMember {
+  membershipId: string;
+  uid: string;
+  displayName: string;
+  role: WorkspaceRole;
+}
+
+export interface FollowingPageEntry {
+  pageId: string;
+  title: string;
+  accessMode: SharedResourceAccessMode;
+  accessProjectId?: string | null;
+  accessVersion: number;
+  archived: boolean;
+}
+
+export interface ResourceAccessPolicyView {
+  resourceKind: 'project' | 'page';
+  resourceId: string;
+  accessMode: SharedResourceAccessMode;
+  accessProjectId?: string | null;
+  accessProjectName?: string | null;
+  accessVersion: number;
+  audience: AccessAudienceMember[];
+  canManage: boolean;
+  administrativeAccess: boolean;
+  administrativeDisclosure: string;
+  followingPages: FollowingPageEntry[];
+}
+
+export interface AccessChangePreviewInput {
+  proposedMode: 'workspace' | 'restricted' | 'project' | 'selected';
+  selectedMembershipIds?: string[];
+  followProjectId?: string | null;
+  convertPageIds?: string[];
+  confirmExpansion?: boolean;
+}
+
+export interface AccessChangePreview {
+  previewId: string;
+  resourceKind: 'project' | 'page';
+  resourceId: string;
+  currentMode: string;
+  proposedMode: string;
+  currentAudience: AccessAudienceMember[];
+  proposedAudience: AccessAudienceMember[];
+  audienceChange: { added: AccessAudienceMember[]; removed: AccessAudienceMember[] };
+  followProjectId?: string | null;
+  followProjectName?: string | null;
+  affectedPages: FollowingPageEntry[];
+  conversionPageIds: string[];
+  administrativeDisclosure: string;
+  sharesHistory: string;
+  expansionRequiresConfirmation: boolean;
+  expiresAtMs: number;
+  baseAccessVersion: number;
+}
+
+export interface AccessChangeOutcome {
+  committed: boolean;
+  policy: ResourceAccessPolicyView;
+  changedPageIds: string[];
 }
 
 export interface SharedPageSummary {
@@ -334,6 +401,8 @@ export interface SharedPageSummary {
   workspaceId: string;
   title: string;
   currentRevisionNumber: number;
+  accessMode?: SharedResourceAccessMode;
+  accessProjectId?: string | null;
   entryMode: PageEntryMode;
   provenance: ShareableProvenance;
   omittedSummary: string[];
@@ -488,6 +557,7 @@ export interface SharedProjectSummary {
   name: string;
   purpose: string;
   version: number;
+  accessMode?: SharedResourceAccessMode;
   activePageCount: number;
   createdByUid: string;
   createdByDisplayName: string;
@@ -518,6 +588,8 @@ export interface CreateSharedProjectInput {
   name: string;
   purpose: string;
   idempotencyKey: string;
+  accessMode?: 'workspace' | 'restricted';
+  audienceMembershipIds?: string[];
 }
 
 export interface CreateSharedProjectOutcome {
@@ -1341,5 +1413,61 @@ export async function listRealtimeEvents(
     workspaceId,
     afterSeq,
     limit: limit ?? null,
+  });
+}
+
+export async function listAccessMembers(
+  workspaceId: string,
+): Promise<WorkspaceResponse<AccessAudienceMember[]>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<AccessAudienceMember[]>>('cmd_list_access_members', {
+    workspaceId,
+  });
+}
+
+export async function getResourceAccess(
+  workspaceId: string,
+  resourceKind: 'project' | 'page',
+  resourceId: string,
+): Promise<WorkspaceResponse<ResourceAccessPolicyView>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<ResourceAccessPolicyView>>('cmd_get_resource_access', {
+    workspaceId,
+    resourceKind,
+    resourceId,
+  });
+}
+
+export async function previewResourceAccess(
+  workspaceId: string,
+  resourceKind: 'project' | 'page',
+  resourceId: string,
+  input: AccessChangePreviewInput,
+): Promise<WorkspaceResponse<AccessChangePreview>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<AccessChangePreview>>('cmd_preview_resource_access', {
+    workspaceId,
+    resourceKind,
+    resourceId,
+    input,
+  });
+}
+
+export async function commitResourceAccess(
+  workspaceId: string,
+  resourceKind: 'project' | 'page',
+  resourceId: string,
+  previewId: string,
+  idempotencyKey: string,
+  confirmExpansion: boolean,
+): Promise<WorkspaceResponse<AccessChangeOutcome>> {
+  if (!isTauri) return previewUnavailable();
+  return invoke<WorkspaceResponse<AccessChangeOutcome>>('cmd_commit_resource_access', {
+    workspaceId,
+    resourceKind,
+    resourceId,
+    previewId,
+    idempotencyKey,
+    confirmExpansion,
   });
 }

@@ -1128,6 +1128,9 @@ export const LiveSharedDraftEditor: React.FC<LiveSharedDraftEditorProps> = ({
           break;
         }
         case 'access_revoked': {
+          // A role refresh alone does not end an authorized live draft. The service
+          // sends a separate eviction when the new role loses this page or editing.
+          if (ev.code === 'role_changed') break;
           setSyncStatus('revoked');
           setErrorMsg(ev.reason || 'Your edit session ended.');
           setParticipants([]);

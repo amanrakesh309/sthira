@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SharedActivityFeed } from '../components/SharedPagesPanel';
 import { SharedAgentsPanel, SharedAgentSettings } from '../components/SharedAgentsPanel';
 import type { SharedAgentProposal } from '../api/sharedAgents';
 
+const collab = vi.hoisted(() => ({listeners: new Set<(event: unknown) => void>()}));
+vi.mock('../api/liveCollab', () => ({subscribeCollabEvents: async (listener: (event: unknown) => void) => {collab.listeners.add(listener);return () => collab.listeners.delete(listener);}}));
 const api=vi.hoisted(()=>({sharedAgents:vi.fn(),listSharedProjects:vi.fn(),getSharedProject:vi.fn(),getProposalDetails:vi.fn(),listSharedRevisions:vi.fn(),listWorkspaceActivity:vi.fn(),listWorkspaces:vi.fn(),listAvailableModels:vi.fn()}));
 vi.mock('../api/sharedAgents',()=>({sharedAgents:api.sharedAgents}));
 vi.mock('../api/ipc',()=>({listAvailableModels:api.listAvailableModels}));
@@ -15,6 +17,7 @@ function mount(uid='a', initialProposalId?:string){return render(<SharedAgentsPa
 describe('Shared agent desktop boundary',()=>{
  beforeEach(()=>{
   vi.resetAllMocks();
+  collab.listeners.clear();
   api.listAvailableModels.mockResolvedValue([{id:'model',display_name:'Fixture',provider_name:'Loopback',is_default:true}]);
   api.listSharedProjects.mockResolvedValue(ok({items:[{projectId:'project',name:'Cedar'}],nextCursor:null}));
   api.getSharedProject.mockResolvedValue(ok({pages:[{page:{pageId:'source',title:'Source Cedar'}},{page:{pageId:'unselected',title:'Private from this connection'}}],pagesNextCursor:null}));
@@ -41,6 +44,24 @@ describe('Shared agent desktop boundary',()=>{
   fireEvent.click(screen.getByRole('button',{name:'Apply agent proposal'}));
   await screen.findByText('Applied after independent review.');
   expect(api.sharedAgents).toHaveBeenCalledWith('ws','review',expect.objectContaining({proposalId:'proposal-b',review:expect.objectContaining({action:'apply',expectedSubmissionNumber:1})}));
+ });
+ it('clears an open source snapshot and proposal after their audience is revoked',async()=>{
+  api.listSharedRevisions.mockResolvedValue(ok({items:[{revisionNumber:2,title:'Source Cedar',contentMd:'PRIVATE_SOURCE_BODY',contentSha256:'abc123',authorDisplayName:'Author'}],nextCursor:null}));
+  mount('a','proposal-b');
+  fireEvent.click(await screen.findByRole('button',{name:'Source Cedar · rev 2'}));
+  await screen.findByText('PRIVATE_SOURCE_BODY');
+  api.sharedAgents.mockImplementation(async(_ws,action)=>action==='proposal'?{outcome:'error',code:'agent_proposal_not_found',message:'Unavailable'}:ok(action==='policy'?{enabled:true}:[]));
+  await act(async()=>{for(const listener of collab.listeners)listener({type:'workspace_event',workspaceId:'ws',eventType:'resource_access_changed',payload:{}});});
+  await waitFor(()=>expect(screen.queryByText('PRIVATE_SOURCE_BODY')).not.toBeInTheDocument());
+  expect(screen.queryByText('# Saved agent draft')).not.toBeInTheDocument();
+ });
+ it('rechecks a saved review when administrative access is removed by a role change',async()=>{
+  const view=mount('a','proposal-b');
+  await screen.findByRole('heading',{name:'Review the scoped suggestion'});
+  api.sharedAgents.mockImplementation(async(_ws,action)=>action==='proposal'?{outcome:'error',code:'agent_proposal_not_found',message:'Unavailable'}:ok(action==='policy'?{enabled:true}:[]));
+  view.rerender(<SharedAgentsPanel workspaceId="ws" myRole="editor" currentUid="a" initialProposalId="proposal-b"/>);
+  await waitFor(()=>expect(screen.queryByRole('heading',{name:'Review the scoped suggestion'})).not.toBeInTheDocument());
+  expect(screen.queryByText('# Saved agent draft')).not.toBeInTheDocument();
  });
  it('blocks self apply and keeps revoked suggestions inspectable and dismissible',async()=>{
   api.sharedAgents.mockImplementation(async(_ws,action)=>ok(action==='proposal'?{...proposal,reviewEligible:false,isStale:true,staleReason:'Connection revoked',revocationState:'revoked'}:action==='policy'?{enabled:true}:[]));

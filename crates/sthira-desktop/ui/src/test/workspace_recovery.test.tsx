@@ -63,4 +63,15 @@ describe('Shared workspace recovery UI (mocked native bridge)',()=>{
   fireEvent.click(screen.getByRole('button',{name:'Keep backup'}));expect(api.mock.calls.some(c=>c[2]==='remove')).toBe(false);
   fireEvent.click(screen.getByRole('button',{name:'Remove backup'}));fireEvent.click(screen.getByRole('button',{name:'Confirm remove backup'}));await waitFor(()=>expect(api.mock.calls.some(c=>c[2]==='remove')).toBe(true));
  });
+ it('chooses a legacy audience before requesting the file preview',async()=>{
+  render(<WorkspaceRecoveryPanel {...props}/>);
+  const choose=await screen.findByRole('button',{name:'Choose backup file'});
+  await waitFor(()=>expect(choose).toBeEnabled());
+  fireEvent.click(screen.getByRole('radio',{name:/Workspace-visible/}));
+  fireEvent.click(choose);
+  await screen.findByRole('heading',{name:'Restore Source team into Empty team'});
+  expect(api).toHaveBeenCalledWith('target','a','previewFile',{legacyVisibility:'workspace'});
+  expect(screen.getByRole('radio',{name:/Workspace-visible/})).toBeDisabled();
+ });
+
 });

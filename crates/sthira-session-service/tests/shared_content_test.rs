@@ -231,8 +231,8 @@ async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_from_v1_and_
     // 2. Reopen existing CW1 DB with shared content enabled -> additive migration v1 -> v4.
     let (base2, _auth2, mem2, shared2, stop2) =
         start_service(&auth_db, &mem_db, true, Arc::clone(&clock)).await;
-    assert_eq!(mem2.schema_version().unwrap(), 6);
-    assert_eq!(shared2.unwrap().schema_version().unwrap(), 6);
+    assert_eq!(mem2.schema_version().unwrap(), 8);
+    assert_eq!(shared2.unwrap().schema_version().unwrap(), 8);
 
     // Populate a CW2 page + revision + comment + proposal + v2-era activity row.
     let page: Value = http
@@ -277,6 +277,10 @@ async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_from_v1_and_
         conn.execute_batch(
             "
             PRAGMA foreign_keys = OFF;
+            DROP TRIGGER IF EXISTS trg_shared_pages_access_insert;
+            DROP TRIGGER IF EXISTS trg_shared_pages_access_update;
+            DROP TRIGGER IF EXISTS trg_shared_projects_access;
+            DROP TRIGGER IF EXISTS trg_shared_audience_membership;
             DROP TABLE IF EXISTS shared_project_pages;
             DROP TABLE IF EXISTS shared_projects;
             DROP INDEX IF EXISTS idx_shared_pages_ws_page;
@@ -324,8 +328,8 @@ async fn disabled_shared_content_preserves_cw1_and_upgrades_cleanly_from_v1_and_
     // 4. Reopen v2 DB with current binary -> additive upgrade v2 -> v4 preserving all CW2 records.
     let (base3, _auth3, mem3, shared3, stop3) =
         start_service(&auth_db, &mem_db, true, Arc::clone(&clock)).await;
-    assert_eq!(mem3.schema_version().unwrap(), 6);
-    assert_eq!(shared3.unwrap().schema_version().unwrap(), 6);
+    assert_eq!(mem3.schema_version().unwrap(), 8);
+    assert_eq!(shared3.unwrap().schema_version().unwrap(), 8);
 
     let got_page: Value = http
         .get(format!("{base3}/v1/workspaces/{ws_id}/pages/{page_id}"))
@@ -1116,6 +1120,7 @@ async fn concurrent_apply_lost_response_retry_stale_rebase_and_write_boundary_re
             provenance: Default::default(),
             omitted_summary: vec![],
             idempotency_key: "abort_key".into(),
+            follow_project_id: None,
         },
         clock.load(Ordering::SeqCst),
     );
@@ -2239,7 +2244,7 @@ async fn shared_project_grouping_roles_isolation_pagination_concurrency_and_life
         .unwrap()
         .iter()
         .any(|a| a["action"] == "project_restored" && a["projectId"] == prj1_id));
-    assert_eq!(shared.schema_version().unwrap(), 6);
+    assert_eq!(shared.schema_version().unwrap(), 8);
 
     stop.send(()).unwrap();
 }

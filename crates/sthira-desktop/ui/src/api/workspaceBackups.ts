@@ -7,6 +7,7 @@ export interface BackupSummary {
 export interface RestorePreview {
   ticketId: string; workspaceId: string; targetName: string; sourceName: string;
   checksumSha256: string; counts: Record<string, number>; expiresAtMs: number; memberCount: number;
+  legacyAccessReviewRequired?: boolean; accessSummary?: Record<string, number>;
 }
 export interface Restoration {
   receipt: { restoreId: string; workspaceId: string; sourceName: string; restoredAtMs: number;

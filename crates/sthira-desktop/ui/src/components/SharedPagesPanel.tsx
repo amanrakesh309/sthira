@@ -9,11 +9,13 @@ import {
   FileText,
   GitPullRequest,
   History,
+  Lock,
   MessageSquare,
   RotateCcw,
   Users,
 } from 'lucide-react';
 import { subscribeCollabEvents } from '../api/liveCollab';
+import { SharedAccessDialog } from './SharedAccessDialog';
 import {
   archiveSharedPage,
   canAuthorSharedContent,
@@ -110,6 +112,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   const [includeArchived, setIncludeArchived] = useState(false);
   const [loadingList, setLoadingList] = useState(true);
   const [selectedPage, setSelectedPage] = useState<SharedPageDetails | null>(null);
+  const [accessOpen, setAccessOpen] = useState(false);
   const [inspectedRevision, setInspectedRevision] = useState<SharedPageRevisionView | null>(null);
   const [revisionsList, setRevisionsList] = useState<SharedPageRevisionView[]>([]);
   const [revisionsCursor, setRevisionsCursor] = useState<string | null>(null);
@@ -118,6 +121,11 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   const [agentReviewId, setAgentReviewId] = useState<string | null>(null);
   const [selectedProposal, setSelectedProposal] = useState<SharedProposalDetails | null>(null);
   const [draftMode, setDraftMode] = useState<SharedDraftEditorMode | null>(null);
+  const draftLeaveGuardRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerDraftBeforeLeave = useCallback((guard: (() => Promise<boolean>) | null) => {
+    draftLeaveGuardRef.current = guard;
+    registerBeforeLeave?.(guard);
+  }, [registerBeforeLeave]);
   const [liveEditingPage, setLiveEditingPage] = useState<{
     pageId: string;
     baseRevisionNumber: number;
@@ -214,6 +222,15 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
           setDraftMode(null);
           return;
         }
+        if (res.outcome === 'error' && res.code === 'page_not_found') {
+          setSelectedPage(null);
+          setInspectedRevision(null);
+          setSelectedProposal(null);
+          setRevisionsList([]);
+          setAccessOpen(false);
+          setPages([]);setPagesNextCursor(null);setBusy(false);
+          void loadPagesList(includeArchived, null);
+        }
         handleFailureResponse(res, 'Could not open shared page.');
       } catch (err) {
         if (seq !== reqSeqRef.current) return;
@@ -222,7 +239,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
         if (seq === reqSeqRef.current) setBusy(false);
       }
     },
-    [handleFailureResponse, workspaceId],
+    [handleFailureResponse, includeArchived, loadPagesList, workspaceId],
   );
 
   const openProposalById = useCallback(
@@ -239,6 +256,15 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
           setDraftMode(null);
           return;
         }
+        if (res.outcome === 'error' && ['proposal_not_found', 'page_not_found'].includes(res.code)) {
+          setSelectedPage(null);
+          setSelectedProposal(null);
+          setInspectedRevision(null);
+          setRevisionsList([]);
+          setAccessOpen(false);
+          setPages([]);setPagesNextCursor(null);setBusy(false);
+          void loadPagesList(includeArchived, null);
+        }
         handleFailureResponse(res, 'Could not load proposal details.');
       } catch (err) {
         if (seq !== reqSeqRef.current) return;
@@ -247,7 +273,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
         if (seq === reqSeqRef.current) setBusy(false);
       }
     },
-    [handleFailureResponse, workspaceId],
+    [handleFailureResponse, includeArchived, loadPagesList, workspaceId],
   );
 
   const selectedPageRef = useRef(selectedPage);
@@ -281,7 +307,41 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   useEffect(() => {
     if (refreshSignal === prevRefreshSignalRef.current) return;
     prevRefreshSignalRef.current = refreshSignal;
-    if (draftModeRef.current || liveEditingPageRef.current) return;
+    if (draftModeRef.current || liveEditingPageRef.current) {
+      // A refresh must recheck access even while edits are open. Do not replace an
+      // authorized dirty editor with a server snapshot; only evict a denied page.
+      const mode = draftModeRef.current;
+      const pageId = liveEditingPageRef.current?.pageId ??
+        (mode && mode.kind !== 'newPage' ? mode.pageId : null);
+      if (!pageId) return;
+      let active = true;
+      void getSharedPage(workspaceId, pageId).then(async res => {
+        if (!active) return;
+        if (res.outcome === 'error' && res.code === 'page_not_found') {
+          // Persist the latest private draft before unmount cancels its debounce.
+          // This is local, account-scoped storage and does not write to the denied page.
+          const saved = mode ? await draftLeaveGuardRef.current?.() : true;
+          if (!active || (mode ? draftModeRef.current !== mode : liveEditingPageRef.current?.pageId !== pageId)) return;
+          ++reqSeqRef.current;
+          setLiveEditingPage(null);
+          setDraftMode(null);
+          setSelectedPage(null);
+          setSelectedProposal(null);
+          setInspectedRevision(null);
+          setRevisionsList([]);
+          setPages([]);setPagesNextCursor(null);
+          void loadPagesList(includeArchived, null);
+          setAccessOpen(false);
+          setBusy(false);
+          setPanelError(saved === false
+            ? 'This page is no longer available. The latest private draft could not be saved. Previously saved drafts remain private to this account.'
+            : 'This page is no longer available. Your saved local drafts remain private to this account.');
+        } else if (res.outcome === 'accessLost' || res.outcome === 'sessionUpdated') {
+          handleFailureResponse(res, 'Shared page access changed.');
+        }
+      }).catch(() => { /* A connection failure is not an access revocation. */ });
+      return () => { active = false; };
+    }
     if (selectedProposalRef.current) {
       void openProposalById(selectedProposalRef.current.proposal.proposalId);
     } else if (selectedPageRef.current) {
@@ -289,7 +349,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
     } else if (!originProjectRef.current) {
       void loadPagesList(includeArchived, null);
     }
-  }, [includeArchived, loadPagesList, openPageById, openProposalById, refreshSignal]);
+  }, [handleFailureResponse, includeArchived, loadPagesList, openPageById, openProposalById, refreshSignal, workspaceId]);
 
   useEffect(() => {
     if (!pendingOpenRequest) return;
@@ -533,7 +593,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
         accountUid={currentUid}
         mode={draftMode}
         currentPublishedDoc={currentPublishedDoc}
-        registerBeforeLeave={registerBeforeLeave}
+        registerBeforeLeave={registerDraftBeforeLeave}
         submitting={busy}
         error={panelError}
         onClearError={() => setPanelError('')}
@@ -880,6 +940,23 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
                   Archived
                 </span>
               )}
+              <span className="rounded px-2 py-0.5 text-[11px] font-medium border border-sthira-border bg-sthira-canvas text-sthira-text-muted">
+                {page.accessMode === 'project'
+                  ? 'Access follows project'
+                  : page.accessMode === 'selected'
+                    ? 'Selected members'
+                    : 'Workspace access'}
+              </span>
+              {(myRole === 'owner' || myRole === 'admin') && (
+                <button
+                  type="button"
+                  onClick={() => setAccessOpen(true)}
+                  className="sthira-button-secondary inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Share</span>
+                </button>
+              )}
               {inspectedRevision && (
                 <button
                   type="button"
@@ -1129,6 +1206,22 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
             </ul>
           )}
         </section>
+        {accessOpen && selectedPage && (
+          <SharedAccessDialog
+            workspaceId={workspaceId}
+            resourceKind="page"
+            resourceId={selectedPage.page.pageId}
+            resourceName={selectedPage.page.title}
+            onClose={() => setAccessOpen(false)}
+            onCommitted={() => {
+              setAccessOpen(false);
+              setPanelNotice('Sharing updated.');
+              void openPageById(selectedPage.page.pageId);
+            }}
+            onAccessLost={onAccessLost}
+            onSessionChange={onSessionChange}
+          />
+        )}
       </div>
     );
   }
@@ -1210,7 +1303,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
           </h2>
           <span className="text-xs text-sthira-text-muted">
             {canAuthor
-              ? 'All workspace members can read published pages'
+              ? 'Sharing controls who can read each page'
               : 'Read-only access (Viewer)'}
           </span>
         </div>
