@@ -1,4 +1,5 @@
 pub mod external;
+pub mod shared_access;
 
 use std::time::SystemTime;
 use sthira_core::{Clock, CoreError, Locality, ModelProvider};

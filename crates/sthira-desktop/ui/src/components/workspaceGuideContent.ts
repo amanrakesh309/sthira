@@ -112,7 +112,7 @@ const overview = {
   external: {
     title: 'Connect an external agent',
     location: 'Settings → Agent connections',
-    text: 'Share a personal project with an agent. Review suggestions in Sthira and disconnect from Settings.',
+    text: 'Share a Personal project or selected shared pages with an agent. Review suggestions in Sthira and disconnect from Settings.',
     target: 'agents-settings', fallback: 'settings',
   },
   vault: {

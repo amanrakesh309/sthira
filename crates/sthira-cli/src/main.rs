@@ -23,7 +23,8 @@ COMMANDS:
     init                            Explicitly initialize a new vault
     access grant|list|revoke         Manage scoped external credentials (owner only)
     api schema|call                 Discover/call JSON workspace and memory tools
-    mcp                             Run the authenticated stdio MCP server
+    mcp                             Run the authenticated Personal stdio MCP server
+    shared-mcp --connection-file    Run scoped shared team MCP (no Personal vault)
     review show|apply|dismiss|undo   Inspect and review a saved agent proposal (owner only)
     handoff list|read|save|close|continue  Owner saved handoff and continuation actions
     migration preview|list|history|read|review|apply-selected|apply|cancel|rollback  Review local export imports
@@ -40,6 +41,9 @@ OPTIONS:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+    if sthira_cli::shared_access::dispatch(&args).await? {
+        return Ok(());
+    }
     if external::dispatch(&args).await? {
         return Ok(());
     }

@@ -11,6 +11,7 @@ import {
 } from '../api/agentConnections';
 import { getWorkspaceTree } from '../api/ipc';
 import { ContextInfo } from './ContextInfo';
+import { SharedAgentSettings } from './SharedAgentsPanel';
 
 const appNames: Record<ExternalAgentClient, string> = {
   codex: 'Codex',
@@ -23,6 +24,7 @@ const appNames: Record<ExternalAgentClient, string> = {
 };
 
 export function AgentConnectionsSettings() {
+  const [destination, setDestination] = useState('personal');
   const [setup, setSetup] = useState<Awaited<ReturnType<typeof getAgentConnections>>>();
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [client, setClient] = useState<ExternalAgentClient | ''>('');
@@ -77,8 +79,10 @@ export function AgentConnectionsSettings() {
     <section className="settings-agents" aria-labelledby="settings-agents-title">
       <header className="flex items-center gap-2">
         <h3 id="settings-agents-title" className="settings-section-title">Connect an agent</h3>
-        <ContextInfo title="agent connections">Share one personal project with an app on this device. You review suggested changes in Sthira. Disconnecting revokes access and blocks approval of pending suggestions.</ContextInfo>
+        <ContextInfo title="agent connections">Connect an app to a Personal project or selected pages in a shared workspace. You review suggested changes in Sthira. Disconnecting revokes access and blocks approval of pending suggestions.</ContextInfo>
       </header>
+      <label>Destination<select aria-label="Destination" value={destination} onChange={e => setDestination(e.target.value)}><option value="personal">Personal project</option><option value="shared">Shared workspace</option></select></label>
+      {destination === 'shared' ? <SharedAgentSettings /> : <>
       {error && <p role="alert" className="settings-agents-error">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {!setup && !error && <p role="status">Loading agent connections…</p>}
@@ -223,6 +227,7 @@ export function AgentConnectionsSettings() {
           </section>
         </>
       )}
+      </>}
     </section>
   );
 }

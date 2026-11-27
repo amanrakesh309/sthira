@@ -11,6 +11,7 @@ The owner has prioritized finishing the remaining AE5 implementation batch befor
 | 3 | CW1 — Accounts and workspace membership | Sign in, manage an account, create/join a team workspace, and manage members and roles. | Linux pilot sign-off includes per-device revocation and workspace membership. |
 | 4 | CW2 — Shared work and synchronization | Work asynchronously on shared pages and projects with comments, reviewed changes, attribution and conflict handling. | Local Linux shared-page pilot signed off. Shared project grouping passed local acceptance. |
 | 5 | CW3 — Live co-editing | Edit the same document simultaneously with presence and collaborator cursors. | Local Linux pilot signed off. |
+| 6 | Scoped shared Agent/MCP participation | Connect agents to selected shared pages and review their suggestions independently. | Local Linux pilot signed off. |
 
 Firebase Authentication with Google sign-in is selected for the CW1 pilot. Hosting, the production shared-workspace database, and synchronization architecture are open. [Product policy](policies/product.md) governs ownership and local-first behavior. [Verification policy](policies/verification.md) governs acceptance evidence.
 
@@ -110,7 +111,7 @@ Native Linux acceptance passed all six membership checks with both loopback iden
 
 ## CW2 — Shared work and synchronization
 
-The owner signed off on the CW2 local Linux shared-page pilot. Its verified journey covers publishing a reviewed page copy, discussion, proposal review, and seeing the accepted revision on a second client. [Shared project grouping](#shared-project-grouping) passed local acceptance. [Scoped shared Agent/MCP](#scoped-shared-agent-and-mcp-participation) remains open.
+The owner signed off on the CW2 local Linux shared-page pilot. Its verified journey covers publishing a reviewed page copy, discussion, proposal review, and seeing the accepted revision on a second client. [Shared project grouping](#shared-project-grouping) passed local acceptance. [Scoped shared Agent/MCP](#scoped-shared-agent-and-mcp-participation) has a local Linux pilot; production and live-provider acceptance remain open.
 
 ### Shared pages
 
@@ -139,7 +140,7 @@ The owner signed off on the CW2 local Linux shared-page pilot. Its verified jour
 - Authoring uses a private draft in `DocumentEditor` (`Propose edit` or `Revise & resubmit`). A submitted proposal records `baseRevisionNumber`, proposed title/content, author, submission count, and summary. `SharedProposalReview` shows submitted base vs proposed and current page vs proposed views alongside conflict warnings and decision history. Reviewers can **Apply change**, **Request changes**, or **Reject**; authors can **Withdraw proposal** or revise/resubmit.
 - Every post-publication edit requires review, and reviewers cannot approve, reject, or request changes on their own proposal (`self_review_blocked`). Single-reviewer workspaces require adding another Owner or Admin to review that reviewer's own proposals.
 - Applying or reviewing a proposal (`Apply change`, `Request changes`, or `Reject`) binds to `expectedSubmissionNumber` from the rendered review view and runs inside one database `IMMEDIATE` transaction that rechecks reviewer role/membership and device session validity (`SessionRecheck`), page existence/non-archived state, proposal eligibility, exact submission match (`409 stale_submission` if replaced, preserving any typed review note until refreshed), and `current_revision_number == base_revision_number`. It writes the new revision, updated page head, review decision, activity event, and scoped idempotency receipt (including submission number in the payload digest and lost-response replay) together. Competing stale proposals keep their drafts and require explicit **Rebase & revise** before resubmitting; Markdown content across client preview sanitization and direct service writes enforces the same CommonMark/GFM destination policy (`http:`/`https:`/`mailto:`/`#fragment` allowed; inline, reference-style, autolink, image, and raw HTML links/vault refs sanitized in copy preview and rejected on direct writes).
-- Scoped shared Agent/MCP participation remains later CW2 work and stays distinct from human review in the UI.
+- Scoped shared Agent/MCP participation is a separate local Linux slice with explicit grants and independent human review.
 
 ### Synchronization and offline behavior
 
@@ -161,7 +162,7 @@ The production shared-workspace database and hosting decisions remain open; CW2 
 
 The current CW2 build passed the two-account native Linux journey with loopback OIDC/Firebase. The run verified nested Markdown reference redaction and direct-write rejection, submission-bound review, exact Activity destinations for a comment, a proposal submission, and an approval, workspace and removed-member isolation, and A → B → A switching in one profile. Immediate Back, normal window close, outdated-base rebase, and restart persistence passed. The owner vault checksum matched.
 
-Automated service and UI regressions covered late draft reads and edits during a pending save. An earlier post-cleanup Linux release build also passed its smoke check. Production database and hosting acceptance, shared project grouping, scoped shared Agent/MCP, live Sthira Auth QA, and cross-platform checks remain open. Live web Research and Inkling 2 Mini remain deferred.
+Automated service and UI regressions covered late draft reads and edits during a pending save. An earlier post-cleanup Linux release build also passed its smoke check. Production database and hosting acceptance, live Sthira Auth QA for later collaboration slices, and cross-platform checks remain open. Shared project grouping and scoped shared Agent/MCP have local Linux pilots. Live web Research and Inkling 2 Mini remain deferred.
 
 ### Shared project grouping
 
@@ -220,7 +221,30 @@ The owner signed off on the local Linux pilot after all seven scenarios passed a
 
 ## Scoped shared Agent and MCP participation
 
-This is the remaining planned collaboration slice. Start with explicit permission to read selected shared pages in one team project. Let authorized members use an agent to prepare a proposal for independent human review. Record the initiating member, the agent or client, and the exact source revisions. Verify permission checks, workspace isolation, revocation, and stale proposals with two local Linux profiles and deterministic fixtures.
+The owner signed off on the local Linux shared-agent pilot. This sign-off covers the isolated two-account native service/MCP and desktop checks with loopback identity/model fixtures; it does not certify live providers, production deployment, or other platforms.
+
+The local Linux implementation provides **Settings → Agent connections → Shared workspace** and a
+team **Agents** tab. Owners/Admins enable workspace agent access; members select one shared project,
+explicit pages, and a read grant by default. Suggestion access requires an authoring role. Native
+runs and external MCP clients use the same service authorization and proposal boundary.
+
+Review shows the initiating human, agent/client, reported model/provider, source revisions/hashes,
+and rich proposed content. Exact saved source versions can be inspected without replacing them with
+current content. Independent eligible Owners/Admins apply, request changes with durable feedback, or
+dismiss. Agents cannot approve or publish. Scope updates, connection/device revocation, membership
+loss and changed sources invalidate pending authority.
+
+Native runs can answer from selected pages or suggest an edit/new page. Their progress, failures,
+source receipts and dispatched model/provider are private to the initiating account on that device.
+Restart recovery is explicit and proposal retries reuse the durable request identity. Web is off;
+Personal retrieval and other members' provider keys are unavailable to this path.
+
+Two-account Linux checks use standalone Tauri/service/MCP processes, isolated keyrings and vaults,
+and loopback identity/model fixtures. They cover review, source inspection, scope/disconnect,
+restart/recovery, and same-profile switching. Live identity/provider quality, other platforms and
+installed external-client versions retain separate acceptance. See the [shared-agent contract](features/shared-agent-access.md).
+Production shared database and hosting decisions remain open. Live web Research and Inkling 2 Mini
+remain deferred.
 
 ## Open decisions for shared-workspace deployment
 

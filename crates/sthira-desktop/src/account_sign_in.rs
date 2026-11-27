@@ -222,6 +222,9 @@ pub(crate) async fn cmd_google_sign_out<R: Runtime>(
     if let Some(mgr) = app.try_state::<crate::live_collab::LiveCollabManager>() {
         mgr.disconnect_all().await;
     }
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        state.requests.cancel_agent_tasks();
+    }
     store.local_sign_out(&config).await?;
     *attempt.terminal_notice_in_process.lock().unwrap() = None;
     Ok(())

@@ -30,6 +30,13 @@ fn resolve_vault_path() -> PathBuf {
 }
 
 fn main() {
+    if let Some(result) = sthira_desktop::run_shared_mcp_if_requested() {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(result) = sthira_desktop::agent_connections::run_if_requested() {
         if let Err(error) = result {
             eprintln!("{error}");

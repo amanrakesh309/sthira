@@ -370,6 +370,7 @@ const WorkspaceApp: React.FC = () => {
       googleSessionRef.current?.status === 'signedIn' ? googleSessionRef.current.uid : undefined;
     const nextUid = nextSession.status === 'signedIn' ? nextSession.uid : undefined;
     setGoogleSession(nextSession);
+    if (prevUid !== nextUid) window.dispatchEvent(new Event("sthira:account-context-changed"));
     if (nextSession.status === 'signedIn') {
       if (prevUid && nextUid && prevUid !== nextUid) {
         workspaceSelectionRevision.current += 1;

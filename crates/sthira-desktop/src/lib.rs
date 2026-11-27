@@ -13,6 +13,7 @@ pub mod resume;
 pub mod resume_pack;
 pub mod scheduler;
 pub mod seed;
+mod shared_agents;
 pub mod shared_drafts;
 pub mod shared_memory;
 pub mod state;
@@ -27,6 +28,7 @@ pub use events::spawn_event_bridge;
 pub use projects::*;
 pub use scheduler::{spawn_scheduled_topic_scheduler, ScheduledTopicReadyEvent};
 pub use seed::{clean_duplicate_models_on_startup, seed_demo_workspace_if_empty};
+pub use shared_agents::run_shared_mcp_if_requested;
 pub use state::AppState;
 pub use workspace_session::handle_get_workspace_session_key;
 
@@ -62,6 +64,7 @@ pub fn register_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri
     builder.invoke_handler(tauri::generate_handler![
         cmd_register_close_guard,
         cmd_confirm_window_close,
+        shared_agents::cmd_shared_agents,
         agent_connections::cmd_get_agent_connections,
         agent_connections::cmd_connect_agent,
         agent_connections::cmd_get_agent_connection_config,

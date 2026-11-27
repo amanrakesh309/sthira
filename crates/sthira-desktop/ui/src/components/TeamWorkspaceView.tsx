@@ -54,7 +54,9 @@ import { HelpTopicButton } from './HelpTopicButton';
 import { SharedActivityFeed, SharedPagesPanel } from './SharedPagesPanel';
 import { SharedProjectsPanel, type ProjectOpenRequest } from './SharedProjectsPanel';
 
-export type TeamWorkspaceTab = 'overview' | 'projects' | 'pages' | 'activity' | 'members';
+import { SharedAgentsPanel } from './SharedAgentsPanel';
+
+export type TeamWorkspaceTab = 'overview' | 'projects' | 'pages' | 'activity' | 'members' | 'agents';
 
 interface TeamWorkspaceViewProps {
   workspace: WorkspaceSummary;
@@ -107,6 +109,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
   onSessionChange,
   onRefreshList,
 }) => {
+  const [agentProposalId, setAgentProposalId] = useState<string | null>(null);
   const [tab, setTab] = useState<TeamWorkspaceTab>(initialTab);
   const [details, setDetails] = useState<WorkspaceDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -773,6 +776,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
       {/* Sub-navigation */}
       <div className="px-6 pt-4 border-b border-sthira-border bg-sthira-canvas">
         <div role="tablist" aria-label="Workspace sections" className="flex flex-wrap gap-2 pb-3">
+          <button type="button" role="tab" aria-selected={tab === 'agents'} onClick={() => void selectTab('agents')} className={`min-h-[38px] px-4 rounded-lg text-xs font-medium transition-colors cursor-pointer ${tab === 'agents' ? 'bg-sthira-primary text-sthira-on-primary' : 'bg-sthira-surface border border-sthira-border text-sthira-text hover:bg-sthira-surface-muted'}`}>Agents</button>
           <button
             type="button"
             role="tab"
@@ -1047,6 +1051,10 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           </section>
         )}
 
+        {tab === 'agents' && <SharedAgentsPanel workspaceId={currentSummary.workspaceId} myRole={myRole} currentUid={currentUid ?? myMember?.uid ?? null} initialProposalId={agentProposalId} onSessionChange={onSessionChange} onAccessLost={onAccessLost} onOpenPage={(pageId, projectId) => {
+          if(projectId) {setPendingProjectRequest({projectId,pageId});void selectTab('projects');}
+          else {setPendingOpenRequest({pageId});void selectTab('pages');}
+        }} />}
         {tab === 'projects' && (
           <SharedProjectsPanel
             workspaceId={currentSummary.workspaceId}
@@ -1087,6 +1095,7 @@ export const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
 
         {tab === 'activity' && (
           <SharedActivityFeed
+            onOpenAgentProposal={id => {setAgentProposalId(id);void selectTab('agents');}}
             workspaceId={currentSummary.workspaceId}
             refreshSignal={cw2RefreshSignal}
             onOpenPage={(pageId, proposalId, threadId) => {

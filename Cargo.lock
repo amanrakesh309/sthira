@@ -3958,6 +3958,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sthira-core",
+ "sthira-session-service",
  "sthira-testkit",
  "tempfile",
  "tokio",

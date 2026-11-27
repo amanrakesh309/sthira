@@ -153,4 +153,6 @@ Settings, Help, and other active dialogs handle their own keyboard controls. Clo
 
 On Linux, open **Settings → Agent connections**, choose an app, and select a personal project. Leave access on **Can read** for sharing context. Choose **Can read and suggest changes** to receive proposals for review.
 
+For a team project, set **Destination → Shared workspace**. An Owner/Admin enables workspace agent access; then choose a project and its explicit pages. Read access is the default. External clients use the generated configuration; Sthira's native runs use the selected connection and your configured Agent model. Another eligible Owner/Admin must apply suggestions. Review shows the initiating member, agent, model/provider and saved source revisions. Disconnect blocks future access and pending approval.
+
 Use **Connect** for an installed client or **Create setup** to copy a local MCP configuration. Then open a fresh session in the client and try the starter prompt. Use **Test connection** to check local access and **Disconnect** to revoke it. Advanced local clients can still use the [CLI and MCP setup](cli-and-mcp.md).

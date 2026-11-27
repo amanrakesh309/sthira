@@ -1538,7 +1538,11 @@ export const LiveSharedDraftEditor: React.FC<LiveSharedDraftEditorProps> = ({
         );
         return;
       }
-      if (res.code === 'stale_draft_checkpoint' || res.code === 'stale_draft_version') {
+      if (
+        res.code === 'stale_draft_checkpoint' ||
+        res.code === 'stale_draft_version' ||
+        res.code === 'stale_draft_base'
+      ) {
         submitKeyRef.current = makeRequestIdempotencyKey('livedraft');
         void connectAndSync(true);
       }

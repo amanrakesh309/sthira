@@ -298,6 +298,8 @@ pub struct ProposalDecisionView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedProposalSummary {
+    #[serde(default)]
+    pub agent_proposal: bool,
     pub proposal_id: String,
     pub workspace_id: String,
     pub page_id: String,
@@ -404,6 +406,8 @@ pub struct ReviewProposalInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedActivityItem {
+    #[serde(default)]
+    pub agent_proposal: bool,
     pub activity_id: String,
     pub workspace_id: String,
     pub actor_uid: String,
@@ -774,6 +778,24 @@ pub enum SharedContentError {
     IdempotencyConflict,
     #[error("Invalid pagination cursor.")]
     InvalidCursor,
+    #[error(
+        "Agent connections are not enabled in this workspace. An Owner or Admin can enable them."
+    )]
+    AgentAccessDisabled,
+    #[error("This agent connection is unavailable. Reconnect it from Sthira.")]
+    AgentConnectionUnavailable,
+    #[error("This agent connection was revoked. Ask the member who created it to reconnect.")]
+    AgentConnectionRevoked,
+    #[error("This agent connection has read-only access. Ask its owner for suggestion access.")]
+    AgentSuggestionNotAllowed,
+    #[error("This page is not available to this agent connection.")]
+    AgentPageUnavailable,
+    #[error("This project is not available to this agent connection.")]
+    AgentProjectUnavailable,
+    #[error("{0}")]
+    AgentStaleBasis(String),
+    #[error("Agent proposal was not found.")]
+    AgentProposalNotFound,
     #[error("Shared content storage unavailable.")]
     Storage(#[from] rusqlite::Error),
 }
@@ -952,7 +974,7 @@ pub trait SharedContentStore: Send + Sync {
     fn review_proposal(
         &self,
         caller: &VerifiedSession,
-        recheck_session: SessionRecheck<'_>,
+        checks: crate::agent_access::ReviewSessionChecks<'_>,
         workspace_id: &str,
         proposal_id: &str,
         input: &ReviewProposalInput,
@@ -1195,6 +1217,7 @@ impl SqliteSharedContentStore {
             migrate_v2(&guard)?;
             migrate_v3(&guard)?;
             migrate_v4(&guard)?;
+            crate::agent_access::migrate_v5(&guard)?;
         }
         Ok(Self { conn })
     }
@@ -1208,6 +1231,10 @@ impl SqliteSharedContentStore {
             .optional()?
             .flatten();
         Ok(ver.unwrap_or(0))
+    }
+
+    pub(crate) fn lock_shared_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().expect("workspace db lock poisoned")
     }
 
     fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -2347,6 +2374,21 @@ impl SharedContentStore for SqliteSharedContentStore {
                     .into(),
             ));
         }
+        let agent_origin: Option<String> = tx
+            .query_row(
+                "SELECT agent_connection_id FROM shared_change_proposals
+                 WHERE workspace_id = ?1 AND proposal_id = ?2",
+                params![workspace_id, proposal_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if agent_origin.is_some() {
+            return Err(SharedContentError::InvalidInput(
+                "Agent proposals cannot be resubmitted. Read the current page in the agent connection and prepare a new proposal."
+                    .into(),
+            ));
+        }
         if existing.author_uid != caller.uid {
             return Err(SharedContentError::Forbidden);
         }
@@ -2586,12 +2628,14 @@ impl SharedContentStore for SqliteSharedContentStore {
     fn review_proposal(
         &self,
         caller: &VerifiedSession,
-        recheck_session: SessionRecheck<'_>,
+        checks: crate::agent_access::ReviewSessionChecks<'_>,
         workspace_id: &str,
         proposal_id: &str,
         input: &ReviewProposalInput,
         now_ms: i64,
     ) -> Result<SharedProposalDetails, SharedContentError> {
+        let recheck_session = checks.reviewer;
+        let check_agent_session = checks.agent;
         if input.expected_submission_number <= 0 {
             return Err(SharedContentError::InvalidInput(
                 "Expected submission number must be at least 1.".into(),
@@ -2650,6 +2694,12 @@ impl SharedContentStore for SqliteSharedContentStore {
         let decision_id = format!("dec_{}", Uuid::new_v4().simple());
         match input.action {
             ProposalReviewAction::Apply => {
+                crate::agent_access::assert_agent_proposal_applicable(
+                    &tx,
+                    workspace_id,
+                    proposal_id,
+                    check_agent_session,
+                )?;
                 if existing.base_revision_number != page.current_revision_number
                     || input.expected_current_revision != page.current_revision_number
                 {
@@ -2910,6 +2960,14 @@ impl SharedContentStore for SqliteSharedContentStore {
             now_ms,
         )?;
         let _ = recheck_session()?;
+        if input.action == ProposalReviewAction::Apply {
+            crate::agent_access::recheck_agent_proposal_session(
+                &tx,
+                workspace_id,
+                proposal_id,
+                check_agent_session,
+            )?;
+        }
         tx.commit()?;
         Ok(details)
     }
@@ -2931,7 +2989,9 @@ impl SharedContentStore for SqliteSharedContentStore {
                 "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
                         action, target_type, project_id, project_name,
                         page_id, page_title, proposal_id, thread_id,
-                        detail_text, created_at_ms
+                        detail_text, created_at_ms,
+                        (EXISTS (SELECT 1 FROM shared_change_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id AND p.agent_connection_id IS NOT NULL)
+                         OR EXISTS (SELECT 1 FROM shared_agent_page_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id))
                  FROM shared_workspace_activity
                  WHERE workspace_id = ?1 AND seq < ?2
                  ORDER BY seq DESC
@@ -2942,7 +3002,9 @@ impl SharedContentStore for SqliteSharedContentStore {
                 "SELECT seq, activity_id, workspace_id, actor_uid, actor_display_name,
                         action, target_type, project_id, project_name,
                         page_id, page_title, proposal_id, thread_id,
-                        detail_text, created_at_ms
+                        detail_text, created_at_ms,
+                        (EXISTS (SELECT 1 FROM shared_change_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id AND p.agent_connection_id IS NOT NULL)
+                         OR EXISTS (SELECT 1 FROM shared_agent_page_proposals p WHERE p.workspace_id = shared_workspace_activity.workspace_id AND p.proposal_id = shared_workspace_activity.proposal_id))
                  FROM shared_workspace_activity
                  WHERE workspace_id = ?1
                  ORDER BY seq DESC
@@ -2954,6 +3016,7 @@ impl SharedContentStore for SqliteSharedContentStore {
             Ok((
                 r.get::<_, i64>(0)?,
                 SharedActivityItem {
+                    agent_proposal: r.get(15)?,
                     activity_id: r.get(1)?,
                     workspace_id: r.get(2)?,
                     actor_uid: r.get(3)?,
@@ -3952,6 +4015,13 @@ impl SharedContentStore for SqliteSharedContentStore {
                 "Newer live edits arrived after your last synced checkpoint. Review the updated draft before confirming submission."
                     .into(),
             ));
+        }
+
+        if draft.base_revision_number != page.current_revision_number {
+            return Err(SharedContentError::StaleDraftBase(format!(
+                "The published page advanced to revision {}. Rebase this draft before submitting.",
+                page.current_revision_number
+            )));
         }
 
         let proposed_title = sanitize_page_title(&draft.current_title)?;
@@ -5702,11 +5772,11 @@ fn paginate<T>(
     }
 }
 
-fn payload_digest(value: &serde_json::Value) -> String {
+pub(crate) fn payload_digest(value: &serde_json::Value) -> String {
     sha256_hex(&value.to_string())
 }
 
-fn sanitize_page_title(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_page_title(raw: &str) -> Result<String, SharedContentError> {
     let cleaned: String = raw
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -5981,7 +6051,7 @@ fn sanitize_comment_body(raw: &str) -> Result<String, SharedContentError> {
     Ok(trimmed.to_owned())
 }
 
-fn sanitize_proposal_summary(raw: &str) -> Result<String, SharedContentError> {
+pub(crate) fn sanitize_proposal_summary(raw: &str) -> Result<String, SharedContentError> {
     let cleaned = raw
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -6002,7 +6072,9 @@ fn sanitize_proposal_summary(raw: &str) -> Result<String, SharedContentError> {
     Ok(cleaned)
 }
 
-fn sanitize_optional_note(raw: Option<&str>) -> Result<Option<String>, SharedContentError> {
+pub(crate) fn sanitize_optional_note(
+    raw: Option<&str>,
+) -> Result<Option<String>, SharedContentError> {
     let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -6014,7 +6086,7 @@ fn sanitize_optional_note(raw: Option<&str>) -> Result<Option<String>, SharedCon
     Ok(Some(val.to_owned()))
 }
 
-fn lookup_idempotent_response<T: DeserializeOwned>(
+pub(crate) fn lookup_idempotent_response<T: DeserializeOwned>(
     tx: &Transaction<'_>,
     actor_uid: &str,
     workspace_id: &str,
@@ -6043,7 +6115,7 @@ fn lookup_idempotent_response<T: DeserializeOwned>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn save_idempotent_response<T: Serialize>(
+pub(crate) fn save_idempotent_response<T: Serialize>(
     tx: &Transaction<'_>,
     actor_uid: &str,
     workspace_id: &str,
@@ -6106,7 +6178,7 @@ fn insert_activity(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_activity_with_project(
+pub(crate) fn insert_activity_with_project(
     tx: &Transaction<'_>,
     workspace_id: &str,
     actor_uid: &str,
@@ -6236,7 +6308,7 @@ fn map_project_summary(r: &rusqlite::Row<'_>) -> rusqlite::Result<SharedProjectS
     })
 }
 
-fn load_project_summary(
+pub(crate) fn load_project_summary(
     tx: &Transaction<'_>,
     workspace_id: &str,
     project_id: &str,
@@ -6468,7 +6540,7 @@ fn ensure_revision_exists(
     Ok(())
 }
 
-fn load_page_row(
+pub(crate) fn load_page_row(
     tx: &Transaction<'_>,
     workspace_id: &str,
     page_id: &str,
@@ -6587,7 +6659,7 @@ fn query_page_summaries(
     Ok(out)
 }
 
-fn load_revision_row(
+pub(crate) fn load_revision_row(
     tx: &Transaction<'_>,
     workspace_id: &str,
     page_id: &str,
@@ -6987,7 +7059,7 @@ fn query_proposal_summaries(
                 p.current_revision_number, pr.created_at_ms, pr.updated_at_ms,
                 pr.reviewed_at_ms, pr.reviewer_display_name, pr.applied_revision_number,
                 pr.live_draft_id, pr.draft_version,
-                COALESCE(pr.contributor_uids_json, '[]'), COALESCE(pr.contributor_names_json, '[]')
+                COALESCE(pr.contributor_uids_json, '[]'), COALESCE(pr.contributor_names_json, '[]'), pr.agent_connection_id IS NOT NULL
          FROM shared_change_proposals pr
          JOIN shared_pages p ON p.workspace_id = pr.workspace_id AND p.page_id = pr.page_id
          WHERE pr.workspace_id = ?1 AND pr.page_id = ?2 {cursor_clause}
@@ -7011,6 +7083,7 @@ fn query_proposal_summaries(
         let contributor_uids: Vec<String> = serde_json::from_str(&raw_uids).unwrap_or_default();
         let contributor_names: Vec<String> = serde_json::from_str(&raw_names).unwrap_or_default();
         Ok(Ok(SharedProposalSummary {
+            agent_proposal: r.get(20)?,
             proposal_id: r.get(0)?,
             workspace_id: r.get(1)?,
             page_id: r.get(2)?,
@@ -7137,8 +7210,10 @@ fn load_proposal_details(
         && caller_role.can_author_shared_content()
         && row.author_uid == caller_uid;
 
+    let agent_proposal: bool = tx.query_row("SELECT agent_connection_id IS NOT NULL FROM shared_change_proposals WHERE workspace_id = ?1 AND proposal_id = ?2", params![workspace_id, proposal_id], |r| r.get(0))?;
     Ok(SharedProposalDetails {
         proposal: SharedProposalSummary {
+            agent_proposal,
             proposal_id: row.proposal_id,
             workspace_id: row.workspace_id,
             page_id: row.page_id,

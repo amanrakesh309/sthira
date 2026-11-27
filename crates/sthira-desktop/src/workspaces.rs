@@ -363,7 +363,7 @@ async fn try_list_workspaces(
     Ok(resp.json::<WorkspaceListResponse>().await.ok())
 }
 
-async fn invoke_workspace_api<T: DeserializeOwned + Serialize>(
+pub(crate) async fn invoke_workspace_api<T: DeserializeOwned + Serialize>(
     app: &AppHandle<impl Runtime>,
     attempt: &SignInAttempt,
     method: Method,
@@ -877,6 +877,8 @@ pub(crate) struct ProposalDecisionView {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SharedProposalSummary {
+    #[serde(default)]
+    pub(crate) agent_proposal: bool,
     pub(crate) proposal_id: String,
     pub(crate) workspace_id: String,
     pub(crate) page_id: String,
@@ -947,6 +949,8 @@ pub(crate) struct CreateSharedPageOutcome {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SharedActivityItem {
+    #[serde(default)]
+    pub(crate) agent_proposal: bool,
     pub(crate) activity_id: String,
     pub(crate) workspace_id: String,
     pub(crate) actor_uid: String,

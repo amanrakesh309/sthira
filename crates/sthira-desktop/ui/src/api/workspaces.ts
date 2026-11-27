@@ -408,6 +408,7 @@ export interface ProposalDecisionView {
 }
 
 export interface SharedProposalSummary {
+  agentProposal?: boolean;
   proposalId: string;
   workspaceId: string;
   pageId: string;
@@ -464,6 +465,7 @@ export interface CreateSharedPageOutcome {
 }
 
 export interface SharedActivityItem {
+  agentProposal?: boolean;
   activityId: string;
   workspaceId: string;
   actorUid: string;

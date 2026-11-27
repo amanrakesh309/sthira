@@ -63,6 +63,27 @@ Creating a connection is a separate explicit opt-in from native model workflows.
 
 `can_propose: false` permits reads only. No external grant permits automatic approval, direct memory mutation, SQL, shell commands, arbitrary file access, provider-key access, or connection administration through the tool protocol. Tool arguments cannot select a caller identity or supply permissions. A same-user local process with unrestricted filesystem/shell access can independently bypass any application API; scoped credentials are an application boundary, not an OS sandbox.
 
+## Team workspace connections (service-backed)
+
+This Personal flow is unchanged. A separate **scoped shared** mode targets one shared team project
+selected by the member in Sthira. It is documented in
+[Scoped shared agent access](shared-agent-access.md).
+
+The shared adapter runs as its own MCP server and never opens a Personal vault:
+
+```sh
+STHIRA_SHARED_CONNECTION_FILE=/absolute/private/connection.json \
+  ./target/release/sthira-cli shared-mcp --connection-file /absolute/private/connection.json
+```
+
+The connection file contains the loopback session-service URL, the connection ID and the delegated
+`stha_` credential. Keep it private; the credential is sent only as a bearer header and never appears
+in process arguments, configuration snippets, tool results or logs. The shared tools are
+`sthira_shared_status`, `sthira_shared_pages`, `sthira_shared_propose` and `sthira_shared_request`.
+They cannot approve, publish, grant access, run shell/SQL or dispatch a model. The desktop team
+connection setup UI is not implemented yet; until it is, creating a connection requires the service
+API described in the feature page.
+
 ## JSON CLI API
 
 Set `STHIRA_ACCESS_TOKEN` in the client's private process environment to the newly created token. Do not put the token in workspace tool arguments, tracked files or command-line arguments.

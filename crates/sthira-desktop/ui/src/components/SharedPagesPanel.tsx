@@ -52,6 +52,7 @@ import { RichDocumentRenderer } from './RichDocumentRenderer';
 import { SharedPageDraftEditor, sharedDraftKeyForMode, type SharedDraftEditorMode } from './SharedPageDraftEditor';
 import { LiveSharedDraftEditor } from './LiveSharedDraftEditor';
 import { SharedProposalReview } from './SharedProposalReview';
+import { SharedAgentsPanel } from './SharedAgentsPanel';
 
 interface SharedPagesPanelProps {
   workspaceId: string;
@@ -114,6 +115,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
   const [revisionsCursor, setRevisionsCursor] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
+  const [agentReviewId, setAgentReviewId] = useState<string | null>(null);
   const [selectedProposal, setSelectedProposal] = useState<SharedProposalDetails | null>(null);
   const [draftMode, setDraftMode] = useState<SharedDraftEditorMode | null>(null);
   const [liveEditingPage, setLiveEditingPage] = useState<{
@@ -232,6 +234,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
         const res = await getProposalDetails(workspaceId, proposalId);
         if (seq !== reqSeqRef.current) return;
         if (res.outcome === 'ok') {
+          if(res.data.proposal.agentProposal) {setAgentReviewId(proposalId);setSelectedProposal(null);return;}
           setSelectedProposal(res.data);
           setDraftMode(null);
           return;
@@ -613,6 +616,8 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
       />
     );
   }
+
+  if (agentReviewId) return <SharedAgentsPanel workspaceId={workspaceId} myRole={myRole} currentUid={currentUid ?? null} initialProposalId={agentReviewId} onSessionChange={onSessionChange} onAccessLost={onAccessLost} onClose={() => {setAgentReviewId(null);if(selectedPage) void openPageById(selectedPage.page.pageId);}} onOpenPage={pageId => {setAgentReviewId(null);void openPageById(pageId);}} />;
 
   if (liveEditingPage) {
     return (
@@ -1291,6 +1296,7 @@ export const SharedPagesPanel: React.FC<SharedPagesPanelProps> = ({
 };
 
 interface SharedActivityFeedProps {
+  onOpenAgentProposal?: (proposalId: string) => void;
   workspaceId: string;
   refreshSignal: number;
   onOpenPage: (pageId: string, proposalId?: string | null, threadId?: string | null) => void;
@@ -1305,6 +1311,7 @@ interface SharedActivityFeedProps {
 }
 
 export const SharedActivityFeed: React.FC<SharedActivityFeedProps> = ({
+  onOpenAgentProposal,
   workspaceId,
   refreshSignal,
   onOpenPage,
@@ -1400,7 +1407,8 @@ export const SharedActivityFeed: React.FC<SharedActivityFeedProps> = ({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {item.pageId && (
+                {item.agentProposal && item.proposalId && onOpenAgentProposal && <button type="button" className="sthira-button-secondary" onClick={() => onOpenAgentProposal(item.proposalId!)}>Open agent proposal</button>}
+                {item.pageId && !item.agentProposal && (
                   <button
                     type="button"
                     onClick={() => {

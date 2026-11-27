@@ -215,6 +215,18 @@ pub trait AuthSessionStore: Send + Sync {
 
     fn verify_session(&self, credential: &str, now_ms: i64) -> Result<VerifiedSession, StoreError>;
 
+    /// Re-verifies a specific device session by its stored identity, without accepting a
+    /// credential. Delegated agent connections bind to the session that issued them; every
+    /// request re-checks that binding so issuing-device revocation or replacement invalidates
+    /// the connection.
+    fn verify_bound_session(
+        &self,
+        session_id: &str,
+        uid: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<VerifiedSession, StoreError>;
+
     fn list_devices(
         &self,
         caller_credential: &str,
@@ -534,6 +546,20 @@ impl AuthSessionStore for SqliteAuthSessionStore {
         Ok(verified)
     }
 
+    fn verify_bound_session(
+        &self,
+        session_id: &str,
+        uid: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<VerifiedSession, StoreError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let verified = verify_bound_in_tx(&tx, session_id, uid, device_id, now_ms)?;
+        tx.commit()?;
+        Ok(verified)
+    }
+
     fn list_devices(
         &self,
         caller_credential: &str,
@@ -801,6 +827,86 @@ fn verify_in_tx(
         email,
         display_name,
         device_id,
+        device_label,
+        created_at_ms,
+        last_active_at_ms: refreshed_last_active_ms,
+        expires_at_ms,
+    })
+}
+
+fn verify_bound_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    uid: &str,
+    device_id: &str,
+    now_ms: i64,
+) -> Result<VerifiedSession, StoreError> {
+    if session_id.trim().is_empty() || uid.trim().is_empty() || device_id.trim().is_empty() {
+        return Err(StoreError::SessionInvalid);
+    }
+    let row = tx
+        .query_row(
+            "SELECT session_id, credential_hash, uid, email, display_name, device_id, device_label,
+                    created_at_ms, last_active_at_ms, expires_at_ms, revoked_at_ms
+             FROM auth_sessions WHERE session_id = ?1",
+            params![session_id],
+            |r| {
+                Ok(LoadedSessionRow {
+                    session_id: r.get(0)?,
+                    stored_hash: r.get(1)?,
+                    uid: r.get(2)?,
+                    email: r.get(3)?,
+                    stored_display_name: r.get(4)?,
+                    device_id: r.get(5)?,
+                    device_label: r.get(6)?,
+                    created_at_ms: r.get(7)?,
+                    prior_last_active_ms: r.get(8)?,
+                    expires_at_ms: r.get(9)?,
+                    revoked_at_ms: r.get(10)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(LoadedSessionRow {
+        session_id,
+        stored_hash: _,
+        uid: stored_uid,
+        email,
+        stored_display_name,
+        device_id: stored_device_id,
+        device_label,
+        created_at_ms,
+        prior_last_active_ms,
+        expires_at_ms,
+        revoked_at_ms,
+    }) = row
+    else {
+        return Err(StoreError::SessionInvalid);
+    };
+    if stored_uid != uid || stored_device_id != device_id {
+        return Err(StoreError::Forbidden);
+    }
+    if revoked_at_ms.is_some() {
+        return Err(StoreError::SessionRevoked);
+    }
+    if now_ms >= expires_at_ms {
+        return Err(StoreError::SessionExpired);
+    }
+    let refreshed_last_active_ms = prior_last_active_ms.max(now_ms);
+    if refreshed_last_active_ms > prior_last_active_ms {
+        tx.execute(
+            "UPDATE auth_sessions SET last_active_at_ms = ?2 WHERE session_id = ?1",
+            params![session_id, refreshed_last_active_ms],
+        )?;
+    }
+    let display_name =
+        crate::verify::resolve_display_name(Some(&stored_display_name), None, &email);
+    Ok(VerifiedSession {
+        session_id,
+        uid: stored_uid,
+        email,
+        display_name,
+        device_id: stored_device_id,
         device_label,
         created_at_ms,
         last_active_at_ms: refreshed_last_active_ms,

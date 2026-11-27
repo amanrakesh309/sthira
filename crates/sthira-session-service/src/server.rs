@@ -1,4 +1,8 @@
 use crate::{
+    agent_access::{
+        AgentEditProposalInput, AgentNewPageProposalInput, CreateAgentConnectionInput,
+        ReviewAgentProposalInput, SharedAgentAccessStore, UpdateAgentConnectionInput,
+    },
     membership::{
         MembershipError, SessionRecheck, WorkspaceMembershipStore, WorkspaceRole,
         DEFAULT_INVITE_TTL_MS,
@@ -34,6 +38,7 @@ pub struct SessionServiceState {
     pub store: Arc<dyn AuthSessionStore>,
     membership_store: Option<Arc<dyn WorkspaceMembershipStore>>,
     shared_content_store: Option<Arc<dyn SharedContentStore>>,
+    shared_agent_store: Option<Arc<dyn SharedAgentAccessStore>>,
     pub realtime_hub: Arc<RealtimeHub>,
     pub verifier: Arc<dyn IdentityVerifier>,
     pub challenge_ttl_ms: i64,
@@ -48,6 +53,7 @@ impl SessionServiceState {
             store,
             membership_store: None,
             shared_content_store: None,
+            shared_agent_store: None,
             realtime_hub: Arc::new(RealtimeHub::new()),
             verifier,
             challenge_ttl_ms: DEFAULT_CHALLENGE_TTL_MS,
@@ -78,6 +84,18 @@ impl SessionServiceState {
         shared_content_store: Arc<dyn SharedContentStore>,
     ) -> Self {
         self.shared_content_store = Some(shared_content_store);
+        self
+    }
+
+    pub fn shared_agent_store(&self) -> Option<&dyn SharedAgentAccessStore> {
+        self.shared_agent_store.as_deref()
+    }
+
+    pub fn with_shared_agent_store(
+        mut self,
+        shared_agent_store: Arc<dyn SharedAgentAccessStore>,
+    ) -> Self {
+        self.shared_agent_store = Some(shared_agent_store);
         self
     }
 
@@ -458,7 +476,98 @@ async fn route(req: ParsedHttpRequest, state: &SessionServiceState) -> (u16, Str
                 Err(err) => store_error(err),
             }
         }
+        _ if req.path == "/v1/agent-access" || req.path.starts_with("/v1/agent-access/") => {
+            route_agent_access(req, state, now_ms)
+        }
         _ => route_membership(req, state, now_ms),
+    }
+}
+
+fn route_agent_access(
+    req: ParsedHttpRequest,
+    state: &SessionServiceState,
+    now_ms: i64,
+) -> (u16, String) {
+    let Some(store) = state.shared_agent_store() else {
+        return json_error(
+            503,
+            "shared_content_disabled",
+            "Shared agent access is not enabled on this Sthira session service.",
+        );
+    };
+    let Some(token) = req.auth_bearer.as_deref() else {
+        return json_error(
+            401,
+            "invalid_connection",
+            "Agent authentication is required.",
+        );
+    };
+    let clock = Arc::clone(&state.clock);
+    let check = move |session_id: &str, uid: &str, device_id: &str| {
+        state
+            .store
+            .verify_bound_session(session_id, uid, device_id, clock())
+    };
+    let trimmed = req.path.trim_end_matches('/');
+    let parts: Vec<&str> = trimmed.trim_matches('/').split('/').collect();
+    match (req.method.as_str(), &parts[2..]) {
+        ("GET", ["status"]) => match store.agent_connection_status(token, &check, now_ms) {
+            Ok(status) => json_ok(&status),
+            Err(err) => shared_content_error(err),
+        },
+        ("GET", ["pages"]) => {
+            let search = query_param(&req.query, "q");
+            let cursor = query_param(&req.query, "cursor");
+            let limit = query_usize(&req.query, "limit");
+            match store.list_agent_pages(
+                token,
+                &check,
+                search.as_deref(),
+                cursor.as_deref(),
+                limit,
+                now_ms,
+            ) {
+                Ok(list) => json_ok(&list),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["pages", page_id]) => {
+            match store.read_agent_page(token, &check, page_id, now_ms) {
+                Ok(page) => json_ok(&page),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["proposals", "edit"]) => {
+            let Ok(payload) = serde_json::from_slice::<AgentEditProposalInput>(&req.body) else {
+                return json_error(400, "invalid_request", "Invalid edit proposal request.");
+            };
+            match store.create_agent_edit_proposal(token, &check, &payload, now_ms) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["proposals", "new"]) => {
+            let Ok(payload) = serde_json::from_slice::<AgentNewPageProposalInput>(&req.body) else {
+                return json_error(400, "invalid_request", "Invalid new-page proposal request.");
+            };
+            match store.create_agent_new_page_proposal(token, &check, &payload, now_ms) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["proposals", proposal_id]) => {
+            match store.agent_proposal_status(token, &check, proposal_id, now_ms) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["requests", request_id]) => {
+            match store.agent_request_status(token, &check, request_id, now_ms) {
+                Ok(receipt) => json_ok(&receipt),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        _ => json_error(404, "not_found", "Endpoint not found."),
     }
 }
 
@@ -803,6 +912,25 @@ fn route_workspace_subpath(
             Ok(records) => json_ok(&records),
             Err(err) => membership_error(err),
         },
+        (
+            method,
+            subpath @ (["agent-access"]
+            | ["agent-connections"]
+            | ["agent-connections", _]
+            | ["agent-proposals"]
+            | ["agent-proposals", _]
+            | ["agent-proposals", _, "review"]),
+        ) => route_shared_agent_member(
+            state,
+            &caller,
+            &recheck,
+            workspace_id,
+            method,
+            subpath,
+            &req.query,
+            &req.body,
+            now_ms,
+        ),
         (method, subpath) => route_shared_content(
             state,
             &caller,
@@ -814,6 +942,221 @@ fn route_workspace_subpath(
             &req.body,
             now_ms,
         ),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetAgentAccessRequest {
+    enabled: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_shared_agent_member(
+    state: &SessionServiceState,
+    caller: &crate::store::VerifiedSession,
+    recheck: SessionRecheck<'_>,
+    workspace_id: &str,
+    method: &str,
+    subpath: &[&str],
+    query: &str,
+    body: &[u8],
+    now_ms: i64,
+) -> (u16, String) {
+    let Some(store) = state.shared_agent_store() else {
+        return json_error(
+            503,
+            "shared_content_disabled",
+            "Shared agent access is not enabled on this Sthira session service.",
+        );
+    };
+    let check_agent_session = |session: &str, uid: &str, device: &str| {
+        state
+            .store
+            .verify_bound_session(session, uid, device, (state.clock)())
+    };
+    match (method, subpath) {
+        ("GET", ["agent-access"]) => match store.get_agent_access_policy(caller, workspace_id) {
+            Ok(policy) => json_ok(&policy),
+            Err(err) => shared_content_error(err),
+        },
+        ("PUT", ["agent-access"]) => {
+            let Ok(payload) = serde_json::from_slice::<SetAgentAccessRequest>(body) else {
+                return json_error(
+                    400,
+                    "invalid_request",
+                    "Invalid agent access policy request.",
+                );
+            };
+            match store.set_agent_access_policy(
+                caller,
+                recheck,
+                workspace_id,
+                payload.enabled,
+                now_ms,
+            ) {
+                Ok(policy) => json_ok(&policy),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["agent-connections"]) => {
+            let include_workspace = query_param(query, "scope").as_deref() == Some("workspace");
+            match store.list_agent_connections(caller, workspace_id, include_workspace) {
+                Ok(connections) => json_ok(&connections),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["agent-connections"]) => {
+            let Ok(payload) = serde_json::from_slice::<CreateAgentConnectionInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid agent connection request.");
+            };
+            match store.create_agent_connection(caller, recheck, workspace_id, &payload, now_ms) {
+                Ok(created) => json_ok(&created),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["agent-connections", connection_id]) => {
+            match store.get_agent_connection(caller, workspace_id, connection_id) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("PATCH", ["agent-connections", connection_id]) => {
+            let Ok(payload) = serde_json::from_slice::<UpdateAgentConnectionInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid agent connection update.");
+            };
+            match store.update_agent_connection(
+                caller,
+                recheck,
+                workspace_id,
+                connection_id,
+                &payload,
+                now_ms,
+            ) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("DELETE", ["agent-connections", connection_id]) => {
+            match store.revoke_agent_connection(
+                caller,
+                recheck,
+                workspace_id,
+                connection_id,
+                now_ms,
+            ) {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["agent-proposals"]) => {
+            let include_closed = query_bool(query, "include_closed");
+            match store.list_agent_proposals(
+                caller,
+                &check_agent_session,
+                workspace_id,
+                include_closed,
+            ) {
+                Ok(list) => json_ok(&list),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("GET", ["agent-proposals", proposal_id]) => {
+            match store.get_agent_proposal(caller, &check_agent_session, workspace_id, proposal_id)
+            {
+                Ok(view) => json_ok(&view),
+                Err(err) => shared_content_error(err),
+            }
+        }
+        ("POST", ["agent-proposals", proposal_id, "review"]) => {
+            let Ok(payload) = serde_json::from_slice::<ReviewAgentProposalInput>(body) else {
+                return json_error(400, "invalid_request", "Invalid agent proposal review.");
+            };
+            let view = match store.get_agent_proposal(
+                caller,
+                &check_agent_session,
+                workspace_id,
+                proposal_id,
+            ) {
+                Ok(view) => view,
+                Err(err) => return shared_content_error(err),
+            };
+            if view.kind == crate::agent_access::AgentProposalKind::Edit {
+                let Some(content_store) = state.shared_content_store.as_deref() else {
+                    return json_error(
+                        503,
+                        "shared_content_disabled",
+                        "Shared pages are not enabled on this Sthira session service.",
+                    );
+                };
+                let action = match payload.action.trim() {
+                    "apply" => crate::shared_content::ProposalReviewAction::Apply,
+                    "request_changes" => {
+                        crate::shared_content::ProposalReviewAction::RequestChanges
+                    }
+                    "reject" => crate::shared_content::ProposalReviewAction::Reject,
+                    other => {
+                        return json_error(
+                            400,
+                            "invalid_input",
+                            &format!("Unknown review action “{other}”."),
+                        )
+                    }
+                };
+                let review = crate::shared_content::ReviewProposalInput {
+                    action,
+                    expected_current_revision: view.base_revision_number.unwrap_or(0),
+                    expected_submission_number: payload.expected_submission_number,
+                    note: payload.note.clone(),
+                    idempotency_key: payload.idempotency_key.clone(),
+                };
+                if let Err(err) = content_store.review_proposal(
+                    caller,
+                    crate::agent_access::ReviewSessionChecks {
+                        reviewer: recheck,
+                        agent: &|session, uid, device| {
+                            state
+                                .store
+                                .verify_bound_session(session, uid, device, (state.clock)())
+                        },
+                    },
+                    workspace_id,
+                    proposal_id,
+                    &review,
+                    now_ms,
+                ) {
+                    return shared_content_error(err);
+                }
+                match store.get_agent_proposal(
+                    caller,
+                    &check_agent_session,
+                    workspace_id,
+                    proposal_id,
+                ) {
+                    Ok(view) => json_ok(&view),
+                    Err(err) => shared_content_error(err),
+                }
+            } else {
+                match store.review_agent_page_proposal(
+                    caller,
+                    crate::agent_access::ReviewSessionChecks {
+                        reviewer: recheck,
+                        agent: &|session, uid, device| {
+                            state
+                                .store
+                                .verify_bound_session(session, uid, device, (state.clock)())
+                        },
+                    },
+                    workspace_id,
+                    proposal_id,
+                    &payload,
+                    now_ms,
+                ) {
+                    Ok(view) => json_ok(&view),
+                    Err(err) => shared_content_error(err),
+                }
+            }
+        }
+        _ => json_error(404, "not_found", "Endpoint not found."),
     }
 }
 
@@ -1464,7 +1807,14 @@ fn route_shared_content(
             };
             match content_store.review_proposal(
                 caller,
-                recheck,
+                crate::agent_access::ReviewSessionChecks {
+                    reviewer: recheck,
+                    agent: &|session, uid, device| {
+                        state
+                            .store
+                            .verify_bound_session(session, uid, device, (state.clock)())
+                    },
+                },
                 workspace_id,
                 proposal_id,
                 &payload,
@@ -1587,6 +1937,42 @@ fn shared_content_error(err: SharedContentError) -> (u16, String) {
             409,
             "idempotency_conflict",
             "This request identifier was already used with different input.",
+        ),
+        SharedContentError::AgentAccessDisabled => json_error(
+            403,
+            "agent_access_disabled",
+            "Agent connections are not enabled in this workspace. An Owner or Admin can enable them.",
+        ),
+        SharedContentError::AgentConnectionUnavailable => json_error(
+            404,
+            "agent_connection_unavailable",
+            "This agent connection is unavailable. Reconnect it from Sthira.",
+        ),
+        SharedContentError::AgentConnectionRevoked => json_error(
+            401,
+            "agent_connection_revoked",
+            "This agent connection was revoked. Ask the member who created it to reconnect.",
+        ),
+        SharedContentError::AgentSuggestionNotAllowed => json_error(
+            403,
+            "agent_read_only",
+            "This agent connection has read-only access. Ask its owner for suggestion access.",
+        ),
+        SharedContentError::AgentPageUnavailable => json_error(
+            404,
+            "page_not_found",
+            "This page is not available to this agent connection.",
+        ),
+        SharedContentError::AgentProjectUnavailable => json_error(
+            404,
+            "project_not_found",
+            "This project is not available to this agent connection.",
+        ),
+        SharedContentError::AgentStaleBasis(msg) => json_error(409, "stale_proposal_basis", &msg),
+        SharedContentError::AgentProposalNotFound => json_error(
+            404,
+            "agent_proposal_not_found",
+            "Agent proposal was not found.",
         ),
         SharedContentError::Storage(_) => {
             json_error(500, "internal_error", "Shared content storage unavailable.")

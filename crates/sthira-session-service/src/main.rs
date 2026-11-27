@@ -126,7 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let shared = Arc::new(SqliteSharedContentStore::enable_on_membership_store(
                 &membership,
             )?);
-            state = state.with_shared_content_store(shared);
+            state = state
+                .with_shared_agent_store(shared.clone())
+                .with_shared_content_store(shared);
         }
         state = state.with_membership_store(membership);
     } else if enable_shared_content {

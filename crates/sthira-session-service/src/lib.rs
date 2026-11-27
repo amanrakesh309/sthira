@@ -1,3 +1,4 @@
+pub mod agent_access;
 pub mod crdt;
 pub mod membership;
 pub mod realtime;
@@ -8,6 +9,15 @@ pub mod verify;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use agent_access::{
+    AgentAccessPolicyView, AgentConnectionLimits, AgentConnectionPageView,
+    AgentConnectionStatusView, AgentConnectionView, AgentEditProposalInput,
+    AgentNewPageProposalInput, AgentPermission, AgentProposalKind, AgentProposalSource,
+    AgentProposalView, AgentRequestReceipt, AgentSharedPageItem, AgentSharedPageList,
+    AgentSharedPageRead, CreateAgentConnectionInput, CreatedAgentConnection,
+    ReviewAgentProposalInput, SharedAgentAccessStore, UpdateAgentConnectionInput,
+    AGENT_TOKEN_PREFIX,
+};
 pub use membership::{
     AcceptInvitationOutcome, BatchInvitationItemResult, BatchInvitationOutcome,
     BatchInviteItemOutcome, CreateWorkspaceOutcome, CreatedInvitation,

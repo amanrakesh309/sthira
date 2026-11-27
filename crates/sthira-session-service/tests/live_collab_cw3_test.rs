@@ -79,6 +79,7 @@ async fn start_service(
     let clock_clone = Arc::clone(&clock_ms);
     let state = SessionServiceState::new(auth_store.clone(), Arc::new(StaticVerifier))
         .with_membership_store(mem_store.clone())
+        .with_shared_agent_store(shared_store.clone())
         .with_shared_content_store(shared_store.clone())
         .with_clock(Arc::new(move || clock_clone.load(Ordering::SeqCst)));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
